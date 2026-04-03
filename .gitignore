@@ -1,0 +1,13 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+
+# Runtime data
+data/
+
+# OS
+.DS_Store
+
+# Persistence
+*.pickle
