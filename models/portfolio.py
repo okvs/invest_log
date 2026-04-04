@@ -8,6 +8,7 @@ from typing import List
 @dataclass
 class Holding:
     name: str
+    ticker: str
     sector: str
     buy_date: str
     avg_price: float
@@ -22,6 +23,7 @@ class Holding:
         return {
             "id": self.id,
             "name": self.name,
+            "ticker": self.ticker,
             "sector": self.sector,
             "buy_date": self.buy_date,
             "avg_price": self.avg_price,

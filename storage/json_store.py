@@ -71,3 +71,26 @@ def load_retrospectives() -> list[dict]:
 
 def save_retrospectives(retrospectives: list[dict]) -> None:
     save(RETROSPECTIVES_FILE, {"retrospectives": retrospectives})
+
+
+TICKER_MAP_FILE = "ticker_map.json"
+
+
+def load_ticker_map() -> dict[str, str]:
+    """종목명 → 티커코드 매핑 로드."""
+    _ensure_dir()
+    fp = _path(TICKER_MAP_FILE)
+    if not fp.exists():
+        return {}
+    with FileLock(_lock_path(TICKER_MAP_FILE)):
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+
+def save_ticker_map(ticker_map: dict[str, str]) -> None:
+    """종목명 → 티커코드 매핑 저장."""
+    _ensure_dir()
+    fp = _path(TICKER_MAP_FILE)
+    with FileLock(_lock_path(TICKER_MAP_FILE)):
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(ticker_map, f, ensure_ascii=False, indent=2)

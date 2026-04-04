@@ -6,7 +6,9 @@ from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
+    MessageHandler,
     PicklePersistence,
+    filters,
 )
 
 from bot.handlers.buy import buy_conversation
@@ -18,7 +20,7 @@ load_dotenv()
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,
 )
 logger = logging.getLogger(__name__)
 
@@ -27,11 +29,16 @@ async def start(update: Update, context) -> None:
     await update.message.reply_text(
         "안녕하세요! 투자 로그 봇입니다.\n"
         "사용 가능한 명령어:\n"
-        "/매수 - 매수 기록\n"
-        "/매도 - 매도 기록 + 회고\n"
-        "/현황 - 투자 현황\n"
-        "/도움말 - 사용법"
+        "매수 - 매수 기록\n"
+        "매도 - 매도 기록 + 회고\n"
+        "현황 - 투자 현황\n"
+        "도움말 - 사용법"
     )
+
+
+def _korean_command(keyword: str) -> filters.BaseFilter:
+    """한국어 키워드로 시작하는 메시지를 필터링."""
+    return filters.Regex(rf"^{keyword}$")
 
 
 def main() -> None:
@@ -43,9 +50,13 @@ def main() -> None:
     app = Application.builder().token(token).persistence(persistence).build()
 
     # 기본 명령어
-    app.add_handler(CommandHandler(["start"], start))
-    app.add_handler(CommandHandler(["help", "도움말"], help_handler))
-    app.add_handler(CommandHandler(["dashboard", "현황"], dashboard_handler))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_handler))
+    app.add_handler(CommandHandler("dashboard", dashboard_handler))
+
+    # 한국어 키워드 핸들러
+    app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
+    app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
 
     # ConversationHandler (매수/매도)
     app.add_handler(buy_conversation())

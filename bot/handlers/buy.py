@@ -13,20 +13,22 @@ from telegram.ext import (
     filters,
 )
 
-from invest_log.bot.formatters import format_buy_preview, format_buy_result
-from invest_log.bot.keyboards import (
+from bot.formatters import format_buy_preview, format_buy_result
+from bot.keyboards import (
     CANCEL_BUY,
     CONFIRM_BUY,
     EDIT_BUY,
     buy_confirm_keyboard,
 )
-from invest_log.models.portfolio import Holding
-from invest_log.models.transaction import Transaction
-from invest_log.parsers.input_parser import parse_buy_input
-from invest_log.storage.json_store import (
+from models.portfolio import Holding
+from models.transaction import Transaction
+from parsers.input_parser import parse_buy_input
+from storage.json_store import (
     load_holdings,
+    load_ticker_map,
     load_transactions,
     save_holdings,
+    save_ticker_map,
     save_transactions,
 )
 
@@ -39,6 +41,7 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "매수 정보를 입력해주세요:\n\n"
         "종목명\n"
+        "종목코드 (예: 005930)\n"
         "섹터\n"
         "수량 (예: 10주)\n"
         "매수가 (예: 72000원)\n"
@@ -46,6 +49,7 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "참고 자료 (선택)\n\n"
         "예시:\n"
         "삼성전자\n"
+        "005930\n"
         "반도체\n"
         "10주\n"
         "72000원\n"
@@ -117,6 +121,7 @@ async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # 신규 매수
         holding = Holding(
             name=buy_input.name,
+            ticker=buy_input.ticker,
             sector=buy_input.sector,
             buy_date=datetime.now().strftime("%Y-%m-%d"),
             avg_price=buy_input.price,
@@ -129,6 +134,12 @@ async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         holdings_data.append(holding.to_dict())
 
     save_holdings(holdings_data)
+
+    # ticker_map에 저장
+    if buy_input.ticker:
+        tmap = load_ticker_map()
+        tmap[buy_input.name] = buy_input.ticker
+        save_ticker_map(tmap)
 
     # Transaction 저장
     transactions = load_transactions()
@@ -153,6 +164,7 @@ async def _edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.edit_message_text(
         "매수 정보를 다시 입력해주세요:\n\n"
         "종목명\n"
+        "종목코드 (예: 005930)\n"
         "섹터\n"
         "수량 (예: 10주)\n"
         "매수가 (예: 72000원)\n"
@@ -173,7 +185,10 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def buy_conversation() -> ConversationHandler:
     """매수 ConversationHandler를 생성하여 반환."""
     return ConversationHandler(
-        entry_points=[CommandHandler(["buy", "매수"], _start)],
+        entry_points=[
+            CommandHandler("buy", _start),
+            MessageHandler(filters.Regex(r"^매수$"), _start),
+        ],
         states={
             INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input)],
             CONFIRM: [

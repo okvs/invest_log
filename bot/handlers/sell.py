@@ -16,8 +16,8 @@ from telegram.ext import (
     filters,
 )
 
-from invest_log.bot.formatters import format_sell_result
-from invest_log.bot.keyboards import (
+from bot.formatters import format_sell_result
+from bot.keyboards import (
     AVOIDABLE_NO,
     AVOIDABLE_UNKNOWN,
     AVOIDABLE_YES,
@@ -33,11 +33,11 @@ from invest_log.bot.keyboards import (
     sell_confirm_keyboard,
     thesis_eval_keyboard,
 )
-from invest_log.models.portfolio import Holding
-from invest_log.models.retrospective import Retrospective
-from invest_log.models.transaction import Transaction
-from invest_log.parsers.input_parser import parse_sell_input
-from invest_log.storage.json_store import (
+from models.portfolio import Holding
+from models.retrospective import Retrospective
+from models.transaction import Transaction
+from parsers.input_parser import parse_sell_input
+from storage.json_store import (
     load_holdings,
     load_retrospectives,
     load_transactions,
@@ -113,7 +113,7 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["sell_profit_loss"] = profit_loss
     context.user_data["sell_profit_loss_pct"] = profit_loss_pct
 
-    from invest_log.bot.formatters import format_number
+    from bot.formatters import format_number
 
     sign = "+" if profit_loss >= 0 else ""
     preview = (
@@ -378,7 +378,8 @@ def sell_conversation() -> ConversationHandler:
     """매도 + 회고 ConversationHandler를 생성하여 반환."""
     return ConversationHandler(
         entry_points=[
-            CommandHandler(["sell", "매도"], _start_sell),
+            CommandHandler("sell", _start_sell),
+            MessageHandler(filters.Regex(r"^매도$"), _start_sell),
         ],
         states={
             INPUT: [
