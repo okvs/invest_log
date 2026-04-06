@@ -8,12 +8,12 @@ from typing import List
 @dataclass
 class Holding:
     name: str
-    ticker: str
     sector: str
     buy_date: str
     avg_price: float
     quantity: int
     total_invested: float
+    ticker: str = ""
     buy_thesis: str = ""
     research_notes: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
