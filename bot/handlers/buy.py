@@ -5,7 +5,6 @@ from datetime import datetime
 
 from telegram import Update
 from telegram.ext import (
-    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -13,13 +12,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.formatters import format_buy_preview, format_buy_result
-from bot.keyboards import (
-    CANCEL_BUY,
-    CONFIRM_BUY,
-    EDIT_BUY,
-    buy_confirm_keyboard,
-)
+from bot.formatters import format_buy_result
 from models.portfolio import Holding
 from models.transaction import Transaction
 from parsers.input_parser import parse_buy_input
@@ -33,7 +26,7 @@ from storage.json_store import (
 )
 
 # ConversationHandler 상태
-INPUT, CONFIRM = range(2)
+INPUT = 0
 
 
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -59,7 +52,7 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """사용자 입력을 파싱하고 미리보기를 표시."""
+    """사용자 입력을 파싱하고 즉시 저장."""
     text = update.message.text
 
     try:
@@ -67,28 +60,6 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError as e:
         await update.message.reply_text(f"입력 오류: {e}\n\n다시 입력해주세요.")
         return INPUT
-
-    # 파싱 결과를 user_data에 임시 저장
-    context.user_data["buy_input"] = buy_input
-
-    preview = format_buy_preview(
-        name=buy_input.name,
-        sector=buy_input.sector,
-        quantity=buy_input.quantity,
-        price=buy_input.price,
-        thesis=buy_input.thesis,
-        notes=buy_input.research_notes,
-    )
-    await update.message.reply_text(preview, reply_markup=buy_confirm_keyboard())
-    return CONFIRM
-
-
-async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """확인 버튼 — 매수 기록 저장."""
-    query = update.callback_query
-    await query.answer()
-
-    buy_input = context.user_data.pop("buy_input")
 
     # Transaction 생성
     tx = Transaction(
@@ -153,32 +124,7 @@ async def _confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         price=buy_input.price,
         thesis=buy_input.thesis,
     )
-    await query.edit_message_text(result_text)
-    return ConversationHandler.END
-
-
-async def _edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """수정 버튼 — 다시 입력 받기."""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "매수 정보를 다시 입력해주세요:\n\n"
-        "종목명\n"
-        "종목코드 (예: 005930)\n"
-        "섹터\n"
-        "수량 (예: 10주)\n"
-        "매수가 (예: 72000원)\n"
-        "매수 근거"
-    )
-    return INPUT
-
-
-async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """취소 버튼 — 대화 종료."""
-    query = update.callback_query
-    await query.answer()
-    context.user_data.pop("buy_input", None)
-    await query.edit_message_text("매수 기록이 취소되었습니다.")
+    await update.message.reply_text(result_text)
     return ConversationHandler.END
 
 
@@ -191,11 +137,6 @@ def buy_conversation() -> ConversationHandler:
         ],
         states={
             INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input)],
-            CONFIRM: [
-                CallbackQueryHandler(_confirm, pattern=f"^{CONFIRM_BUY}$"),
-                CallbackQueryHandler(_edit, pattern=f"^{EDIT_BUY}$"),
-                CallbackQueryHandler(_cancel, pattern=f"^{CANCEL_BUY}$"),
-            ],
         },
         fallbacks=[CommandHandler("cancel", _cancel_fallback)],
     )

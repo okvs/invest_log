@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''bot/handlers/buy.py''\\).read\\(\\)\\); print\\(''buy.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''bot/handlers/sell.py''\\).read\\(\\)\\); print\\(''sell.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''bot/handlers/buy.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''buy.py OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''bot/handlers/sell.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''sell.py OK''\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}

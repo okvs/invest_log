@@ -21,8 +21,6 @@ from bot.keyboards import (
     AVOIDABLE_NO,
     AVOIDABLE_UNKNOWN,
     AVOIDABLE_YES,
-    CANCEL_SELL,
-    CONFIRM_SELL,
     SKIP_RETRO,
     START_RETRO,
     THESIS_CORRECT,
@@ -30,7 +28,6 @@ from bot.keyboards import (
     THESIS_WRONG,
     avoidable_keyboard,
     retro_ask_keyboard,
-    sell_confirm_keyboard,
     thesis_eval_keyboard,
 )
 from models.portfolio import Holding
@@ -49,14 +46,13 @@ from storage.json_store import (
 # ConversationHandler states
 (
     INPUT,
-    CONFIRM,
     RETRO_ASK,
     RETRO_THESIS,
     RETRO_WELL,
     RETRO_REGRETS,
     RETRO_AVOIDABLE,
     RETRO_LESSONS,
-) = range(8)
+) = range(7)
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -70,7 +66,7 @@ async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Step 3-4: 매도 정보 파싱 → 보유 종목 확인 → 확인 키보드."""
+    """매도 정보 파싱 → 보유 종목 확인 → 즉시 저장 → 회고 여부 질문."""
     text = update.message.text
 
     # 파싱
@@ -101,8 +97,6 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return INPUT
 
-    # user_data에 임시 저장
-    context.user_data["sell_input"] = sell_input
     context.user_data["sell_holding"] = holding_dict
 
     avg_price = holding_dict["avg_price"]
@@ -110,52 +104,20 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     profit_loss = (sell_input.price - avg_price) * sell_input.quantity
     profit_loss_pct = profit_loss / (avg_price * sell_input.quantity) * 100
 
-    context.user_data["sell_profit_loss"] = profit_loss
-    context.user_data["sell_profit_loss_pct"] = profit_loss_pct
-
-    from bot.formatters import format_number
-
-    sign = "+" if profit_loss >= 0 else ""
-    preview = (
-        "매도 정보를 확인해주세요:\n"
-        f"  종목: {sell_input.name}\n"
-        f"  수량: {sell_input.quantity}주\n"
-        f"  매도가: {format_number(sell_input.price)}원\n"
-        f"  총 금액: {format_number(total)}원\n"
-        f"  예상 수익: {sign}{format_number(profit_loss)}원 ({sign}{profit_loss_pct:.1f}%)\n"
-        f"  사유: {sell_input.sell_reason}"
-    )
-    await update.message.reply_text(preview, reply_markup=sell_confirm_keyboard())
-    return CONFIRM
-
-
-async def _confirm_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Step 5: 매도 확인 → 저장 → 회고 여부 질문."""
-    query = update.callback_query
-    await query.answer()
-
-    sell_input = context.user_data["sell_input"]
-    holding_dict = context.user_data["sell_holding"]
-    profit_loss = context.user_data["sell_profit_loss"]
-    profit_loss_pct = context.user_data["sell_profit_loss_pct"]
-
     # Holding 업데이트
     holding = Holding.from_dict(holding_dict)
     holding.remove_sell(sell_input.quantity)
 
-    holdings = load_holdings()
     new_holdings = []
     for h in holdings:
         if h["name"] == sell_input.name:
             if holding.quantity > 0:
                 new_holdings.append(holding.to_dict())
-            # quantity == 0 이면 제거 (추가하지 않음)
         else:
             new_holdings.append(h)
     save_holdings(new_holdings)
 
     # Transaction 생성 및 저장
-    total = sell_input.price * sell_input.quantity
     tx = Transaction(
         type="sell",
         name=sell_input.name,
@@ -183,26 +145,14 @@ async def _confirm_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         profit_loss=profit_loss,
         profit_loss_pct=profit_loss_pct,
     )
-    await query.edit_message_text(result_text)
+    await update.message.reply_text(result_text)
 
     # 회고 여부 질문
-    await query.message.reply_text(
+    await update.message.reply_text(
         "이 매도에 대해 회고를 진행할까요?",
         reply_markup=retro_ask_keyboard(),
     )
     return RETRO_ASK
-
-
-async def _cancel_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매도 취소."""
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("매도가 취소되었습니다.")
-    context.user_data.pop("sell_input", None)
-    context.user_data.pop("sell_holding", None)
-    context.user_data.pop("sell_profit_loss", None)
-    context.user_data.pop("sell_profit_loss_pct", None)
-    return ConversationHandler.END
 
 
 async def _start_retro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -384,10 +334,6 @@ def sell_conversation() -> ConversationHandler:
         states={
             INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),
-            ],
-            CONFIRM: [
-                CallbackQueryHandler(_confirm_sell, pattern=f"^{CONFIRM_SELL}$"),
-                CallbackQueryHandler(_cancel_sell, pattern=f"^{CANCEL_SELL}$"),
             ],
             RETRO_ASK: [
                 CallbackQueryHandler(_start_retro, pattern=f"^{START_RETRO}$"),
