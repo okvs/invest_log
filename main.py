@@ -7,7 +7,6 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    PicklePersistence,
     filters,
 )
 
@@ -50,8 +49,7 @@ def main() -> None:
     if not token:
         raise RuntimeError("BOT_TOKEN 환경변수를 설정해주세요. (.env 파일 참고)")
 
-    persistence = PicklePersistence(filepath="data/bot_persistence.pickle")
-    app = Application.builder().token(token).persistence(persistence).build()
+    app = Application.builder().token(token).build()
 
     # 기본 명령어
     app.add_handler(CommandHandler("start", start))

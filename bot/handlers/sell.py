@@ -92,9 +92,8 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await query.edit_message_text(
         f"[{name}] {qty}주 보유 중\n\n"
-        "매도 정보를 입력해주세요:\n"
-        "수량(예: 5주)\n매도가(예: 85000원)\n매도 사유\n\n"
-        "예시:\n5주\n85000원\n목표가 도달"
+        "수량 / 매도가 / 사유\n"
+        "를 줄바꿈으로 입력해주세요."
     )
     return INPUT
 
@@ -413,6 +412,5 @@ def sell_conversation() -> ConversationHandler:
             CommandHandler("cancel", _cancel),
         ],
         name="sell",
-        persistent=True,
-        conversation_timeout=600,
+        allow_reentry=True,
     )

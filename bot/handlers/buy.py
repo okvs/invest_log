@@ -49,19 +49,8 @@ PICK_STOCK = 1
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매수 대화 시작 — 입력 안내 메시지."""
     await update.message.reply_text(
-        "매수 정보를 입력해주세요:\n\n"
-        "종목명\n"
-        "섹터\n"
-        "수량 (예: 10주)\n"
-        "매수가 (예: 72000원)\n"
-        "매수 근거\n"
-        "참고 자료 (선택)\n\n"
-        "예시:\n"
-        "삼성전자\n"
-        "반도체\n"
-        "10주\n"
-        "72000원\n"
-        "AI 수요 증가 전망"
+        "종목명 / 섹터 / 수량 / 매수가 / 근거\n"
+        "를 줄바꿈으로 입력해주세요."
     )
     return INPUT
 
@@ -261,8 +250,7 @@ def buy_conversation() -> ConversationHandler:
         },
         fallbacks=[CommandHandler("cancel", _cancel_fallback)],
         name="buy",
-        persistent=True,
-        conversation_timeout=300,
+        allow_reentry=True,
     )
 
 
