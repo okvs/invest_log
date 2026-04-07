@@ -130,7 +130,7 @@ query = "__QUERY__"
 max_results = __MAX__
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=False)
+    browser = p.chromium.launch(headless=True)
     try:
         page = browser.new_page()
         page.goto("https://finance.naver.com/", timeout=10000)

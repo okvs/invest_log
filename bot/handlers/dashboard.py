@@ -1,4 +1,6 @@
+import asyncio
 import io
+import logging
 from collections import defaultdict
 
 import matplotlib
@@ -11,7 +13,10 @@ from telegram.ext import ContextTypes
 
 from bot.formatters import format_dashboard, fetch_current_prices, format_number, _resolve_tickers
 from bot.html_report import build_html_report
-from storage.json_store import load_holdings
+from parsers.input_parser import search_stocks
+from storage.json_store import load_holdings, save_holdings, load_ticker_map, save_ticker_map
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_MSG_LIMIT = 4096
 
@@ -90,6 +95,52 @@ def _build_sector_chart(holdings: list[dict]):
     return buf
 
 
+async def _backfill_missing_tickers(holdings_data: list[dict]) -> list[str]:
+    """ticker가 없는 보유 종목을 검색하여 자동 보정. 보정된 종목명 리스트 반환."""
+    missing = [
+        h for h in holdings_data
+        if h.get("quantity", 0) > 0 and not h.get("ticker", "")
+    ]
+    if not missing:
+        return []
+
+    tmap = load_ticker_map()
+    filled: list[str] = []
+
+    for h in missing:
+        name = h["name"]
+        # ticker_map 캐시 먼저 확인
+        cached = tmap.get(name, "")
+        if not cached:
+            for k, v in tmap.items():
+                if k.lower() == name.lower():
+                    cached = v
+                    break
+        if cached:
+            h["ticker"] = cached
+            filled.append(name)
+            continue
+
+        # Playwright로 검색
+        try:
+            candidates = await asyncio.to_thread(search_stocks, name)
+            exact = [c for c in candidates if c.name == name]
+            if exact:
+                suffix = ".KQ" if exact[0].market == "KOSDAQ" else ".KS"
+                ticker = exact[0].code + suffix
+                h["ticker"] = ticker
+                tmap[name] = ticker
+                filled.append(name)
+        except Exception:
+            logger.warning("ticker 보정 실패: %s", name, exc_info=True)
+
+    if filled:
+        save_holdings(holdings_data)
+        save_ticker_map(tmap)
+
+    return filled
+
+
 async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """보유 종목 현황 대시보드를 전송한다."""
     holdings = load_holdings()
@@ -99,7 +150,15 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("보유 종목이 없습니다.")
         return
 
+    # ticker 없는 종목 자동 보정
+    filled = await _backfill_missing_tickers(holdings)
+    if filled:
+        await update.message.reply_text(
+            "종목코드 자동 보정:\n" + "\n".join(f"  {n} → {next(h['ticker'] for h in holdings if h['name'] == n)}" for n in filled)
+        )
+        # 보정된 데이터로 다시 로드
+        holdings = load_holdings()
+
     # HTML 리포트 전송
-    if active:
-        html_file = build_html_report(holdings)
-        await update.message.reply_document(document=html_file, caption="상세 리포트 (브라우저에서 열기)")
+    html_file = build_html_report(holdings)
+    await update.message.reply_document(document=html_file, caption="상세 리포트 (브라우저에서 열기)")
