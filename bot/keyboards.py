@@ -81,6 +81,29 @@ def holdings_select_keyboard(holdings: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+# --- 매수 종목 검색 결과 선택 ---
+BUY_STOCK_PREFIX = "buy_stock:"
+
+
+def stock_search_keyboard(candidates: list) -> InlineKeyboardMarkup:
+    """종목 검색 결과 선택 키보드. candidates: list of StockCandidate."""
+    buttons = []
+    for c in candidates:
+        suffix = ".KQ" if c.market == "KOSDAQ" else ".KS"
+        label = f"{c.name}  ({c.code}{suffix})  [{c.market}]"
+        # callback_data: "buy_stock:종목명|코드.KS"
+        buttons.append([
+            InlineKeyboardButton(
+                label,
+                callback_data=f"{BUY_STOCK_PREFIX}{c.name}|{c.code}{suffix}",
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton("종목코드 없이 진행", callback_data=f"{BUY_STOCK_PREFIX}|")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"

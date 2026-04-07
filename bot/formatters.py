@@ -172,12 +172,15 @@ def format_sell_result(
     )
 
 
-def format_buy_result(name: str, sector: str, quantity: int, price: float, thesis: str) -> str:
+def format_buy_result(
+    name: str, sector: str, quantity: int, price: float, thesis: str,
+    ticker: str = "",
+) -> str:
     """매수 기록 확인 텍스트."""
     total = price * quantity
     return (
         f"매수 기록 완료!\n"
-        f"{name} ({sector}) {quantity}주 x {format_number(price)}원 = {format_number(total)}원\n"
+        f"{name}{ticker} ({sector}) {quantity}주 x {format_number(price)}원 = {format_number(total)}원\n"
         f'근거: "{thesis}"'
     )
 

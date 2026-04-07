@@ -73,51 +73,68 @@ def _find_key_casefold(d: dict[str, str], key: str) -> str | None:
     return None
 
 
-def _lookup_naver(name: str) -> str:
-    """네이버 금융 자동완성 API로 종목코드 조회."""
+@dataclass
+class StockCandidate:
+    name: str
+    code: str
+    market: str
+
+
+def search_stocks(query: str) -> list[StockCandidate]:
+    """종목명 부분 검색으로 후보 목록 반환 (네이버 → KRX fallback)."""
+    for method in [_search_naver, _search_krx]:
+        try:
+            results = method(query)
+            if results:
+                return results
+        except Exception:
+            logger.warning("%s 종목 검색 실패: %s", method.__name__, query, exc_info=True)
+    return []
+
+
+def _search_naver(query: str) -> list[StockCandidate]:
+    """네이버 금융 자동완성 API로 후보 목록 반환."""
     import json
     import urllib.parse
     import urllib.request
 
-    query = urllib.parse.quote(name)
+    encoded = urllib.parse.quote(query)
     url = (
         f"https://ac.finance.naver.com/ac"
-        f"?q={query}&q_enc=utf-8&t_koreng=1&st=111&r_lt=111"
+        f"?q={encoded}&q_enc=utf-8&t_koreng=1&st=111&r_lt=111"
     )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     resp = urllib.request.urlopen(req, timeout=5)
     data = json.loads(resp.read().decode("utf-8"))
     logger.debug("네이버 AC 응답: %s", data)
 
-    # items 구조: [[그룹1], [그룹2], ...] — 첫 그룹이 주식
+    candidates: list[StockCandidate] = []
     items = data.get("items", [])
     if not items or not items[0]:
-        return ""
+        return candidates
 
     for entry in items[0]:
-        # entry 내부 구조가 다를 수 있으므로 방어적으로 파싱
         try:
             row = entry if isinstance(entry[0], str) else entry[0]
             stock_name = row[0]
             stock_code = row[1]
-            if stock_name == name and stock_code.isdigit():
+            if stock_code.isdigit():
                 market_info = row[2] if len(row) > 2 else ""
-                if "코스닥" in market_info:
-                    return stock_code + ".KQ"
-                return stock_code + ".KS"
+                market = "KOSDAQ" if "코스닥" in market_info else "KOSPI"
+                candidates.append(StockCandidate(stock_name, stock_code, market))
         except (IndexError, TypeError):
             continue
-    return ""
+    return candidates[:10]
 
 
-def _lookup_krx(name: str) -> str:
-    """KRX 종목 검색 API로 종목코드 조회."""
+def _search_krx(query: str) -> list[StockCandidate]:
+    """KRX 종목 검색 API로 후보 목록 반환."""
     import json
     import urllib.request
 
     url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
     params = (
-        f"bld=dbms/comm/finder/finder_stkisu&mktsel=ALL&searchText={name}"
+        f"bld=dbms/comm/finder/finder_stkisu&mktsel=ALL&searchText={query}"
     )
     req = urllib.request.Request(
         url,
@@ -131,26 +148,22 @@ def _lookup_krx(name: str) -> str:
     data = json.loads(resp.read().decode("utf-8"))
     logger.debug("KRX 응답: %s", data)
 
+    candidates: list[StockCandidate] = []
     for item in data.get("block1", []):
-        if item.get("codeName", "").strip() == name:
-            full_code = item.get("full_code", "")
-            short_code = item.get("short_code", "")
-            code = short_code or full_code
-            if not code:
-                continue
-            mkt = item.get("marketName", "")
-            if "코스닥" in mkt:
-                return code + ".KQ"
-            return code + ".KS"
-    return ""
+        name = item.get("codeName", "").strip()
+        code = item.get("short_code", "")
+        mkt = item.get("marketName", "")
+        if name and code:
+            market = "KOSDAQ" if "코스닥" in mkt else "KOSPI"
+            candidates.append(StockCandidate(name, code, market))
+    return candidates[:10]
 
 
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     """종목명으로 종목코드(Yahoo Finance 형식)를 조회.
 
     1. ticker_map 캐시에서 먼저 확인
-    2. 네이버 금융 자동완성 API
-    3. KRX 종목 검색 API
+    2. search_stocks로 검색 후 정확히 일치하는 종목 반환
     조회 실패 시 빈 문자열 반환.
     """
     if ticker_map:
@@ -158,18 +171,14 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
         if found:
             return found
 
-    for method in [_lookup_naver, _lookup_krx]:
-        try:
-            result = method(name)
-            if result:
-                return result
-        except Exception:
-            logger.warning(
-                "%s 종목코드 조회 실패: %s",
-                method.__name__,
-                name,
-                exc_info=True,
-            )
+    try:
+        candidates = search_stocks(name)
+        for c in candidates:
+            if c.name == name:
+                suffix = ".KQ" if c.market == "KOSDAQ" else ".KS"
+                return c.code + suffix
+    except Exception:
+        logger.warning("종목코드 조회 실패: %s", name, exc_info=True)
 
     return ""
 
