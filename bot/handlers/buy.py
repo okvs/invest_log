@@ -1,6 +1,8 @@
 """매수(buy) ConversationHandler."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 
 from telegram import Update
@@ -11,6 +13,8 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+logger = logging.getLogger(__name__)
 
 from bot.formatters import format_buy_result
 from models.portfolio import Holding
@@ -60,78 +64,91 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"입력 오류: {e}\n\n다시 입력해주세요.")
         return INPUT
 
-    # 닉네임 → 실제 종목명 변환
-    nmap = load_nickname_map()
-    buy_input.name = resolve_name(buy_input.name, nickname_map=nmap)
+    try:
+        # 닉네임 → 실제 종목명 변환
+        nmap = load_nickname_map()
+        buy_input.name = resolve_name(buy_input.name, nickname_map=nmap)
 
-    # 종목코드 자동 조회
-    tmap = load_ticker_map()
-    buy_input.ticker = lookup_ticker(buy_input.name, ticker_map=tmap)
-
-    # Transaction 생성
-    tx = Transaction(
-        type="buy",
-        name=buy_input.name,
-        sector=buy_input.sector,
-        price=buy_input.price,
-        quantity=buy_input.quantity,
-        total_amount=buy_input.price * buy_input.quantity,
-        thesis=buy_input.thesis,
-        research_notes=buy_input.research_notes,
-    )
-
-    # 기존 종목 확인
-    holdings_data = load_holdings()
-    existing: Holding | None = None
-    existing_idx: int | None = None
-
-    for idx, h_dict in enumerate(holdings_data):
-        if h_dict["name"].lower() == buy_input.name.lower():
-            existing = Holding.from_dict(h_dict)
-            existing_idx = idx
-            break
-
-    if existing is not None:
-        # 추가 매수 — 평균단가 재계산
-        existing.add_buy(buy_input.price, buy_input.quantity, tx.id)
-        holdings_data[existing_idx] = existing.to_dict()
-    else:
-        # 신규 매수
-        holding = Holding(
-            name=buy_input.name,
-            ticker=buy_input.ticker,
-            sector=buy_input.sector,
-            buy_date=datetime.now().strftime("%Y-%m-%d"),
-            avg_price=buy_input.price,
-            quantity=buy_input.quantity,
-            total_invested=buy_input.price * buy_input.quantity,
-            buy_thesis=buy_input.thesis,
-            research_notes=buy_input.research_notes,
-            transaction_ids=[tx.id],
-        )
-        holdings_data.append(holding.to_dict())
-
-    save_holdings(holdings_data)
-
-    # ticker_map에 저장
-    if buy_input.ticker:
+        # 종목코드 자동 조회 (블로킹 방지: 별도 스레드 + 타임아웃)
         tmap = load_ticker_map()
-        tmap[buy_input.name] = buy_input.ticker
-        save_ticker_map(tmap)
+        try:
+            buy_input.ticker = await asyncio.wait_for(
+                asyncio.to_thread(lookup_ticker, buy_input.name, tmap),
+                timeout=10,
+            )
+        except (asyncio.TimeoutError, Exception):
+            logger.warning("종목코드 조회 실패/타임아웃: %s", buy_input.name)
+            buy_input.ticker = ""
 
-    # Transaction 저장
-    transactions = load_transactions()
-    transactions.append(tx.to_dict())
-    save_transactions(transactions)
+        # Transaction 생성
+        tx = Transaction(
+            type="buy",
+            name=buy_input.name,
+            sector=buy_input.sector,
+            price=buy_input.price,
+            quantity=buy_input.quantity,
+            total_amount=buy_input.price * buy_input.quantity,
+            thesis=buy_input.thesis,
+            research_notes=buy_input.research_notes,
+        )
 
-    result_text = format_buy_result(
-        name=buy_input.name,
-        sector=buy_input.sector,
-        quantity=buy_input.quantity,
-        price=buy_input.price,
-        thesis=buy_input.thesis,
-    )
-    await update.message.reply_text(result_text)
+        # 기존 종목 확인
+        holdings_data = load_holdings()
+        existing: Holding | None = None
+        existing_idx: int | None = None
+
+        for idx, h_dict in enumerate(holdings_data):
+            if h_dict["name"].lower() == buy_input.name.lower():
+                existing = Holding.from_dict(h_dict)
+                existing_idx = idx
+                break
+
+        if existing is not None:
+            # 추가 매수 — 평균단가 재계산
+            existing.add_buy(buy_input.price, buy_input.quantity, tx.id)
+            holdings_data[existing_idx] = existing.to_dict()
+        else:
+            # 신규 매수
+            holding = Holding(
+                name=buy_input.name,
+                ticker=buy_input.ticker,
+                sector=buy_input.sector,
+                buy_date=datetime.now().strftime("%Y-%m-%d"),
+                avg_price=buy_input.price,
+                quantity=buy_input.quantity,
+                total_invested=buy_input.price * buy_input.quantity,
+                buy_thesis=buy_input.thesis,
+                research_notes=buy_input.research_notes,
+                transaction_ids=[tx.id],
+            )
+            holdings_data.append(holding.to_dict())
+
+        save_holdings(holdings_data)
+
+        # ticker_map에 저장
+        if buy_input.ticker:
+            tmap = load_ticker_map()
+            tmap[buy_input.name] = buy_input.ticker
+            save_ticker_map(tmap)
+
+        # Transaction 저장
+        transactions = load_transactions()
+        transactions.append(tx.to_dict())
+        save_transactions(transactions)
+
+        result_text = format_buy_result(
+            name=buy_input.name,
+            sector=buy_input.sector,
+            quantity=buy_input.quantity,
+            price=buy_input.price,
+            thesis=buy_input.thesis,
+        )
+        await update.message.reply_text(result_text)
+    except Exception:
+        logger.exception("매수 처리 중 오류 발생")
+        await update.message.reply_text(
+            "매수 처리 중 오류가 발생했습니다. 다시 시도해주세요."
+        )
     return ConversationHandler.END
 
 
