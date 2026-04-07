@@ -111,7 +111,8 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text("세션이 만료되었습니다. 다시 수정을 시작해주세요.")
         return ConversationHandler.END
 
-    # "종목명: 삼성전자" → "삼성전자" (라벨 제거)
+    # 라벨 제거 + 불필요한 줄 스킵
+    _SKIP_LABELS = {"종목코드"}
     lines = []
     for line in text.strip().splitlines():
         line = line.strip()
@@ -119,7 +120,16 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             continue
         # "종목명: 값", "섹터: 값" 등 라벨 제거
         if ":" in line:
-            line = line.split(":", 1)[1].strip()
+            label, _, value = line.partition(":")
+            label = label.strip()
+            value = value.strip()
+            # 종목코드 등 입력 불필요한 필드 스킵
+            if label in _SKIP_LABELS:
+                continue
+            # 라벨 뒤 값이 비어있으면 스킵 (예: "참고자료:")
+            if not value:
+                continue
+            line = value
         lines.append(line)
     if len(lines) < 5:
         await update.message.reply_text(
