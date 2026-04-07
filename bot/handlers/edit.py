@@ -68,6 +68,8 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
 
     ticker = target.get("ticker", "") or "없음"
+    notes = target.get("research_notes", "")
+
     current_info = (
         f"현재 정보:\n"
         f"  종목명: {target['name']}\n"
@@ -76,14 +78,24 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"  수량: {target['quantity']}주\n"
         f"  평균단가: {target['avg_price']:,.0f}원\n"
         f"  매수근거: {target.get('buy_thesis', '')}\n"
-        f"  참고자료: {target.get('research_notes', '')}\n"
+        f"  참고자료: {notes}\n"
     )
+
+    # 복사해서 바로 붙여넣기 가능한 형식
+    copy_block = (
+        f"{target['name']}\n"
+        f"{target.get('sector', '')}\n"
+        f"{target['quantity']}주\n"
+        f"{target['avg_price']:,.0f}원\n"
+        f"{target.get('buy_thesis', '')}"
+    )
+    if notes:
+        copy_block += f"\n{notes}"
 
     await query.edit_message_text(
         f"{current_info}\n"
-        "수정할 내용을 입력해주세요:\n\n"
-        "종목명\n섹터\n수량 (예: 10주)\n평균단가 (예: 72000원)\n매수 근거\n참고 자료 (선택)\n\n"
-        "현재 값을 유지하려면 그대로 적어주세요."
+        "아래를 복사해서 수정 후 보내주세요:\n\n"
+        f"{copy_block}"
     )
     return INPUT
 
@@ -99,7 +111,16 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.message.reply_text("세션이 만료되었습니다. 다시 수정을 시작해주세요.")
         return ConversationHandler.END
 
-    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    # "종목명: 삼성전자" → "삼성전자" (라벨 제거)
+    lines = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # "종목명: 값", "섹터: 값" 등 라벨 제거
+        if ":" in line:
+            line = line.split(":", 1)[1].strip()
+        lines.append(line)
     if len(lines) < 5:
         await update.message.reply_text(
             "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
