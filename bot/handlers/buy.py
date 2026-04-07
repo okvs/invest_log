@@ -95,16 +95,10 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             buy_input.ticker = cached
             return await _save_buy(update, context, buy_input)
 
-        # 종목 검색 (Playwright — 별도 스레드 + 타임아웃)
+        # 종목 검색 (별도 subprocess에서 Playwright 실행)
         await update.message.reply_text("종목 검색 중...")
         try:
-            candidates = await asyncio.wait_for(
-                asyncio.to_thread(search_stocks, buy_input.name),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("종목 검색 타임아웃: %s", buy_input.name)
-            candidates = []
+            candidates = await asyncio.to_thread(search_stocks, buy_input.name)
         except Exception:
             logger.exception("종목 검색 실패: %s", buy_input.name)
             candidates = []

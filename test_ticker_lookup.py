@@ -8,9 +8,9 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO)
 
-from parsers.input_parser import lookup_ticker, search_stocks
+from parsers.input_parser import search_stocks
 
-test_queries = ["삼성전자", "삼성", "카카오", "NAVER", "셀트리온"]
+test_queries = ["삼성전자", "삼성", "카카오", "한화솔"]
 
 for query in test_queries:
     print(f"\n{'='*40}")
@@ -22,5 +22,3 @@ for query in test_queries:
             print(f"  {c.name} ({c.code}{suffix}) [{c.market}]")
     else:
         print("  검색 결과 없음")
-    ticker = lookup_ticker(query)
-    print(f"  lookup_ticker → {ticker!r}")

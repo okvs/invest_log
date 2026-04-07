@@ -17,7 +17,9 @@
       "WebFetch(domain:www.alphasquare.co.kr)",
       "WebFetch(domain:m.stock.naver.com)",
       "WebFetch(domain:kr.investing.com)",
-      "WebFetch(domain:data.krx.co.kr)"
+      "WebFetch(domain:data.krx.co.kr)",
+      "Bash(where python:*)",
+      "Bash(코드)"
     ]
   }
 }

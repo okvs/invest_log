@@ -81,64 +81,89 @@ class StockCandidate:
 
 
 def search_stocks(query: str, max_results: int = 3) -> list[StockCandidate]:
-    """네이버 금융 검색창 자동완성으로 종목 후보 목록 반환 (Playwright).
+    """네이버 금융 검색창 자동완성으로 종목 후보 목록 반환.
 
+    별도 subprocess에서 Playwright를 실행하여 봇 이벤트 루프와 충돌 방지.
     6자리 숫자 코드를 가진 일반 주식만 필터링하여 최대 max_results개 반환.
     """
+    import json
+    import subprocess
+    import sys
+
+    script = _SEARCH_SCRIPT.replace("__QUERY__", query).replace(
+        "__MAX__", str(max_results)
+    )
+
     try:
-        return _search_naver_playwright(query, max_results)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            logger.warning("종목 검색 subprocess 실패:\n%s", result.stderr)
+            return []
+
+        candidates = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("|")
+            if len(parts) == 3:
+                candidates.append(StockCandidate(parts[0], parts[1], parts[2]))
+        return candidates
+    except subprocess.TimeoutExpired:
+        logger.warning("종목 검색 타임아웃: %s", query)
     except Exception:
-        logger.warning("네이버 종목 검색 실패: %s", query, exc_info=True)
+        logger.warning("종목 검색 실패: %s", query, exc_info=True)
     return []
 
 
-def _search_naver_playwright(query: str, max_results: int = 3) -> list[StockCandidate]:
-    """Playwright로 네이버 금융 검색창 자동완성 결과를 파싱."""
-    from playwright.sync_api import sync_playwright
+# subprocess에서 실행할 Playwright 스크립트
+_SEARCH_SCRIPT = r'''
+import sys
+sys.stdout.reconfigure(encoding="utf-8")
 
-    candidates: list[StockCandidate] = []
+from playwright.sync_api import sync_playwright
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+query = "__QUERY__"
+max_results = __MAX__
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=False)
+    try:
+        page = browser.new_page()
+        page.goto("https://finance.naver.com/", timeout=10000)
+        search = page.locator("#stock_items")
+        search.click()
+        search.type(query, delay=30)
         try:
-            page = browser.new_page()
-            page.goto("https://finance.naver.com/", timeout=10000)
-
-            search = page.locator("#stock_items")
-            search.click()
-            search.type(query, delay=30)
-
-            # 자동완성 결과 대기
+            page.wait_for_selector("ul._resultBox li", timeout=3000)
+        except Exception:
+            sys.exit(0)
+        items = page.query_selector_all("ul._resultBox li")
+        count = 0
+        for item in items:
             try:
-                page.wait_for_selector("ul._resultBox li", timeout=3000)
-            except Exception:
-                return candidates
-
-            items = page.query_selector_all("ul._resultBox li")
-            for item in items:
-                try:
-                    code_el = item.query_selector("._au_code")
-                    name_el = item.query_selector("._au_name")
-                    market_el = item.query_selector("._au_market")
-                    if not code_el or not name_el:
-                        continue
-
-                    code = code_el.inner_text().strip()
-                    name = name_el.inner_text().strip()
-                    market_text = market_el.inner_text().strip() if market_el else ""
-
-                    # 6자리 숫자 코드 = 일반 주식 (SPAC/ETF 등 제외)
-                    if code.isdigit() and len(code) == 6:
-                        market = "KOSDAQ" if "코스닥" in market_text else "KOSPI"
-                        candidates.append(StockCandidate(name, code, market))
-                        if len(candidates) >= max_results:
-                            break
-                except Exception:
+                code_el = item.query_selector("._au_code")
+                name_el = item.query_selector("._au_name")
+                market_el = item.query_selector("._au_market")
+                if not code_el or not name_el:
                     continue
-        finally:
-            browser.close()
-
-    return candidates
+                code = code_el.inner_text().strip()
+                name = name_el.inner_text().strip()
+                market_text = market_el.inner_text().strip() if market_el else ""
+                if code.isdigit() and len(code) == 6:
+                    market = "KOSDAQ" if "코스닥" in market_text else "KOSPI"
+                    print(f"{name}|{code}|{market}")
+                    count += 1
+                    if count >= max_results:
+                        break
+            except Exception:
+                continue
+    finally:
+        browser.close()
+'''
 
 
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
