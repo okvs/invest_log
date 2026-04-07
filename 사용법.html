@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>투자 로그 봇 사용법</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    line-height: 1.7;
+    padding: 40px 20px;
+  }
+  .container { max-width: 860px; margin: 0 auto; }
+
+  h1 {
+    font-size: 2.2rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #58a6ff, #a371f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: #8b949e;
+    font-size: 1.05rem;
+    margin-bottom: 48px;
+  }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: #58a6ff; }
+
+  .card h2 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card h2 .badge {
+    background: #238636;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+  }
+  .card h2 .badge.blue { background: #1f6feb; }
+  .card h2 .badge.purple { background: #8957e5; }
+  .card h2 .badge.orange { background: #d29922; }
+  .card h2 .badge.red { background: #da3633; }
+
+  .cmd {
+    display: inline-block;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    color: #58a6ff;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.9rem;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+
+  .flow {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.88rem;
+    line-height: 1.9;
+    color: #c9d1d9;
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+  .flow .comment { color: #8b949e; }
+  .flow .highlight { color: #7ee787; }
+  .flow .bot { color: #d2a8ff; }
+  .flow .user { color: #58a6ff; }
+  .flow .arrow { color: #f0883e; }
+
+  .desc { color: #b1bac4; margin-bottom: 12px; }
+
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .feature-item {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-size: 0.9rem;
+  }
+  .feature-item strong { color: #58a6ff; }
+
+  .steps { counter-reset: step; list-style: none; margin-top: 12px; }
+  .steps li {
+    counter-increment: step;
+    padding: 8px 0 8px 36px;
+    position: relative;
+    color: #b1bac4;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    width: 24px;
+    height: 24px;
+    background: #1f6feb;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    top: 9px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid #21262d;
+    font-size: 0.9rem;
+  }
+  th {
+    color: #8b949e;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  td .cmd { font-size: 0.82rem; }
+
+  .tip {
+    background: #1a2332;
+    border-left: 3px solid #58a6ff;
+    padding: 12px 18px;
+    border-radius: 0 8px 8px 0;
+    margin-top: 16px;
+    font-size: 0.88rem;
+    color: #a5d6ff;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #21262d;
+    margin: 40px 0;
+  }
+
+  .footer {
+    text-align: center;
+    color: #484f58;
+    font-size: 0.82rem;
+    margin-top: 48px;
+  }
+
+  @media (max-width: 600px) {
+    body { padding: 20px 12px; }
+    .card { padding: 20px; }
+    .features { grid-template-columns: 1fr; }
+    h1 { font-size: 1.6rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>invest_log</h1>
+  <p class="subtitle">텔레그램 기반 한국 주식 투자 기록 봇</p>
+
+  <!-- 명령어 요약 -->
+  <div class="card">
+    <h2>명령어 목록</h2>
+    <table>
+      <tr><th>명령어</th><th>설명</th></tr>
+      <tr><td><span class="cmd">매수</span></td><td>종목 매수 기록 + 종목코드 자동 검색</td></tr>
+      <tr><td><span class="cmd">매도</span></td><td>매도 기록 + 수익률 계산 + 회고</td></tr>
+      <tr><td><span class="cmd">수정</span></td><td>보유 종목 정보 수정</td></tr>
+      <tr><td><span class="cmd">현황</span></td><td>포트폴리오 대시보드 + HTML 리포트</td></tr>
+      <tr><td><span class="cmd">닉네임</span></td><td>종목 닉네임 등록/삭제/조회</td></tr>
+      <tr><td><span class="cmd">도움말</span></td><td>사용법 안내</td></tr>
+    </table>
+  </div>
+
+  <hr class="divider">
+
+  <!-- 매수 -->
+  <div class="card">
+    <h2><span class="badge">매수</span> 종목 매수 기록</h2>
+    <p class="desc">종목명, 섹터, 수량, 매수가, 매수 근거를 한 번에 입력합니다. 종목코드는 네이버 금융에서 자동 검색됩니다.</p>
+
+    <div class="flow"><span class="comment"># 1. "매수" 입력 후 안내 메시지 수신</span>
+
+<span class="user">삼성전자</span>
+<span class="user">반도체</span>
+<span class="user">10주</span>
+<span class="user">72000원</span>
+<span class="user">AI 수요 증가 전망</span>
+
+<span class="arrow">--></span> <span class="bot">종목 검색 중...</span>
+<span class="arrow">--></span> <span class="bot">매수 기록 완료!</span>
+    <span class="bot">삼성전자 [005930.KS] (반도체) 10주 x 72,000원 = 720,000원</span></div>
+
+    <div class="features">
+      <div class="feature-item"><strong>부분 검색</strong><br>"삼성" 입력 시 삼성전자, 삼성전기, 삼성SDI 중 선택</div>
+      <div class="feature-item"><strong>닉네임</strong><br>"삼전" 입력 시 삼성전자로 자동 변환</div>
+      <div class="feature-item"><strong>추가 매수</strong><br>같은 종목 재매수 시 평균단가 자동 계산</div>
+      <div class="feature-item"><strong>종목코드 캐시</strong><br>한번 검색된 종목은 즉시 조회</div>
+    </div>
+  </div>
+
+  <!-- 매도 -->
+  <div class="card">
+    <h2><span class="badge blue">매도</span> 매도 기록 + 회고</h2>
+    <p class="desc">보유 종목을 선택하고 매도 정보를 입력합니다. 수익률이 자동 계산되며, 매도 후 투자 회고를 진행할 수 있습니다.</p>
+
+    <div class="flow"><span class="comment"># 1. "매도" 입력 → 보유 종목 버튼 표시</span>
+<span class="arrow">--></span> <span class="bot">[삼성전자 | 10주]  [카카오 | 5주]</span>
+
+<span class="comment"># 2. 종목 선택 후 매도 정보 입력</span>
+<span class="user">5주</span>
+<span class="user">85000원</span>
+<span class="user">목표가 도달</span>
+
+<span class="arrow">--></span> <span class="bot">매도 기록 완료!</span>
+    <span class="bot">삼성전자 5주 x 85,000원 = 425,000원</span>
+    <span class="bot">수익: +65,000원 (+18.1%)</span>
+
+<span class="arrow">--></span> <span class="bot">매도 회고를 시작할까요?</span>
+    <span class="bot">[회고 시작]  [나중에]</span></div>
+
+    <p class="desc" style="margin-top:16px">회고 5단계:</p>
+    <ol class="steps">
+      <li>투자 판단이 맞았는가? (맞았다 / 틀렸다 / 부분적으로)</li>
+      <li>잘한 점은?</li>
+      <li>아쉬운 점은?</li>
+      <li>피할 수 있었는가? (피할 수 있었다 / 통제 불가 / 모르겠다)</li>
+      <li>이번 매매에서 얻은 교훈은?</li>
+    </ol>
+  </div>
+
+  <!-- 수정 -->
+  <div class="card">
+    <h2><span class="badge orange">수정</span> 보유 종목 수정</h2>
+    <p class="desc">잘못 입력한 매수 정보를 수정합니다. 종목명, 섹터, 수량, 평균단가, 매수 근거를 변경할 수 있습니다.</p>
+
+    <div class="flow"><span class="comment"># 1. "수정" 입력 → 보유 종목 카드 표시</span>
+<span class="arrow">--></span> <span class="bot">[삼성전자 | 반도체 | 10주 | 평균 72,000원]</span>
+    <span class="bot">[카카오 | IT | 5주 | 평균 55,000원]</span>
+
+<span class="comment"># 2. 종목 선택 → 현재 정보 + 복사용 텍스트 표시</span>
+<span class="comment"># 3. 복사 → 수정 → 붙여넣기</span>
+<span class="user">삼성전자</span>
+<span class="user">반도체</span>
+<span class="user">10주</span>
+<span class="user">70000원</span>
+<span class="user">AI 반도체 수요 증가</span>
+
+<span class="arrow">--></span> <span class="bot">수정 완료!</span></div>
+
+    <div class="tip">"종목명: 삼성전자" 형식으로 붙여넣기해도 라벨을 자동 제거하여 인식합니다.</div>
+  </div>
+
+  <!-- 현황 -->
+  <div class="card">
+    <h2><span class="badge purple">현황</span> 포트폴리오 대시보드</h2>
+    <p class="desc">보유 종목의 섹터별 현황, 실시간 현재가 기반 수익률, HTML 리포트를 제공합니다.</p>
+
+    <div class="flow"><span class="comment"># "현황" 입력</span>
+<span class="arrow">--></span> <span class="bot">종목코드 자동 보정: 삼성전자 → 005930.KS</span>  <span class="comment">(없는 경우만)</span>
+
+<span class="arrow">--></span> <span class="bot">상세 리포트 (브라우저에서 열기)</span>  <span class="comment">[HTML 파일 첨부]</span></div>
+
+    <div class="features">
+      <div class="feature-item"><strong>현재가 조회</strong><br>yfinance 기반 실시간 가격</div>
+      <div class="feature-item"><strong>자동 보정</strong><br>종목코드 없는 종목 자동 검색</div>
+      <div class="feature-item"><strong>섹터별 분류</strong><br>투자금/평가금 섹터별 정리</div>
+      <div class="feature-item"><strong>HTML 리포트</strong><br>브라우저에서 상세 확인</div>
+    </div>
+  </div>
+
+  <!-- 닉네임 -->
+  <div class="card">
+    <h2><span class="badge red">닉네임</span> 종목 닉네임 관리</h2>
+    <p class="desc">자주 사용하는 종목에 짧은 닉네임을 등록하면 매수 시 닉네임으로 입력할 수 있습니다.</p>
+
+    <div class="flow"><span class="comment"># 등록</span>
+<span class="user">닉네임 삼전 : 삼성전자</span>
+<span class="arrow">--></span> <span class="bot">닉네임 등록: 삼전 → 삼성전자</span>
+
+<span class="comment"># 삭제</span>
+<span class="user">닉네임 삼전 : 삭제</span>
+
+<span class="comment"># 목록 조회</span>
+<span class="user">닉네임</span>
+<span class="arrow">--></span> <span class="bot">삼전 → 삼성전자</span>
+    <span class="bot">카뱅 → 카카오뱅크</span></div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- 설치 -->
+  <div class="card">
+    <h2>설치 및 실행</h2>
+    <div class="flow"><span class="comment"># 의존성 설치</span>
+pip install -r requirements.txt
+playwright install chromium
+
+<span class="comment"># 환경변수 설정</span>
+cp .env.example .env
+<span class="comment"># .env 파일에 BOT_TOKEN 입력</span>
+
+<span class="comment"># 실행</span>
+python main.py</div>
+    <div class="tip">텔레그램 @BotFather에서 봇을 생성하고 토큰을 받아 .env에 입력하세요.</div>
+  </div>
+
+  <p class="footer">invest_log &mdash; 텔레그램 투자 기록 봇</p>
+
+</div>
+</body>
+</html>
