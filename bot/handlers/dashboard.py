@@ -141,9 +141,72 @@ async def _backfill_missing_tickers(holdings_data: list[dict]) -> list[str]:
     return filled
 
 
+def _merge_duplicate_holdings(holdings: list[dict]) -> tuple[list[dict], bool]:
+    """같은 종목명의 보유 종목을 합쳐서 반환. (merged_holdings, changed)"""
+    from collections import OrderedDict
+
+    grouped: dict[str, list[int]] = {}
+    for i, h in enumerate(holdings):
+        name = h.get("name", "")
+        if name not in grouped:
+            grouped[name] = []
+        grouped[name].append(i)
+
+    changed = False
+    for name, indices in grouped.items():
+        if len(indices) <= 1:
+            continue
+        # 활성(quantity>0) 항목끼리만 합침
+        active_indices = [i for i in indices if holdings[i].get("quantity", 0) > 0]
+        if len(active_indices) <= 1:
+            continue
+
+        changed = True
+        base = holdings[active_indices[0]]
+        for idx in active_indices[1:]:
+            dup = holdings[idx]
+            base_qty = base.get("quantity", 0)
+            dup_qty = dup.get("quantity", 0)
+            base_invested = base.get("total_invested", 0)
+            dup_invested = dup.get("total_invested", 0)
+
+            new_qty = base_qty + dup_qty
+            new_invested = base_invested + dup_invested
+            new_avg = round(new_invested / new_qty) if new_qty > 0 else 0
+
+            base["quantity"] = new_qty
+            base["total_invested"] = new_invested
+            base["avg_price"] = new_avg
+
+            # ticker, sector 등 빈 값이면 채워줌
+            if not base.get("ticker") and dup.get("ticker"):
+                base["ticker"] = dup["ticker"]
+            if not base.get("sector") and dup.get("sector"):
+                base["sector"] = dup["sector"]
+            if not base.get("buy_thesis") and dup.get("buy_thesis"):
+                base["buy_thesis"] = dup["buy_thesis"]
+
+            # transaction_ids 합침
+            base_tids = base.get("transaction_ids", [])
+            dup_tids = dup.get("transaction_ids", [])
+            base["transaction_ids"] = base_tids + dup_tids
+
+            # 중복 항목 수량 0으로 (사실상 삭제)
+            dup["quantity"] = 0
+            dup["total_invested"] = 0
+
+    return holdings, changed
+
+
 async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """보유 종목 현황 대시보드를 전송한다."""
     holdings = load_holdings()
+
+    # 같은 종목명 중복 합치기
+    holdings, merged = _merge_duplicate_holdings(holdings)
+    if merged:
+        save_holdings(holdings)
+
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
     if not active:
