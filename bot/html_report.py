@@ -84,7 +84,7 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
         pnl_sign = "+" if r["pnl"] >= 0 else ""
         dot_color = sector_colors.get(r["sector"], "#999")
 
-        cur_display = f'{format_number(r["cur_price"])}원' if r["cur_price"] is not None else "-"
+        cur_display = f'{format_number(int(r["cur_price"]))}원' if r["cur_price"] is not None else "-"
 
         cur_raw = r["cur_price"] if r["cur_price"] is not None else 0
         stock_rows_html += f"""
@@ -97,9 +97,9 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
           <td class="thesis">{r["thesis"]}</td>
           <td class="num {pnl_class}">{pnl_sign}{format_number(int(r["pnl"]))}원<br><small>{pnl_sign}{int(r["pnl_pct"])}%</small></td>
           <td class="num">{cur_display}</td>
-          <td class="num">{format_number(r["avg"])}원</td>
+          <td class="num">{format_number(int(r["avg"]))}원</td>
           <td class="num">{r["qty"]}주</td>
-          <td class="num">{format_number(r["invested"])}원</td>
+          <td class="num">{format_number(int(r["invested"]))}원</td>
         </tr>"""
 
     # 섹터 바 HTML — 가장 큰 섹터 기준 상대 비율
