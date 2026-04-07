@@ -95,19 +95,27 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             buy_input.ticker = cached
             return await _save_buy(update, context, buy_input)
 
-        # 종목 검색 (별도 스레드 + 타임아웃)
+        # 종목 검색 (Playwright — 별도 스레드 + 타임아웃)
+        await update.message.reply_text("종목 검색 중...")
         try:
             candidates = await asyncio.wait_for(
                 asyncio.to_thread(search_stocks, buy_input.name),
-                timeout=10,
+                timeout=30,
             )
-        except (asyncio.TimeoutError, Exception):
-            logger.warning("종목 검색 실패/타임아웃: %s", buy_input.name)
+        except asyncio.TimeoutError:
+            logger.warning("종목 검색 타임아웃: %s", buy_input.name)
+            candidates = []
+        except Exception:
+            logger.exception("종목 검색 실패: %s", buy_input.name)
             candidates = []
 
         if not candidates:
             # 검색 결과 없음 → 종목코드 없이 저장
             buy_input.ticker = ""
+            await update.message.reply_text(
+                "종목코드를 찾지 못했습니다. 종목코드 없이 저장합니다.\n"
+                "(현황에서 현재가 조회가 안 될 수 있습니다)"
+            )
             return await _save_buy(update, context, buy_input)
 
         # 정확히 1개만 매칭 → 바로 저장
@@ -117,7 +125,7 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             buy_input.ticker = exact[0].code + suffix
             return await _save_buy(update, context, buy_input)
 
-        # 여러 후보 → 사용자에게 선택 요청
+        # 후보 표시 → 사용자에게 선택 요청
         context.user_data["buy_input"] = buy_input
         keyboard = stock_search_keyboard(candidates)
         await update.message.reply_text(
