@@ -73,6 +73,29 @@ def save_retrospectives(retrospectives: list[dict]) -> None:
     save(RETROSPECTIVES_FILE, {"retrospectives": retrospectives})
 
 
+NICKNAME_MAP_FILE = "nickname_map.json"
+
+
+def load_nickname_map() -> dict[str, str]:
+    """닉네임 → 종목명 매핑 로드."""
+    _ensure_dir()
+    fp = _path(NICKNAME_MAP_FILE)
+    if not fp.exists():
+        return {}
+    with FileLock(_lock_path(NICKNAME_MAP_FILE)):
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+
+def save_nickname_map(nickname_map: dict[str, str]) -> None:
+    """닉네임 → 종목명 매핑 저장."""
+    _ensure_dir()
+    fp = _path(NICKNAME_MAP_FILE)
+    with FileLock(_lock_path(NICKNAME_MAP_FILE)):
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(nickname_map, f, ensure_ascii=False, indent=2)
+
+
 TICKER_MAP_FILE = "ticker_map.json"
 
 

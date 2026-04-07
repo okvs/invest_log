@@ -50,6 +50,29 @@ def _parse_number(text: str) -> float:
     return float(cleaned)
 
 
+def resolve_name(name: str, nickname_map: dict[str, str] | None = None) -> str:
+    """닉네임/대소문자 변환을 거쳐 실제 종목명을 반환.
+
+    1. nickname_map에서 대소문자 무시하고 검색
+    2. 매칭되면 실제 종목명 반환, 아니면 원본 그대로 반환
+    """
+    if nickname_map:
+        name_lower = name.lower()
+        for nick, real in nickname_map.items():
+            if nick.lower() == name_lower:
+                return real
+    return name
+
+
+def _find_key_casefold(d: dict[str, str], key: str) -> str | None:
+    """dict에서 대소문자 무시하고 key를 찾아 value 반환."""
+    key_lower = key.lower()
+    for k, v in d.items():
+        if k.lower() == key_lower:
+            return v
+    return None
+
+
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     """종목명으로 종목코드(Yahoo Finance 형식)를 조회.
 
@@ -57,8 +80,10 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     2. 없으면 pykrx로 KRX에서 조회
     조회 실패 시 빈 문자열 반환.
     """
-    if ticker_map and name in ticker_map:
-        return ticker_map[name]
+    if ticker_map:
+        found = _find_key_casefold(ticker_map, name)
+        if found:
+            return found
 
     try:
         from pykrx import stock

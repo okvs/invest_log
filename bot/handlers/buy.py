@@ -15,9 +15,10 @@ from telegram.ext import (
 from bot.formatters import format_buy_result
 from models.portfolio import Holding
 from models.transaction import Transaction
-from parsers.input_parser import lookup_ticker, parse_buy_input
+from parsers.input_parser import lookup_ticker, parse_buy_input, resolve_name
 from storage.json_store import (
     load_holdings,
+    load_nickname_map,
     load_ticker_map,
     load_transactions,
     save_holdings,
@@ -59,6 +60,10 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"입력 오류: {e}\n\n다시 입력해주세요.")
         return INPUT
 
+    # 닉네임 → 실제 종목명 변환
+    nmap = load_nickname_map()
+    buy_input.name = resolve_name(buy_input.name, nickname_map=nmap)
+
     # 종목코드 자동 조회
     tmap = load_ticker_map()
     buy_input.ticker = lookup_ticker(buy_input.name, ticker_map=tmap)
@@ -81,7 +86,7 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     existing_idx: int | None = None
 
     for idx, h_dict in enumerate(holdings_data):
-        if h_dict["name"] == buy_input.name:
+        if h_dict["name"].lower() == buy_input.name.lower():
             existing = Holding.from_dict(h_dict)
             existing_idx = idx
             break

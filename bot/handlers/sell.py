@@ -33,9 +33,10 @@ from bot.keyboards import (
 from models.portfolio import Holding
 from models.retrospective import Retrospective
 from models.transaction import Transaction
-from parsers.input_parser import parse_sell_input
+from parsers.input_parser import parse_sell_input, resolve_name
 from storage.json_store import (
     load_holdings,
+    load_nickname_map,
     load_retrospectives,
     load_transactions,
     save_holdings,
@@ -76,11 +77,15 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"입력 오류: {e}")
         return INPUT
 
-    # 보유 종목 확인
+    # 닉네임 → 실제 종목명 변환
+    nmap = load_nickname_map()
+    sell_input.name = resolve_name(sell_input.name, nickname_map=nmap)
+
+    # 보유 종목 확인 (대소문자 무시)
     holdings = load_holdings()
     holding_dict = None
     for h in holdings:
-        if h["name"] == sell_input.name:
+        if h["name"].lower() == sell_input.name.lower():
             holding_dict = h
             break
 

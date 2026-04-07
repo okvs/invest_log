@@ -12,9 +12,10 @@ from telegram.ext import (
 )
 
 from bot.handlers.buy import buy_conversation
-from bot.handlers.sell import sell_conversation
 from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.help import help_handler
+from bot.handlers.nickname import nickname_handler
+from bot.handlers.sell import sell_conversation
 
 load_dotenv()
 
@@ -32,6 +33,7 @@ async def start(update: Update, context) -> None:
         "매수 - 매수 기록\n"
         "매도 - 매도 기록 + 회고\n"
         "현황 - 투자 현황\n"
+        "닉네임 - 종목 닉네임 관리\n"
         "도움말 - 사용법"
     )
 
@@ -53,10 +55,12 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("dashboard", dashboard_handler))
+    app.add_handler(CommandHandler("nickname", nickname_handler))
 
     # 한국어 키워드 핸들러
     app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
+    app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 
     # ConversationHandler (매수/매도)
     app.add_handler(buy_conversation())

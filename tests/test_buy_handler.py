@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from bot.handlers.buy import _receive_input, _start
-from storage.json_store import load_holdings, load_ticker_map, load_transactions
+from storage.json_store import (
+    load_holdings,
+    load_ticker_map,
+    load_transactions,
+    save_nickname_map,
+)
 
 
 def _make_update_and_context(text: str = ""):
@@ -103,3 +108,44 @@ async def test_receive_input_additional_buy(mock_lookup):
 
     txs = load_transactions()
     assert len(txs) == 2
+
+
+# ── 닉네임으로 매수 ──
+
+
+@pytest.mark.asyncio
+@patch("bot.handlers.buy.lookup_ticker", return_value="005930.KS")
+async def test_receive_input_with_nickname(mock_lookup):
+    save_nickname_map({"삼전": "삼성전자"})
+
+    text = "삼전\n반도체\n5주\n72000원\n닉네임 테스트"
+    update, context = _make_update_and_context(text)
+
+    result = await _receive_input(update, context)
+    assert result == -1
+
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["name"] == "삼성전자"  # 닉네임이 실제 종목명으로 변환됨
+
+
+# ── 영어 대소문자 무시 매수 ──
+
+
+@pytest.mark.asyncio
+@patch("bot.handlers.buy.lookup_ticker", return_value="NVDA")
+async def test_receive_input_case_insensitive(mock_lookup):
+    # 1차 매수 — 대문자
+    text1 = "NVIDIA\nAI\n5주\n800원\n1차"
+    update1, context1 = _make_update_and_context(text1)
+    await _receive_input(update1, context1)
+
+    # 2차 매수 — 소문자 (같은 종목으로 인식되어야 함)
+    text2 = "nvidia\nAI\n5주\n900원\n2차"
+    update2, context2 = _make_update_and_context(text2)
+    result = await _receive_input(update2, context2)
+    assert result == -1
+
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["quantity"] == 10  # 추가 매수로 합산
