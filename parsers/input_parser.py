@@ -99,7 +99,7 @@ def _search_naver_playwright(query: str, max_results: int = 3) -> list[StockCand
     candidates: list[StockCandidate] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         try:
             page = browser.new_page()
             page.goto("https://finance.naver.com/", timeout=10000)
