@@ -260,6 +260,9 @@ def buy_conversation() -> ConversationHandler:
             ],
         },
         fallbacks=[CommandHandler("cancel", _cancel_fallback)],
+        name="buy",
+        persistent=True,
+        conversation_timeout=300,
     )
 
 

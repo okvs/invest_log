@@ -412,4 +412,7 @@ def sell_conversation() -> ConversationHandler:
         fallbacks=[
             CommandHandler("cancel", _cancel),
         ],
+        name="sell",
+        persistent=True,
+        conversation_timeout=600,
     )
