@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass
@@ -17,7 +16,7 @@ class Holding:
     buy_thesis: str = ""
     research_notes: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    transaction_ids: List[str] = field(default_factory=list)
+    transaction_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {

@@ -4,7 +4,6 @@ from __future__ import annotations
 import io
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List
 
 from bot.formatters import fetch_current_prices, format_number, _resolve_tickers
 
@@ -15,7 +14,7 @@ def _format_man(n: float) -> str:
     return f"{man:,}만"
 
 
-def build_html_report(holdings: List[dict]) -> io.BytesIO:
+def build_html_report(holdings: list[dict]) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성."""
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
@@ -64,7 +63,7 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
     total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0
 
     # 섹터별 집계
-    sector_data: Dict[str, float] = defaultdict(float)
+    sector_data: dict[str, float] = defaultdict(float)
     for r in rows:
         sector_data[r["sector"]] += r["eval"]
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
@@ -247,18 +246,18 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{
-  th.addEventListener('click', () => {{
+  th.addEventlistener('click', () => {{
     const key = th.dataset.key;
     const type = th.dataset.type;
     const tbody = th.closest('table').querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
-    const asc = th.classList.toggle('asc');
+    const asc = th.classlist.toggle('asc');
 
     // 다른 헤더 초기화
     th.closest('tr').querySelectorAll('th').forEach(h => {{
-      if (h !== th) {{ h.classList.remove('sorted','asc'); }}
+      if (h !== th) {{ h.classlist.remove('sorted','asc'); }}
     }});
-    th.classList.add('sorted');
+    th.classlist.add('sorted');
 
     rows.sort((a, b) => {{
       let va = a.dataset[key];

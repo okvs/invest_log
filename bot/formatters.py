@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import date
-from typing import Dict, List
 
 import yfinance as yf
 
@@ -19,7 +18,7 @@ def format_number(n: float) -> str:
     return f"{n:,.1f}"
 
 
-def fetch_current_prices(tickers: List[str]) -> Dict[str, float]:
+def fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     """yfinance로 현재가 일괄 조회."""
     prices = {}
     if not tickers:
@@ -49,7 +48,7 @@ def fetch_current_prices(tickers: List[str]) -> Dict[str, float]:
     return prices
 
 
-def _resolve_tickers(holdings: List[dict]) -> tuple[Dict[str, str], List[str]]:
+def _resolve_tickers(holdings: list[dict]) -> tuple[dict[str, str], list[str]]:
     """종목명 → 티커코드 매핑. 매핑 안 되는 종목명 리스트도 반환."""
     ticker_map = load_ticker_map()
     result = {}
@@ -64,7 +63,7 @@ def _resolve_tickers(holdings: List[dict]) -> tuple[Dict[str, str], List[str]]:
     return result, missing
 
 
-def format_dashboard(holdings: List[dict]) -> str:
+def format_dashboard(holdings: list[dict]) -> str:
     """보유 종목 리스트를 섹터별 대시보드 텍스트로 변환."""
     if not holdings:
         return "보유 종목이 없습니다."
