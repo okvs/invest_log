@@ -3,21 +3,24 @@
 Usage: python test_ticker_lookup.py
 """
 import logging
+import sys
 
-logging.basicConfig(level=logging.DEBUG)
+sys.stdout.reconfigure(encoding="utf-8")
+logging.basicConfig(level=logging.INFO)
 
 from parsers.input_parser import lookup_ticker, search_stocks
 
-test_names = ["삼성전자", "카카오", "NAVER", "셀트리온", "삼성"]
+test_queries = ["삼성전자", "삼성", "카카오", "NAVER", "셀트리온"]
 
-for name in test_names:
+for query in test_queries:
     print(f"\n{'='*40}")
-    print(f"검색어: {name}")
-    candidates = search_stocks(name)
+    print(f"검색어: {query}")
+    candidates = search_stocks(query)
     if candidates:
         for c in candidates:
             suffix = ".KQ" if c.market == "KOSDAQ" else ".KS"
             print(f"  {c.name} ({c.code}{suffix}) [{c.market}]")
     else:
         print("  검색 결과 없음")
-    print(f"  lookup_ticker: {lookup_ticker(name)!r}")
+    ticker = lookup_ticker(query)
+    print(f"  lookup_ticker → {ticker!r}")

@@ -80,83 +80,65 @@ class StockCandidate:
     market: str
 
 
-def search_stocks(query: str) -> list[StockCandidate]:
-    """종목명 부분 검색으로 후보 목록 반환 (네이버 → KRX fallback)."""
-    for method in [_search_naver, _search_krx]:
-        try:
-            results = method(query)
-            if results:
-                return results
-        except Exception:
-            logger.warning("%s 종목 검색 실패: %s", method.__name__, query, exc_info=True)
+def search_stocks(query: str, max_results: int = 3) -> list[StockCandidate]:
+    """네이버 금융 검색창 자동완성으로 종목 후보 목록 반환 (Playwright).
+
+    6자리 숫자 코드를 가진 일반 주식만 필터링하여 최대 max_results개 반환.
+    """
+    try:
+        return _search_naver_playwright(query, max_results)
+    except Exception:
+        logger.warning("네이버 종목 검색 실패: %s", query, exc_info=True)
     return []
 
 
-def _search_naver(query: str) -> list[StockCandidate]:
-    """네이버 금융 자동완성 API로 후보 목록 반환."""
-    import json
-    import urllib.parse
-    import urllib.request
-
-    encoded = urllib.parse.quote(query)
-    url = (
-        f"https://ac.finance.naver.com/ac"
-        f"?q={encoded}&q_enc=utf-8&t_koreng=1&st=111&r_lt=111"
-    )
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    resp = urllib.request.urlopen(req, timeout=5)
-    data = json.loads(resp.read().decode("utf-8"))
-    logger.debug("네이버 AC 응답: %s", data)
+def _search_naver_playwright(query: str, max_results: int = 3) -> list[StockCandidate]:
+    """Playwright로 네이버 금융 검색창 자동완성 결과를 파싱."""
+    from playwright.sync_api import sync_playwright
 
     candidates: list[StockCandidate] = []
-    items = data.get("items", [])
-    if not items or not items[0]:
-        return candidates
 
-    for entry in items[0]:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
         try:
-            row = entry if isinstance(entry[0], str) else entry[0]
-            stock_name = row[0]
-            stock_code = row[1]
-            if stock_code.isdigit():
-                market_info = row[2] if len(row) > 2 else ""
-                market = "KOSDAQ" if "코스닥" in market_info else "KOSPI"
-                candidates.append(StockCandidate(stock_name, stock_code, market))
-        except (IndexError, TypeError):
-            continue
-    return candidates[:10]
+            page = browser.new_page()
+            page.goto("https://finance.naver.com/", timeout=10000)
 
+            search = page.locator("#stock_items")
+            search.click()
+            search.type(query, delay=30)
 
-def _search_krx(query: str) -> list[StockCandidate]:
-    """KRX 종목 검색 API로 후보 목록 반환."""
-    import json
-    import urllib.request
+            # 자동완성 결과 대기
+            try:
+                page.wait_for_selector("ul._resultBox li", timeout=3000)
+            except Exception:
+                return candidates
 
-    url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-    params = (
-        f"bld=dbms/comm/finder/finder_stkisu&mktsel=ALL&searchText={query}"
-    )
-    req = urllib.request.Request(
-        url,
-        data=params.encode("utf-8"),
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    resp = urllib.request.urlopen(req, timeout=5)
-    data = json.loads(resp.read().decode("utf-8"))
-    logger.debug("KRX 응답: %s", data)
+            items = page.query_selector_all("ul._resultBox li")
+            for item in items:
+                try:
+                    code_el = item.query_selector("._au_code")
+                    name_el = item.query_selector("._au_name")
+                    market_el = item.query_selector("._au_market")
+                    if not code_el or not name_el:
+                        continue
 
-    candidates: list[StockCandidate] = []
-    for item in data.get("block1", []):
-        name = item.get("codeName", "").strip()
-        code = item.get("short_code", "")
-        mkt = item.get("marketName", "")
-        if name and code:
-            market = "KOSDAQ" if "코스닥" in mkt else "KOSPI"
-            candidates.append(StockCandidate(name, code, market))
-    return candidates[:10]
+                    code = code_el.inner_text().strip()
+                    name = name_el.inner_text().strip()
+                    market_text = market_el.inner_text().strip() if market_el else ""
+
+                    # 6자리 숫자 코드 = 일반 주식 (SPAC/ETF 등 제외)
+                    if code.isdigit() and len(code) == 6:
+                        market = "KOSDAQ" if "코스닥" in market_text else "KOSPI"
+                        candidates.append(StockCandidate(name, code, market))
+                        if len(candidates) >= max_results:
+                            break
+                except Exception:
+                    continue
+        finally:
+            browser.close()
+
+    return candidates
 
 
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
