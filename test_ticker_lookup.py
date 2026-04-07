@@ -6,13 +6,18 @@ import logging
 
 logging.basicConfig(level=logging.DEBUG)
 
-from parsers.input_parser import lookup_ticker, _lookup_naver, _lookup_krx
+from parsers.input_parser import lookup_ticker, search_stocks
 
-test_names = ["삼성전자", "카카오", "NAVER", "셀트리온"]
+test_names = ["삼성전자", "카카오", "NAVER", "셀트리온", "삼성"]
 
 for name in test_names:
     print(f"\n{'='*40}")
-    print(f"종목명: {name}")
-    print(f"  네이버: {_lookup_naver(name)!r}")
-    print(f"  KRX:   {_lookup_krx(name)!r}")
-    print(f"  통합:  {lookup_ticker(name)!r}")
+    print(f"검색어: {name}")
+    candidates = search_stocks(name)
+    if candidates:
+        for c in candidates:
+            suffix = ".KQ" if c.market == "KOSDAQ" else ".KS"
+            print(f"  {c.name} ({c.code}{suffix}) [{c.market}]")
+    else:
+        print("  검색 결과 없음")
+    print(f"  lookup_ticker: {lookup_ticker(name)!r}")
