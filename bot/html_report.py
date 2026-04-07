@@ -232,7 +232,7 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
           <th data-key="name" data-type="str">종목<span class="arrow">▲▼</span></th>
           <th data-key="eval" data-type="num">평가금<span class="arrow">▲▼</span></th>
           <th>매수근거</th>
-          <th data-key="pnlpct" data-type="num">수익<span class="arrow">▲▼</span></th>
+          <th data-key="pnl" data-type="num">수익<span class="arrow">▲▼</span></th>
           <th data-key="cur" data-type="num">현재가<span class="arrow">▲▼</span></th>
           <th data-key="avg" data-type="num">평균단가<span class="arrow">▲▼</span></th>
           <th data-key="qty" data-type="num">수량<span class="arrow">▲▼</span></th>
