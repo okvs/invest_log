@@ -95,7 +95,7 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
           <td>{r["name"]}</td>
           <td class="num">{_format_man(r["eval"])}</td>
           <td class="thesis">{r["thesis"]}</td>
-          <td class="num {pnl_class}">{pnl_sign}{format_number(r["pnl"])}원<br><small>{pnl_sign}{r["pnl_pct"]:.1f}%</small></td>
+          <td class="num {pnl_class}">{pnl_sign}{format_number(int(r["pnl"]))}원<br><small>{pnl_sign}{int(r["pnl_pct"])}%</small></td>
           <td class="num">{cur_display}</td>
           <td class="num">{format_number(r["avg"])}원</td>
           <td class="num">{r["qty"]}주</td>
@@ -213,8 +213,8 @@ def build_html_report(holdings: List[dict]) -> io.BytesIO:
     </div>
     <div class="card">
       <div class="label">총 수익</div>
-      <div class="value {pnl_class}">{pnl_sign}{format_number(total_pnl)}원</div>
-      <div class="sub {pnl_class}">{pnl_sign}{total_pnl_pct:.1f}%</div>
+      <div class="value {pnl_class}">{pnl_sign}{format_number(int(total_pnl))}원</div>
+      <div class="sub {pnl_class}">{pnl_sign}{int(total_pnl_pct)}%</div>
     </div>
   </div>
 
