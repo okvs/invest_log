@@ -21,12 +21,14 @@ from bot.keyboards import (
     AVOIDABLE_NO,
     AVOIDABLE_UNKNOWN,
     AVOIDABLE_YES,
+    SELL_SELECT_PREFIX,
     SKIP_RETRO,
     START_RETRO,
     THESIS_CORRECT,
     THESIS_PARTIAL,
     THESIS_WRONG,
     avoidable_keyboard,
+    holdings_select_keyboard,
     retro_ask_keyboard,
     thesis_eval_keyboard,
 )
@@ -46,6 +48,7 @@ from storage.json_store import (
 
 # ConversationHandler states
 (
+    SELECT,
     INPUT,
     RETRO_ASK,
     RETRO_THESIS,
@@ -53,33 +56,65 @@ from storage.json_store import (
     RETRO_REGRETS,
     RETRO_AVOIDABLE,
     RETRO_LESSONS,
-) = range(7)
+) = range(8)
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Step 1-2: /sell 커맨드 → 매도 정보 입력 안내."""
+    """매도 시작 → 보유 종목 카드 표시."""
+    holdings = load_holdings()
+
+    if not holdings:
+        await update.message.reply_text("보유 중인 종목이 없습니다.")
+        return ConversationHandler.END
+
     await update.message.reply_text(
-        "매도 정보를 입력해주세요:\n\n"
-        "종목명\n수량(예: 5주)\n매도가(예: 85000원)\n매도 사유\n\n"
-        "예시:\n삼성전자\n5주\n85000원\n목표가 도달"
+        "매도할 종목을 선택해주세요:",
+        reply_markup=holdings_select_keyboard(holdings),
+    )
+    return SELECT
+
+
+async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """종목 선택 콜백 → 매도 정보 입력 안내."""
+    query = update.callback_query
+    await query.answer()
+
+    name = query.data.removeprefix(SELL_SELECT_PREFIX)
+    context.user_data["sell_name"] = name
+
+    # 선택한 종목의 보유량 표시
+    holdings = load_holdings()
+    qty = 0
+    for h in holdings:
+        if h["name"] == name:
+            qty = h["quantity"]
+            break
+
+    await query.edit_message_text(
+        f"[{name}] {qty}주 보유 중\n\n"
+        "매도 정보를 입력해주세요:\n"
+        "수량(예: 5주)\n매도가(예: 85000원)\n매도 사유\n\n"
+        "예시:\n5주\n85000원\n목표가 도달"
     )
     return INPUT
 
 
 async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매도 정보 파싱 → 보유 종목 확인 → 즉시 저장 → 회고 여부 질문."""
+    """매도 정보 파싱 → 즉시 저장 → 회고 여부 질문."""
     text = update.message.text
+    sell_name = context.user_data.get("sell_name", "")
 
     # 파싱
     try:
-        sell_input = parse_sell_input(text)
+        sell_input = parse_sell_input(text, name=sell_name)
     except ValueError as e:
         await update.message.reply_text(f"입력 오류: {e}")
         return INPUT
 
-    # 닉네임 → 실제 종목명 변환
-    nmap = load_nickname_map()
-    sell_input.name = resolve_name(sell_input.name, nickname_map=nmap)
+    # 이름이 직접 입력된 경우 닉네임 변환
+    if not sell_name:
+        nmap = load_nickname_map()
+        sell_input.name = resolve_name(sell_input.name, nickname_map=nmap)
 
     # 보유 종목 확인 (대소문자 무시)
     holdings = load_holdings()
@@ -115,7 +150,7 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     new_holdings = []
     for h in holdings:
-        if h["name"] == sell_input.name:
+        if h["name"].lower() == sell_input.name.lower():
             if holding.quantity > 0:
                 new_holdings.append(holding.to_dict())
         else:
@@ -314,6 +349,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def _cleanup_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
     """매도/회고 관련 user_data 정리."""
     keys = [
+        "sell_name",
         "sell_input",
         "sell_holding",
         "sell_profit_loss",
@@ -337,6 +373,11 @@ def sell_conversation() -> ConversationHandler:
             MessageHandler(filters.Regex(r"^매도$"), _start_sell),
         ],
         states={
+            SELECT: [
+                CallbackQueryHandler(
+                    _select_holding, pattern=f"^{SELL_SELECT_PREFIX}"
+                ),
+            ],
             INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),
             ],

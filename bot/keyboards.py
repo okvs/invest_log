@@ -62,6 +62,25 @@ def avoidable_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+# --- 매도 종목 선택 ---
+SELL_SELECT_PREFIX = "sell_select:"
+
+
+def holdings_select_keyboard(holdings: list[dict]) -> InlineKeyboardMarkup:
+    """보유 종목을 선택할 수 있는 인라인 키보드 생성."""
+    buttons = []
+    for h in holdings:
+        name = h["name"]
+        qty = h["quantity"]
+        buttons.append([
+            InlineKeyboardButton(
+                f"{name}  |  {qty}주",
+                callback_data=f"{SELL_SELECT_PREFIX}{name}",
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"

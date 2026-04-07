@@ -5,7 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bot.handlers.sell import _receive_sell_input, _start_sell, RETRO_ASK
+from bot.handlers.sell import (
+    _receive_sell_input,
+    _select_holding,
+    _start_sell,
+    RETRO_ASK,
+    SELECT,
+    INPUT,
+)
+from bot.keyboards import SELL_SELECT_PREFIX
 from storage.json_store import (
     load_holdings,
     load_transactions,
@@ -18,6 +26,19 @@ def _make_update_and_context(text: str = ""):
     update.message = MagicMock()
     update.message.text = text
     update.message.reply_text = AsyncMock()
+
+    context = MagicMock()
+    context.user_data = {}
+    return update, context
+
+
+def _make_callback_update(data: str):
+    """콜백 쿼리를 가진 가짜 Update 생성."""
+    update = MagicMock()
+    update.callback_query = MagicMock()
+    update.callback_query.data = data
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
 
     context = MagicMock()
     context.user_data = {}
@@ -42,39 +63,58 @@ def _seed_holding(name="삼성전자", quantity=10, avg_price=72000):
     return h
 
 
-# ── /sell 시작 ──
+# ── /sell 시작 → 종목 선택 카드 ──
 
 
 @pytest.mark.asyncio
-async def test_start_sell_returns_input():
+async def test_start_sell_shows_holdings():
+    _seed_holding()
     update, context = _make_update_and_context()
     result = await _start_sell(update, context)
-    assert result == 0  # INPUT
+    assert result == SELECT  # 종목 선택 상태
+
+    call_kwargs = update.message.reply_text.call_args
+    assert "선택" in call_kwargs[0][0]
+    assert call_kwargs[1]["reply_markup"] is not None
 
 
-# ── 매도 파싱 실패 ──
+@pytest.mark.asyncio
+async def test_start_sell_empty_holdings():
+    save_holdings([])
+    update, context = _make_update_and_context()
+    result = await _start_sell(update, context)
+    assert result == -1  # ConversationHandler.END
+    reply = update.message.reply_text.call_args[0][0]
+    assert "보유 중인 종목이 없습니다" in reply
+
+
+# ── 종목 선택 → INPUT 상태 ──
+
+
+@pytest.mark.asyncio
+async def test_select_holding():
+    _seed_holding(quantity=10)
+    update, context = _make_callback_update(f"{SELL_SELECT_PREFIX}삼성전자")
+    result = await _select_holding(update, context)
+    assert result == INPUT
+    assert context.user_data["sell_name"] == "삼성전자"
+
+    edit_text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "삼성전자" in edit_text
+    assert "10주" in edit_text
+
+
+# ── 매도 파싱 실패 (종목 선택 후 3줄 미만) ──
 
 
 @pytest.mark.asyncio
 async def test_receive_sell_invalid_input():
     update, context = _make_update_and_context("잘못된")
+    context.user_data["sell_name"] = "삼성전자"
     result = await _receive_sell_input(update, context)
-    assert result == 0  # INPUT
+    assert result == INPUT
     reply = update.message.reply_text.call_args[0][0]
     assert "입력 오류" in reply
-
-
-# ── 미보유 종목 매도 시도 ──
-
-
-@pytest.mark.asyncio
-async def test_receive_sell_not_held():
-    text = "카카오\n5주\n85000원\n목표가 도달"
-    update, context = _make_update_and_context(text)
-    result = await _receive_sell_input(update, context)
-    assert result == 0
-    reply = update.message.reply_text.call_args[0][0]
-    assert "보유 종목이 아닙니다" in reply
 
 
 # ── 보유량 초과 매도 ──
@@ -83,22 +123,24 @@ async def test_receive_sell_not_held():
 @pytest.mark.asyncio
 async def test_receive_sell_exceeds_quantity():
     _seed_holding(quantity=5)
-    text = "삼성전자\n10주\n85000원\n목표가 도달"
+    text = "10주\n85000원\n목표가 도달"
     update, context = _make_update_and_context(text)
+    context.user_data["sell_name"] = "삼성전자"
     result = await _receive_sell_input(update, context)
-    assert result == 0
+    assert result == INPUT
     reply = update.message.reply_text.call_args[0][0]
     assert "매도할 수 없습니다" in reply
 
 
-# ── 부분 매도 성공 ──
+# ── 부분 매도 성공 (종목 선택 후 3줄 입력) ──
 
 
 @pytest.mark.asyncio
 async def test_receive_sell_partial():
     _seed_holding(quantity=10, avg_price=72000)
-    text = "삼성전자\n5주\n85000원\n목표가 도달"
+    text = "5주\n85000원\n목표가 도달"
     update, context = _make_update_and_context(text)
+    context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
     assert result == RETRO_ASK
@@ -130,8 +172,9 @@ async def test_receive_sell_partial():
 @pytest.mark.asyncio
 async def test_receive_sell_full_removes_holding():
     _seed_holding(quantity=10, avg_price=72000)
-    text = "삼성전자\n10주\n85000원\n전량 매도"
+    text = "10주\n85000원\n전량 매도"
     update, context = _make_update_and_context(text)
+    context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
     assert result == RETRO_ASK
@@ -146,8 +189,9 @@ async def test_receive_sell_full_removes_holding():
 @pytest.mark.asyncio
 async def test_receive_sell_loss():
     _seed_holding(quantity=10, avg_price=72000)
-    text = "삼성전자\n5주\n60000원\n손절"
+    text = "5주\n60000원\n손절"
     update, context = _make_update_and_context(text)
+    context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
     assert result == RETRO_ASK
