@@ -104,6 +104,27 @@ def stock_search_keyboard(candidates: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+# --- 수정 종목 선택 ---
+EDIT_SELECT_PREFIX = "edit_select:"
+
+
+def edit_select_keyboard(holdings: list[dict]) -> InlineKeyboardMarkup:
+    """수정할 종목을 선택할 수 있는 인라인 키보드 생성."""
+    buttons = []
+    for h in holdings:
+        name = h["name"]
+        qty = h["quantity"]
+        sector = h.get("sector", "")
+        avg = h.get("avg_price", 0)
+        buttons.append([
+            InlineKeyboardButton(
+                f"{name}  |  {sector}  |  {qty}주  |  평균 {avg:,.0f}원",
+                callback_data=f"{EDIT_SELECT_PREFIX}{name}",
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"

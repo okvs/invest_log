@@ -13,6 +13,7 @@ from telegram.ext import (
 
 from bot.handlers.buy import buy_conversation
 from bot.handlers.dashboard import dashboard_handler
+from bot.handlers.edit import edit_conversation
 from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
 from bot.handlers.sell import sell_conversation
@@ -32,6 +33,7 @@ async def start(update: Update, context) -> None:
         "사용 가능한 명령어:\n"
         "매수 - 매수 기록\n"
         "매도 - 매도 기록 + 회고\n"
+        "수정 - 보유 종목 수정\n"
         "현황 - 투자 현황\n"
         "닉네임 - 종목 닉네임 관리\n"
         "도움말 - 사용법"
@@ -62,9 +64,10 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 
-    # ConversationHandler (매수/매도)
+    # ConversationHandler (매수/매도/수정)
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
+    app.add_handler(edit_conversation())
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
