@@ -48,8 +48,9 @@ async def test_receive_input_invalid_returns_input():
 
 
 @pytest.mark.asyncio
-async def test_receive_input_new_buy():
-    text = "삼성전자\n005930\n반도체\n10주\n72000원\nAI 수요 증가 전망"
+@patch("bot.handlers.buy.lookup_ticker", return_value="005930.KS")
+async def test_receive_input_new_buy(mock_lookup):
+    text = "삼성전자\n반도체\n10주\n72000원\nAI 수요 증가 전망"
     update, context = _make_update_and_context(text)
 
     result = await _receive_input(update, context)
@@ -81,14 +82,15 @@ async def test_receive_input_new_buy():
 
 
 @pytest.mark.asyncio
-async def test_receive_input_additional_buy():
+@patch("bot.handlers.buy.lookup_ticker", return_value="005930.KS")
+async def test_receive_input_additional_buy(mock_lookup):
     # 1차 매수
-    text1 = "삼성전자\n005930\n반도체\n10주\n70000원\n1차 매수"
+    text1 = "삼성전자\n반도체\n10주\n70000원\n1차 매수"
     update1, context1 = _make_update_and_context(text1)
     await _receive_input(update1, context1)
 
     # 2차 매수
-    text2 = "삼성전자\n005930\n반도체\n10주\n80000원\n추가 매수"
+    text2 = "삼성전자\n반도체\n10주\n80000원\n추가 매수"
     update2, context2 = _make_update_and_context(text2)
     result = await _receive_input(update2, context2)
     assert result == -1

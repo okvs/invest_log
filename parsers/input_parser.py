@@ -15,8 +15,12 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,40 +50,61 @@ def _parse_number(text: str) -> float:
     return float(cleaned)
 
 
+def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
+    """종목명으로 종목코드(Yahoo Finance 형식)를 조회.
+
+    1. ticker_map 캐시에서 먼저 확인
+    2. 없으면 pykrx로 KRX에서 조회
+    조회 실패 시 빈 문자열 반환.
+    """
+    if ticker_map and name in ticker_map:
+        return ticker_map[name]
+
+    try:
+        from pykrx import stock
+
+        today = datetime.now().strftime("%Y%m%d")
+        for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
+            tickers = stock.get_market_ticker_list(today, market=market)
+            for code in tickers:
+                if stock.get_market_ticker_name(code) == name:
+                    return code + suffix
+    except Exception:
+        logger.warning("pykrx 종목코드 조회 실패: %s", name, exc_info=True)
+
+    return ""
+
+
 def parse_buy_input(text: str) -> BuyInput:
     """여러 줄 매수 입력을 파싱.
 
-    최소 6줄: 종목명, 종목코드, 섹터, 수량, 매수가, 매수근거
-    7줄 이상이면 마지막 줄은 참고자료.
+    최소 5줄: 종목명, 섹터, 수량, 매수가, 매수근거
+    6줄 이상이면 마지막 줄은 참고자료.
+    종목코드는 자동으로 조회됩니다.
     """
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
 
-    if len(lines) < 6:
+    if len(lines) < 5:
         raise ValueError(
             "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
-            "종목명\n종목코드(예: 005930)\n섹터\n수량(예: 10주)\n매수가(예: 72000원)\n매수 근거"
+            "종목명\n섹터\n수량(예: 10주)\n매수가(예: 72000원)\n매수 근거"
         )
 
     name = lines[0]
-    ticker = lines[1].strip()
-    sector = lines[2]
-    quantity = int(_parse_number(lines[3]))
-    price = _parse_number(lines[4])
-    thesis = lines[5]
-    research_notes = "\n".join(lines[6:]) if len(lines) > 6 else ""
+    sector = lines[1]
+    quantity = int(_parse_number(lines[2]))
+    price = _parse_number(lines[3])
+    thesis = lines[4]
+    research_notes = "\n".join(lines[5:]) if len(lines) > 5 else ""
 
     if quantity <= 0:
         raise ValueError("수량은 1 이상이어야 합니다.")
     if price <= 0:
         raise ValueError("매수가는 0보다 커야 합니다.")
 
-    # 종목코드에 .KS/.KQ 접미사 없으면 .KS 추가 (KOSPI 기본)
-    if not ticker.endswith((".KS", ".KQ")):
-        ticker = ticker + ".KS"
-
     return BuyInput(
         name=name,
-        ticker=ticker,
+        ticker="",  # 핸들러에서 자동 조회
         sector=sector,
         quantity=quantity,
         price=price,

@@ -15,7 +15,7 @@ from telegram.ext import (
 from bot.formatters import format_buy_result
 from models.portfolio import Holding
 from models.transaction import Transaction
-from parsers.input_parser import parse_buy_input
+from parsers.input_parser import lookup_ticker, parse_buy_input
 from storage.json_store import (
     load_holdings,
     load_ticker_map,
@@ -34,7 +34,6 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "매수 정보를 입력해주세요:\n\n"
         "종목명\n"
-        "종목코드 (예: 005930)\n"
         "섹터\n"
         "수량 (예: 10주)\n"
         "매수가 (예: 72000원)\n"
@@ -42,7 +41,6 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "참고 자료 (선택)\n\n"
         "예시:\n"
         "삼성전자\n"
-        "005930\n"
         "반도체\n"
         "10주\n"
         "72000원\n"
@@ -60,6 +58,10 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError as e:
         await update.message.reply_text(f"입력 오류: {e}\n\n다시 입력해주세요.")
         return INPUT
+
+    # 종목코드 자동 조회
+    tmap = load_ticker_map()
+    buy_input.ticker = lookup_ticker(buy_input.name, ticker_map=tmap)
 
     # Transaction 생성
     tx = Transaction(
