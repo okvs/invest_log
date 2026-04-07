@@ -11,7 +11,13 @@
       "Bash(ls -la /c/Workspace/invest_log/*.toml)",
       "Bash(pip show:*)",
       "Bash(pip install:*)",
-      "Bash(python -m pytest tests/ -v)"
+      "Bash(python -m pytest tests/ -v)",
+      "WebFetch(domain:ac.finance.naver.com)",
+      "WebFetch(domain:finance.naver.com)",
+      "WebFetch(domain:www.alphasquare.co.kr)",
+      "WebFetch(domain:m.stock.naver.com)",
+      "WebFetch(domain:kr.investing.com)",
+      "WebFetch(domain:data.krx.co.kr)"
     ]
   }
 }

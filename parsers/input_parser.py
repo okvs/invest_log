@@ -73,11 +73,84 @@ def _find_key_casefold(d: dict[str, str], key: str) -> str | None:
     return None
 
 
+def _lookup_naver(name: str) -> str:
+    """네이버 금융 자동완성 API로 종목코드 조회."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    query = urllib.parse.quote(name)
+    url = (
+        f"https://ac.finance.naver.com/ac"
+        f"?q={query}&q_enc=utf-8&t_koreng=1&st=111&r_lt=111"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    resp = urllib.request.urlopen(req, timeout=5)
+    data = json.loads(resp.read().decode("utf-8"))
+    logger.debug("네이버 AC 응답: %s", data)
+
+    # items 구조: [[그룹1], [그룹2], ...] — 첫 그룹이 주식
+    items = data.get("items", [])
+    if not items or not items[0]:
+        return ""
+
+    for entry in items[0]:
+        # entry 내부 구조가 다를 수 있으므로 방어적으로 파싱
+        try:
+            row = entry if isinstance(entry[0], str) else entry[0]
+            stock_name = row[0]
+            stock_code = row[1]
+            if stock_name == name and stock_code.isdigit():
+                market_info = row[2] if len(row) > 2 else ""
+                if "코스닥" in market_info:
+                    return stock_code + ".KQ"
+                return stock_code + ".KS"
+        except (IndexError, TypeError):
+            continue
+    return ""
+
+
+def _lookup_krx(name: str) -> str:
+    """KRX 종목 검색 API로 종목코드 조회."""
+    import json
+    import urllib.request
+
+    url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
+    params = (
+        f"bld=dbms/comm/finder/finder_stkisu&mktsel=ALL&searchText={name}"
+    )
+    req = urllib.request.Request(
+        url,
+        data=params.encode("utf-8"),
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    resp = urllib.request.urlopen(req, timeout=5)
+    data = json.loads(resp.read().decode("utf-8"))
+    logger.debug("KRX 응답: %s", data)
+
+    for item in data.get("block1", []):
+        if item.get("codeName", "").strip() == name:
+            full_code = item.get("full_code", "")
+            short_code = item.get("short_code", "")
+            code = short_code or full_code
+            if not code:
+                continue
+            mkt = item.get("marketName", "")
+            if "코스닥" in mkt:
+                return code + ".KQ"
+            return code + ".KS"
+    return ""
+
+
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     """종목명으로 종목코드(Yahoo Finance 형식)를 조회.
 
     1. ticker_map 캐시에서 먼저 확인
-    2. 없으면 pykrx로 KRX에서 조회
+    2. 네이버 금융 자동완성 API
+    3. KRX 종목 검색 API
     조회 실패 시 빈 문자열 반환.
     """
     if ticker_map:
@@ -85,17 +158,18 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
         if found:
             return found
 
-    try:
-        from pykrx import stock
-
-        today = datetime.now().strftime("%Y%m%d")
-        for market, suffix in [("KOSPI", ".KS"), ("KOSDAQ", ".KQ")]:
-            tickers = stock.get_market_ticker_list(today, market=market)
-            for code in tickers:
-                if stock.get_market_ticker_name(code) == name:
-                    return code + suffix
-    except Exception:
-        logger.warning("pykrx 종목코드 조회 실패: %s", name, exc_info=True)
+    for method in [_lookup_naver, _lookup_krx]:
+        try:
+            result = method(name)
+            if result:
+                return result
+        except Exception:
+            logger.warning(
+                "%s 종목코드 조회 실패: %s",
+                method.__name__,
+                name,
+                exc_info=True,
+            )
 
     return ""
 
