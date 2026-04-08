@@ -28,7 +28,16 @@
       "Bash(python.exe -c ':*)",
       "Bash(python.exe -c \"print\\('hello world'\\)\")",
       "Bash(/c/Users/jung5/AppData/Local/Programs/Python/Python39/python.exe -m pytest tests/test_sell_handler.py -v --tb=short)",
-      "Bash(/c/Users/jung5/AppData/Local/Programs/Python/Python39/python.exe -m pytest tests/ -v --tb=short)"
+      "Bash(/c/Users/jung5/AppData/Local/Programs/Python/Python39/python.exe -m pytest tests/ -v --tb=short)",
+      "Bash(ls /Users/seung/.openclaw/workspace/invest_log/*.py /Users/seung/.openclaw/workspace/invest_log/**/*.py)",
+      "Bash(python3.12 --version)",
+      "Bash(brew install:*)",
+      "Bash(.venv/bin/python3.12 -m py_compile bot/formatters.py)",
+      "Bash(.venv/bin/python3.12 -m py_compile bot/html_report.py)",
+      "Bash(.venv/bin/python3.12 -m py_compile models/portfolio.py)",
+      "Bash(git reset:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

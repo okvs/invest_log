@@ -57,6 +57,9 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
             "date": h.get("buy_date", ""),
         })
 
+    # 평가금 내림차순 기본 정렬
+    rows.sort(key=lambda r: r["eval"], reverse=True)
+
     total_invested = sum(r["invested"] for r in rows)
     total_eval = sum(r["eval"] for r in rows)
     total_pnl = total_eval - total_invested
@@ -114,7 +117,7 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
           <div class="sector-bar-wrap">
             <div class="sector-bar" style="width:{bar_width}%;background:{color}"></div>
           </div>
-          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(val)}원</span></div>
+          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(int(val))}원</span></div>
         </div>"""
 
     # 스택바 (섹터 비중 한 줄)
@@ -204,11 +207,11 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
   <div class="cards">
     <div class="card">
       <div class="label">총 투자금</div>
-      <div class="value">{format_number(total_invested)}원</div>
+      <div class="value">{format_number(int(total_invested))}원</div>
     </div>
     <div class="card">
       <div class="label">총 평가금</div>
-      <div class="value">{format_number(total_eval)}원</div>
+      <div class="value">{format_number(int(total_eval))}원</div>
     </div>
     <div class="card">
       <div class="label">총 수익</div>
