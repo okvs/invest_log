@@ -5,12 +5,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.handlers.buy import _receive_input, _start
+from bot.handlers.buy import (
+    THESIS_CONFIRM,
+    THESIS_INPUT,
+    _receive_input,
+    _start,
+    _thesis_confirm,
+    _thesis_input,
+)
 from parsers.input_parser import StockCandidate
 from storage.json_store import (
     load_holdings,
     load_ticker_map,
     load_transactions,
+    save_holdings,
     save_nickname_map,
     save_ticker_map,
 )
@@ -26,6 +34,17 @@ def _make_update_and_context(text: str = ""):
     context = MagicMock()
     context.user_data = {}
     return update, context
+
+
+def _make_callback_update(data: str):
+    """가짜 콜백 Update 생성."""
+    update = MagicMock()
+    update.callback_query = MagicMock()
+    update.callback_query.data = data
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
+    update.message = None
+    return update
 
 
 # ── /buy 시작 ──
@@ -51,7 +70,7 @@ async def test_receive_input_invalid_returns_input():
     assert "입력 오류" in reply
 
 
-# ── 신규 매수 성공 (ticker_map 캐시 히트) ──
+# ── 신규 매수 성공 (ticker_map 캐시 히트) → THESIS_INPUT 상태 ──
 
 
 @pytest.mark.asyncio
@@ -59,10 +78,18 @@ async def test_receive_input_new_buy():
     # ticker_map에 미리 등록
     save_ticker_map({"삼성전자": "005930.KS"})
 
-    text = "삼성전자\n반도체\n10주\n72000원\nAI 수요 증가 전망"
+    text = "삼성전자\n반도체\n10주\n72000원"
     update, context = _make_update_and_context(text)
 
     result = await _receive_input(update, context)
+    assert result == THESIS_INPUT  # 신규 종목 → 근거 입력 요청
+
+    # buy_input이 context에 저장됨
+    assert "buy_input" in context.user_data
+
+    # thesis 입력
+    thesis_update, _ = _make_update_and_context("AI 수요 증가 전망")
+    result = await _thesis_input(thesis_update, context)
     assert result == -1  # ConversationHandler.END
 
     # holdings 저장 확인
@@ -72,6 +99,7 @@ async def test_receive_input_new_buy():
     assert holdings[0]["quantity"] == 10
     assert holdings[0]["avg_price"] == 72000
     assert holdings[0]["ticker"] == "005930.KS"
+    assert holdings[0]["buy_thesis"] == "AI 수요 증가 전망"
 
     # transaction 저장 확인
     txs = load_transactions()
@@ -80,7 +108,7 @@ async def test_receive_input_new_buy():
     assert txs[0]["name"] == "삼성전자"
 
     # 응답 메시지 확인
-    reply = update.message.reply_text.call_args[0][0]
+    reply = thesis_update.message.reply_text.call_args[0][0]
     assert "매수 기록 완료" in reply
     assert "005930.KS" in reply
 
@@ -94,11 +122,16 @@ async def test_receive_input_new_buy():
     return_value=[StockCandidate("삼성전자", "005930", "KOSPI")],
 )
 async def test_receive_input_search_exact_match(mock_search):
-    text = "삼성전자\n반도체\n10주\n72000원\nAI 수요 증가 전망"
+    text = "삼성전자\n반도체\n10주\n72000원"
     update, context = _make_update_and_context(text)
 
     result = await _receive_input(update, context)
-    assert result == -1  # ConversationHandler.END
+    assert result == THESIS_INPUT  # 신규 → 근거 입력
+
+    # thesis 입력
+    thesis_update, _ = _make_update_and_context("AI 수요 증가 전망")
+    result = await _thesis_input(thesis_update, context)
+    assert result == -1
 
     holdings = load_holdings()
     assert len(holdings) == 1
@@ -121,7 +154,7 @@ async def test_receive_input_search_exact_match(mock_search):
     ],
 )
 async def test_receive_input_multiple_candidates(mock_search):
-    text = "삼성\n반도체\n10주\n72000원\n검색 테스트"
+    text = "삼성\n반도체\n10주\n72000원"
     update, context = _make_update_and_context(text)
 
     result = await _receive_input(update, context)
@@ -134,29 +167,40 @@ async def test_receive_input_multiple_candidates(mock_search):
     assert reply_call.kwargs.get("reply_markup") is not None
 
 
-# ── 추가 매수 — 평균단가 재계산 ──
+# ── 추가 매수 — 기존 사유 유지 ──
 
 
 @pytest.mark.asyncio
-async def test_receive_input_additional_buy():
+async def test_receive_input_additional_buy_keep_thesis():
     save_ticker_map({"삼성전자": "005930.KS"})
 
     # 1차 매수
-    text1 = "삼성전자\n반도체\n10주\n70000원\n1차 매수"
+    text1 = "삼성전자\n반도체\n10주\n70000원"
     update1, context1 = _make_update_and_context(text1)
-    await _receive_input(update1, context1)
+    result = await _receive_input(update1, context1)
+    assert result == THESIS_INPUT
 
-    # 2차 매수
-    text2 = "삼성전자\n반도체\n10주\n80000원\n추가 매수"
+    thesis_update1, _ = _make_update_and_context("1차 매수")
+    await _thesis_input(thesis_update1, context1)
+
+    # 2차 매수 → 기존 사유 확인
+    text2 = "삼성전자\n반도체\n10주\n80000원"
     update2, context2 = _make_update_and_context(text2)
     result = await _receive_input(update2, context2)
+    assert result == THESIS_CONFIRM  # 기존 사유 유지/수정 선택
+
+    # "그대로 유지" 선택
+    cb_update = _make_callback_update("keep_thesis")
+    cb_update.callback_query.data = "keep_thesis"
+    context2.user_data = context2.user_data  # buy_input 유지
+    result = await _thesis_confirm(cb_update, context2)
     assert result == -1
 
     holdings = load_holdings()
     assert len(holdings) == 1
     assert holdings[0]["quantity"] == 20
-    # 평균단가: (700000 + 800000) / 20 = 75000
     assert holdings[0]["avg_price"] == 75000
+    assert holdings[0]["buy_thesis"] == "1차 매수"
 
     txs = load_transactions()
     assert len(txs) == 2
@@ -170,10 +214,14 @@ async def test_receive_input_with_nickname():
     save_nickname_map({"삼전": "삼성전자"})
     save_ticker_map({"삼성전자": "005930.KS"})
 
-    text = "삼전\n반도체\n5주\n72000원\n닉네임 테스트"
+    text = "삼전\n반도체\n5주\n72000원"
     update, context = _make_update_and_context(text)
 
     result = await _receive_input(update, context)
+    assert result == THESIS_INPUT
+
+    thesis_update, _ = _make_update_and_context("닉네임 테스트")
+    result = await _thesis_input(thesis_update, context)
     assert result == -1
 
     holdings = load_holdings()
@@ -189,14 +237,23 @@ async def test_receive_input_case_insensitive():
     save_ticker_map({"NVIDIA": "NVDA"})
 
     # 1차 매수 — 대문자
-    text1 = "NVIDIA\nAI\n5주\n800원\n1차"
+    text1 = "NVIDIA\nAI\n5주\n800원"
     update1, context1 = _make_update_and_context(text1)
-    await _receive_input(update1, context1)
+    result = await _receive_input(update1, context1)
+    assert result == THESIS_INPUT
+
+    thesis1, _ = _make_update_and_context("1차")
+    await _thesis_input(thesis1, context1)
 
     # 2차 매수 — 소문자 (같은 종목으로 인식되어야 함)
-    text2 = "nvidia\nAI\n5주\n900원\n2차"
+    text2 = "nvidia\nAI\n5주\n900원"
     update2, context2 = _make_update_and_context(text2)
     result = await _receive_input(update2, context2)
+    assert result == THESIS_CONFIRM  # 기존 종목이므로 사유 확인
+
+    # 유지 선택
+    cb_update = _make_callback_update("keep_thesis")
+    result = await _thesis_confirm(cb_update, context2)
     assert result == -1
 
     holdings = load_holdings()

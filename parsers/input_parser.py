@@ -267,24 +267,21 @@ def parse_broker_message(text: str) -> BrokerMessage:
 def parse_buy_input(text: str) -> BuyInput:
     """여러 줄 매수 입력을 파싱.
 
-    최소 5줄: 종목명, 섹터, 수량, 매수가, 매수근거
-    6줄 이상이면 마지막 줄은 참고자료.
-    종목코드는 자동으로 조회됩니다.
+    4줄: 종목명, 섹터, 수량, 매수가
+    매수 근거는 별도 단계에서 입력받습니다.
     """
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
 
     if len(lines) < 4:
         raise ValueError(
             "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
-            "종목명\n섹터\n수량(예: 10주)\n매수가(예: 72000원)\n매수 근거(선택)"
+            "종목명\n섹터\n수량(예: 10주)\n매수가(예: 72000원)"
         )
 
     name = lines[0]
     sector = lines[1]
     quantity = int(_parse_number(lines[2]))
     price = _parse_number(lines[3])
-    thesis = lines[4] if len(lines) > 4 else ""
-    research_notes = "\n".join(lines[5:]) if len(lines) > 5 else ""
 
     if quantity <= 0:
         raise ValueError("수량은 1 이상이어야 합니다.")
@@ -297,8 +294,8 @@ def parse_buy_input(text: str) -> BuyInput:
         sector=sector,
         quantity=quantity,
         price=price,
-        thesis=thesis,
-        research_notes=research_notes,
+        thesis="",
+        research_notes="",
     )
 
 

@@ -57,9 +57,8 @@ THESIS_INPUT = 3
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매수 대화 시작 — 입력 안내 메시지."""
     await update.message.reply_text(
-        "종목명 / 섹터 / 수량 / 매수가 / 근거(선택)\n"
-        "를 줄바꿈으로 입력해주세요.\n"
-        "(기존 보유 종목은 근거 생략 시 기존 사유를 불러옵니다)"
+        "종목명 / 섹터 / 수량 / 매수가\n"
+        "를 줄바꿈으로 입력해주세요."
     )
     return INPUT
 
