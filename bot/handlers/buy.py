@@ -20,7 +20,13 @@ from telegram.ext import (
 )
 
 from bot.formatters import format_buy_result
-from bot.keyboards import BUY_STOCK_PREFIX, stock_search_keyboard
+from bot.keyboards import (
+    BUY_STOCK_PREFIX,
+    EDIT_THESIS,
+    KEEP_THESIS,
+    stock_search_keyboard,
+    thesis_reuse_keyboard,
+)
 from models.portfolio import Holding
 from models.transaction import Transaction
 from parsers.input_parser import (
@@ -44,13 +50,16 @@ logger = logging.getLogger(__name__)
 # ConversationHandler 상태
 INPUT = 0
 PICK_STOCK = 1
+THESIS_CONFIRM = 2
+THESIS_INPUT = 3
 
 
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매수 대화 시작 — 입력 안내 메시지."""
     await update.message.reply_text(
-        "종목명 / 섹터 / 수량 / 매수가 / 근거\n"
-        "를 줄바꿈으로 입력해주세요."
+        "종목명 / 섹터 / 수량 / 매수가 / 근거(선택)\n"
+        "를 줄바꿈으로 입력해주세요.\n"
+        "(기존 보유 종목은 근거 생략 시 기존 사유를 불러옵니다)"
     )
     return INPUT
 
@@ -148,22 +157,100 @@ async def _pick_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return await _save_buy_from_callback(query, context, buy_input)
 
 
+def _find_existing_thesis(name: str) -> str | None:
+    """기존 보유 종목의 매수 사유를 찾아 반환. 없으면 None."""
+    holdings_data = load_holdings()
+    for h_dict in holdings_data:
+        if h_dict["name"].lower() == name.lower():
+            thesis = h_dict.get("buy_thesis", "")
+            return thesis if thesis else None
+    return None
+
+
+async def _check_thesis_or_save(update, context, buy_input, *, is_callback=False) -> int:
+    """thesis가 비어있고 기존 종목에 사유가 있으면 수정 여부를 묻고, 아니면 바로 저장."""
+    if not buy_input.thesis:
+        existing_thesis = _find_existing_thesis(buy_input.name)
+        if existing_thesis:
+            context.user_data["buy_input"] = buy_input
+            msg = (
+                f"기존 매수 사유가 있습니다:\n\n"
+                f"📌 {existing_thesis}\n\n"
+                f"수정하시겠습니까?"
+            )
+            if is_callback:
+                await update.edit_message_text(msg, reply_markup=thesis_reuse_keyboard())
+            else:
+                await update.message.reply_text(msg, reply_markup=thesis_reuse_keyboard())
+            return THESIS_CONFIRM
+        else:
+            # 기존 종목 없고 thesis도 없으면 입력 요청
+            context.user_data["buy_input"] = buy_input
+            if is_callback:
+                await update.edit_message_text("매수 근거를 입력해주세요.")
+            else:
+                await update.message.reply_text("매수 근거를 입력해주세요.")
+            return THESIS_INPUT
+
+    # thesis가 있으면 바로 저장
+    return await _do_save(update, context, buy_input, is_callback=is_callback)
+
+
+async def _thesis_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """기존 사유 유지/수정 선택 처리."""
+    query = update.callback_query
+    await query.answer()
+
+    buy_input = context.user_data.get("buy_input")
+    if buy_input is None:
+        await query.edit_message_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    if query.data == KEEP_THESIS:
+        existing_thesis = _find_existing_thesis(buy_input.name)
+        buy_input.thesis = existing_thesis or ""
+        context.user_data.pop("buy_input", None)
+        return await _do_save(update, context, buy_input, is_callback=True)
+    else:
+        # EDIT_THESIS
+        await query.edit_message_text("새로운 매수 근거를 입력해주세요.")
+        return THESIS_INPUT
+
+
+async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """새 매수 사유 입력 처리."""
+    buy_input = context.user_data.pop("buy_input", None)
+    if buy_input is None:
+        await update.message.reply_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    buy_input.thesis = update.message.text.strip()
+    return await _do_save(update, context, buy_input, is_callback=False)
+
+
+async def _do_save(update, context, buy_input, *, is_callback=False) -> int:
+    """매수 정보를 저장하고 결과 메시지 전송."""
+    result_text = _process_and_save(buy_input)
+    if is_callback:
+        query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
+        await query.edit_message_text(result_text)
+    else:
+        await update.message.reply_text(result_text)
+    return ConversationHandler.END
+
+
 async def _save_buy(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     buy_input,
 ) -> int:
     """매수 정보를 저장하고 결과 메시지 전송 (일반 메시지용)."""
-    result_text = _process_and_save(buy_input)
-    await update.message.reply_text(result_text)
-    return ConversationHandler.END
+    return await _check_thesis_or_save(update, context, buy_input, is_callback=False)
 
 
 async def _save_buy_from_callback(query, context, buy_input) -> int:
     """매수 정보를 저장하고 결과 메시지 전송 (콜백 쿼리용)."""
-    result_text = _process_and_save(buy_input)
-    await query.edit_message_text(result_text)
-    return ConversationHandler.END
+    return await _check_thesis_or_save(query, context, buy_input, is_callback=True)
 
 
 def _process_and_save(buy_input) -> str:
@@ -195,6 +282,9 @@ def _process_and_save(buy_input) -> str:
         # 기존 보유 종목에 ticker가 없었으면 업데이트
         if buy_input.ticker and not existing.ticker:
             existing.ticker = buy_input.ticker
+        # 매수 사유 업데이트
+        if buy_input.thesis:
+            existing.buy_thesis = buy_input.thesis
         holdings_data[existing_idx] = existing.to_dict()
     else:
         holding = Holding(
@@ -246,6 +336,15 @@ def buy_conversation() -> ConversationHandler:
             INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input)],
             PICK_STOCK: [
                 CallbackQueryHandler(_pick_stock, pattern=f"^{BUY_STOCK_PREFIX}"),
+            ],
+            THESIS_CONFIRM: [
+                CallbackQueryHandler(
+                    _thesis_confirm,
+                    pattern=f"^({KEEP_THESIS}|{EDIT_THESIS})$",
+                ),
+            ],
+            THESIS_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
             ],
         },
         fallbacks=[CommandHandler("cancel", _cancel_fallback)],

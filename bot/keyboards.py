@@ -62,6 +62,20 @@ def avoidable_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+# --- 매수 사유 유지/수정 ---
+KEEP_THESIS = "keep_thesis"
+EDIT_THESIS = "edit_thesis"
+
+
+def thesis_reuse_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("그대로 유지", callback_data=KEEP_THESIS),
+            InlineKeyboardButton("수정", callback_data=EDIT_THESIS),
+        ]
+    ])
+
+
 # --- 매도 종목 선택 ---
 SELL_SELECT_PREFIX = "sell_select:"
 
