@@ -249,18 +249,18 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{
-  th.addEventlistener('click', () => {{
+  th.addEventListener('click', () => {{
     const key = th.dataset.key;
     const type = th.dataset.type;
     const tbody = th.closest('table').querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
-    const asc = th.classlist.toggle('asc');
+    const asc = th.classList.toggle('asc');
 
     // 다른 헤더 초기화
     th.closest('tr').querySelectorAll('th').forEach(h => {{
-      if (h !== th) {{ h.classlist.remove('sorted','asc'); }}
+      if (h !== th) {{ h.classList.remove('sorted','asc'); }}
     }});
-    th.classlist.add('sorted');
+    th.classList.add('sorted');
 
     rows.sort((a, b) => {{
       let va = a.dataset[key];
