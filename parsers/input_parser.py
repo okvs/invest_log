@@ -190,6 +190,37 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     return ""
 
 
+@dataclass
+class KbSellResult:
+    name: str
+    quantity: int
+    price: float  # 주당 가격
+
+
+def parse_kb_message(text: str) -> KbSellResult:
+    """KB증권 체결 알림 메시지에서 매도 정보를 추출.
+
+    체결금액은 총액이므로 주당 가격 = 체결금액 / 수량으로 계산.
+    """
+    name_match = re.search(r"■\s*종목명:\s*(.+)", text)
+    qty_match = re.search(r"■\s*주문수량:\s*(.+)", text)
+    amount_match = re.search(r"■\s*체결금액:\s*(.+)", text)
+    type_match = re.search(r"■\s*내용:\s*(.+)", text)
+
+    if not all([name_match, qty_match, amount_match, type_match]):
+        raise ValueError("KB증권 메시지 형식을 인식할 수 없습니다.")
+
+    if "매도" not in type_match.group(1):
+        raise ValueError("매도 체결 메시지가 아닙니다.")
+
+    name = name_match.group(1).strip()
+    quantity = int(_parse_number(qty_match.group(1)))
+    total_amount = _parse_number(amount_match.group(1))
+    price = total_amount / quantity
+
+    return KbSellResult(name=name, quantity=quantity, price=price)
+
+
 def parse_buy_input(text: str) -> BuyInput:
     """여러 줄 매수 입력을 파싱.
 

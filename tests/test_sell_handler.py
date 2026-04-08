@@ -6,11 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bot.handlers.sell import (
+    _receive_kb_sell,
     _receive_sell_input,
+    _receive_sell_reason,
     _select_holding,
     _start_sell,
     RETRO_ASK,
     SELECT,
+    SELL_REASON,
     INPUT,
 )
 from bot.keyboards import SELL_SELECT_PREFIX
@@ -199,3 +202,62 @@ async def test_receive_sell_loss():
     txs = load_transactions()
     assert txs[0]["profit_loss"] == (60000 - 72000) * 5  # -60000
     assert txs[0]["profit_loss_pct"] < 0
+
+
+# ── KB증권 체결 메시지 매도 ──
+
+KB_MSG = (
+    "[KB증권] 주식 체결 안내\n\n"
+    "고객님, 주문하신 삼성전자 주식이 체결됐으니 확인해주세요.\n\n"
+    "■ 계좌: ***-***-*12 [01] \n"
+    "■ 종목명: 삼성전자 \n"
+    "■ 주문수량: 5주 \n"
+    "■ 체결금액: 425,000원 \n"
+    "■ 내용: 매도체결(20147154)"
+)
+
+
+@pytest.mark.asyncio
+async def test_kb_sell_parses_and_asks_reason():
+    _seed_holding(quantity=10, avg_price=72000)
+    update, context = _make_update_and_context(KB_MSG)
+
+    result = await _receive_kb_sell(update, context)
+    assert result == SELL_REASON
+
+    # 파싱 결과가 user_data에 저장됨
+    assert context.user_data["kb_sell_name"] == "삼성전자"
+    assert context.user_data["kb_sell_quantity"] == 5
+    assert context.user_data["kb_sell_price"] == 85000.0  # 425000 / 5
+
+    # 매도사유 입력 요청
+    reply = update.message.reply_text.call_args[0][0]
+    assert "매도사유" in reply
+
+
+@pytest.mark.asyncio
+async def test_kb_sell_reason_completes_sell():
+    _seed_holding(quantity=10, avg_price=72000)
+
+    # Step 1: KB 메시지
+    update1, context = _make_update_and_context(KB_MSG)
+    await _receive_kb_sell(update1, context)
+
+    # Step 2: 매도사유 입력
+    update2, _ = _make_update_and_context("목표가 도달")
+    # context 유지
+    result = await _receive_sell_reason(update2, context)
+    assert result == RETRO_ASK
+
+    # 보유량 5주로 감소
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["quantity"] == 5
+
+    # transaction 확인
+    txs = load_transactions()
+    assert len(txs) == 1
+    assert txs[0]["type"] == "sell"
+    assert txs[0]["name"] == "삼성전자"
+    assert txs[0]["sell_reason"] == "목표가 도달"
+    assert txs[0]["profit_loss"] == (85000 - 72000) * 5

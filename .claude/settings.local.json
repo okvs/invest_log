@@ -19,7 +19,16 @@
       "WebFetch(domain:kr.investing.com)",
       "WebFetch(domain:data.krx.co.kr)",
       "Bash(where python:*)",
-      "Bash(코드)"
+      "Bash(코드)",
+      "Bash(echo \"RC=$?\")",
+      "Bash(python.exe -m pytest tests/test_sell_handler.py -v --tb=short)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(python.exe -m pytest tests/test_sell_handler.py --tb=short)",
+      "Read(//tmp/**)",
+      "Bash(python.exe -c ':*)",
+      "Bash(python.exe -c \"print\\('hello world'\\)\")",
+      "Bash(/c/Users/jung5/AppData/Local/Programs/Python/Python39/python.exe -m pytest tests/test_sell_handler.py -v --tb=short)",
+      "Bash(/c/Users/jung5/AppData/Local/Programs/Python/Python39/python.exe -m pytest tests/ -v --tb=short)"
     ]
   }
 }

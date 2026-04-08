@@ -35,7 +35,7 @@ from bot.keyboards import (
 from models.portfolio import Holding
 from models.retrospective import Retrospective
 from models.transaction import Transaction
-from parsers.input_parser import parse_sell_input, resolve_name
+from parsers.input_parser import parse_kb_message, parse_sell_input, resolve_name
 from storage.json_store import (
     load_holdings,
     load_nickname_map,
@@ -50,13 +50,14 @@ from storage.json_store import (
 (
     SELECT,
     INPUT,
+    SELL_REASON,
     RETRO_ASK,
     RETRO_THESIS,
     RETRO_WELL,
     RETRO_REGRETS,
     RETRO_AVOIDABLE,
     RETRO_LESSONS,
-) = range(8)
+) = range(9)
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -98,6 +99,133 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return INPUT
 
 
+async def _process_sell(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    name: str,
+    quantity: int,
+    price: float,
+    sell_reason: str,
+    error_state: int = INPUT,
+) -> int:
+    """매도 공통 처리: 보유 확인 → 저장 → 회고 질문. 실패 시 error_state 반환."""
+    # 보유 종목 확인 (대소문자 무시)
+    holdings = load_holdings()
+    holding_dict = None
+    for h in holdings:
+        if h["name"].lower() == name.lower():
+            holding_dict = h
+            break
+
+    if holding_dict is None:
+        await update.message.reply_text(
+            f"'{name}'은(는) 보유 종목이 아닙니다. 종목명을 확인해주세요."
+        )
+        return error_state
+
+    if quantity > holding_dict["quantity"]:
+        await update.message.reply_text(
+            f"'{name}' 보유량은 {holding_dict['quantity']}주입니다. "
+            f"{quantity}주를 매도할 수 없습니다."
+        )
+        return error_state
+
+    context.user_data["sell_holding"] = holding_dict
+
+    avg_price = holding_dict["avg_price"]
+    total = price * quantity
+    profit_loss = (price - avg_price) * quantity
+    profit_loss_pct = profit_loss / (avg_price * quantity) * 100
+
+    # Holding 업데이트
+    holding = Holding.from_dict(holding_dict)
+    holding.remove_sell(quantity)
+
+    new_holdings = []
+    for h in holdings:
+        if h["name"].lower() == name.lower():
+            if holding.quantity > 0:
+                new_holdings.append(holding.to_dict())
+        else:
+            new_holdings.append(h)
+    save_holdings(new_holdings)
+
+    # Transaction 생성 및 저장
+    tx = Transaction(
+        type="sell",
+        name=name,
+        sector=holding_dict.get("sector", ""),
+        price=price,
+        quantity=quantity,
+        total_amount=total,
+        profit_loss=profit_loss,
+        profit_loss_pct=round(profit_loss_pct, 2),
+        sell_reason=sell_reason,
+        holding_id=holding_dict.get("id", ""),
+    )
+    transactions = load_transactions()
+    transactions.append(tx.to_dict())
+    save_transactions(transactions)
+
+    context.user_data["sell_transaction"] = tx
+
+    # 매도 결과 응답
+    result_text = format_sell_result(
+        name=name,
+        quantity=quantity,
+        price=price,
+        total=total,
+        profit_loss=profit_loss,
+        profit_loss_pct=profit_loss_pct,
+    )
+    await update.message.reply_text(result_text)
+
+    # 회고 여부 질문
+    await update.message.reply_text(
+        "이 매도에 대해 회고를 진행할까요?",
+        reply_markup=retro_ask_keyboard(),
+    )
+    return RETRO_ASK
+
+
+async def _receive_kb_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """KB증권 체결 알림 메시지로 매도 시작 → 매도사유만 추가 입력."""
+    text = update.message.text
+
+    try:
+        kb = parse_kb_message(text)
+    except ValueError as e:
+        await update.message.reply_text(f"메시지 인식 실패: {e}")
+        return ConversationHandler.END
+
+    # 닉네임 변환
+    nmap = load_nickname_map()
+    name = resolve_name(kb.name, nickname_map=nmap)
+
+    context.user_data["kb_sell_name"] = name
+    context.user_data["kb_sell_quantity"] = kb.quantity
+    context.user_data["kb_sell_price"] = kb.price
+
+    await update.message.reply_text(
+        f"{name} {kb.quantity}주 {int(kb.price):,}원 체결 확인.\n\n"
+        "매도사유를 입력해주세요."
+    )
+    return SELL_REASON
+
+
+async def _receive_sell_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """KB증권 매도 → 사유 입력 후 매도 처리."""
+    sell_reason = update.message.text.strip()
+    name = context.user_data.pop("kb_sell_name")
+    quantity = context.user_data.pop("kb_sell_quantity")
+    price = context.user_data.pop("kb_sell_price")
+
+    return await _process_sell(
+        update, context, name, quantity, price, sell_reason,
+        error_state=ConversationHandler.END,
+    )
+
+
 async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매도 정보 파싱 → 즉시 저장 → 회고 여부 질문."""
     text = update.message.text
@@ -115,83 +243,10 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         nmap = load_nickname_map()
         sell_input.name = resolve_name(sell_input.name, nickname_map=nmap)
 
-    # 보유 종목 확인 (대소문자 무시)
-    holdings = load_holdings()
-    holding_dict = None
-    for h in holdings:
-        if h["name"].lower() == sell_input.name.lower():
-            holding_dict = h
-            break
-
-    if holding_dict is None:
-        await update.message.reply_text(
-            f"'{sell_input.name}'은(는) 보유 종목이 아닙니다. 종목명을 확인해주세요."
-        )
-        return INPUT
-
-    if sell_input.quantity > holding_dict["quantity"]:
-        await update.message.reply_text(
-            f"'{sell_input.name}' 보유량은 {holding_dict['quantity']}주입니다. "
-            f"{sell_input.quantity}주를 매도할 수 없습니다."
-        )
-        return INPUT
-
-    context.user_data["sell_holding"] = holding_dict
-
-    avg_price = holding_dict["avg_price"]
-    total = sell_input.price * sell_input.quantity
-    profit_loss = (sell_input.price - avg_price) * sell_input.quantity
-    profit_loss_pct = profit_loss / (avg_price * sell_input.quantity) * 100
-
-    # Holding 업데이트
-    holding = Holding.from_dict(holding_dict)
-    holding.remove_sell(sell_input.quantity)
-
-    new_holdings = []
-    for h in holdings:
-        if h["name"].lower() == sell_input.name.lower():
-            if holding.quantity > 0:
-                new_holdings.append(holding.to_dict())
-        else:
-            new_holdings.append(h)
-    save_holdings(new_holdings)
-
-    # Transaction 생성 및 저장
-    tx = Transaction(
-        type="sell",
-        name=sell_input.name,
-        sector=holding_dict.get("sector", ""),
-        price=sell_input.price,
-        quantity=sell_input.quantity,
-        total_amount=total,
-        profit_loss=profit_loss,
-        profit_loss_pct=round(profit_loss_pct, 2),
-        sell_reason=sell_input.sell_reason,
-        holding_id=holding_dict.get("id", ""),
+    return await _process_sell(
+        update, context,
+        sell_input.name, sell_input.quantity, sell_input.price, sell_input.sell_reason,
     )
-    transactions = load_transactions()
-    transactions.append(tx.to_dict())
-    save_transactions(transactions)
-
-    context.user_data["sell_transaction"] = tx
-
-    # 매도 결과 응답
-    result_text = format_sell_result(
-        name=sell_input.name,
-        quantity=sell_input.quantity,
-        price=sell_input.price,
-        total=total,
-        profit_loss=profit_loss,
-        profit_loss_pct=profit_loss_pct,
-    )
-    await update.message.reply_text(result_text)
-
-    # 회고 여부 질문
-    await update.message.reply_text(
-        "이 매도에 대해 회고를 진행할까요?",
-        reply_markup=retro_ask_keyboard(),
-    )
-    return RETRO_ASK
 
 
 async def _start_retro(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -351,6 +406,9 @@ def _cleanup_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
         "sell_name",
         "sell_input",
         "sell_holding",
+        "kb_sell_name",
+        "kb_sell_quantity",
+        "kb_sell_price",
         "sell_profit_loss",
         "sell_profit_loss_pct",
         "sell_transaction",
@@ -368,6 +426,9 @@ def sell_conversation() -> ConversationHandler:
     """매도 + 회고 ConversationHandler를 생성하여 반환."""
     return ConversationHandler(
         entry_points=[
+            MessageHandler(
+                filters.Regex(r"(?s)^\[KB증권\]"), _receive_kb_sell
+            ),
             CommandHandler("sell", _start_sell),
             MessageHandler(filters.Regex(r"^매도$"), _start_sell),
         ],
@@ -376,6 +437,9 @@ def sell_conversation() -> ConversationHandler:
                 CallbackQueryHandler(
                     _select_holding, pattern=f"^{SELL_SELECT_PREFIX}"
                 ),
+            ],
+            SELL_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_reason),
             ],
             INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),
