@@ -58,7 +58,7 @@ KB_SELL_MSG = (
     "■ 계좌: ***-***-*12 [01] \n"
     "■ 종목명: 삼성전자 \n"
     "■ 주문수량: 5주 \n"
-    "■ 체결금액: 425,000원 \n"
+    "■ 체결금액: 85,000원 \n"
     "■ 내용: 매도체결(20147154)"
 )
 
@@ -68,7 +68,7 @@ KB_BUY_MSG = (
     "■ 계좌: ***-***-*12 [01] \n"
     "■ 종목명: 삼성전자 \n"
     "■ 주문수량: 10주 \n"
-    "■ 체결금액: 720,000원 \n"
+    "■ 체결금액: 72,000원 \n"
     "■ 내용: 매수체결(20147155)"
 )
 
@@ -84,7 +84,7 @@ async def test_kb_sell_asks_reason():
     msg = context.user_data["broker_sell"]
     assert msg.name == "삼성전자"
     assert msg.quantity == 5
-    assert msg.price == 85000.0  # 425000 / 5
+    assert msg.price == 85000.0  # 체결금액 = 주당 가격
 
     reply = update.message.reply_text.call_args[0][0]
     assert "매도사유" in reply
@@ -122,7 +122,7 @@ async def test_kb_buy_asks_sector():
     msg = context.user_data["broker_buy"]
     assert msg.name == "삼성전자"
     assert msg.quantity == 10
-    assert msg.price == 72000.0  # 720000 / 10
+    assert msg.price == 72000.0  # 체결금액 = 주당 가격
 
     reply = update.message.reply_text.call_args[0][0]
     assert "섹터" in reply

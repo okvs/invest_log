@@ -200,7 +200,7 @@ class BrokerMessage:
 
 
 def _parse_kb_message(text: str) -> BrokerMessage:
-    """KB증권 체결 알림 메시지 파싱. 체결금액은 총액."""
+    """KB증권 체결 알림 메시지 파싱. 체결금액은 주당 가격."""
     name_match = re.search(r"■\s*종목명:\s*(.+)", text)
     qty_match = re.search(r"■\s*주문수량:\s*(.+)", text)
     amount_match = re.search(r"■\s*체결금액:\s*(.+)", text)
@@ -219,8 +219,7 @@ def _parse_kb_message(text: str) -> BrokerMessage:
 
     name = name_match.group(1).strip()
     quantity = int(_parse_number(qty_match.group(1)))
-    total_amount = _parse_number(amount_match.group(1))
-    price = total_amount / quantity
+    price = _parse_number(amount_match.group(1))
 
     return BrokerMessage(
         name=name, quantity=quantity, price=price,
