@@ -191,17 +191,16 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
 
 
 @dataclass
-class KbSellResult:
+class BrokerMessage:
     name: str
     quantity: int
     price: float  # 주당 가격
+    trade_type: str  # "buy" or "sell"
+    broker: str  # "KB" or "신한"
 
 
-def parse_kb_message(text: str) -> KbSellResult:
-    """KB증권 체결 알림 메시지에서 매도 정보를 추출.
-
-    체결금액은 총액이므로 주당 가격 = 체결금액 / 수량으로 계산.
-    """
+def _parse_kb_message(text: str) -> BrokerMessage:
+    """KB증권 체결 알림 메시지 파싱. 체결금액은 총액."""
     name_match = re.search(r"■\s*종목명:\s*(.+)", text)
     qty_match = re.search(r"■\s*주문수량:\s*(.+)", text)
     amount_match = re.search(r"■\s*체결금액:\s*(.+)", text)
@@ -210,15 +209,60 @@ def parse_kb_message(text: str) -> KbSellResult:
     if not all([name_match, qty_match, amount_match, type_match]):
         raise ValueError("KB증권 메시지 형식을 인식할 수 없습니다.")
 
-    if "매도" not in type_match.group(1):
-        raise ValueError("매도 체결 메시지가 아닙니다.")
+    content = type_match.group(1)
+    if "매도" in content:
+        trade_type = "sell"
+    elif "매수" in content:
+        trade_type = "buy"
+    else:
+        raise ValueError(f"체결 유형을 인식할 수 없습니다: {content}")
 
     name = name_match.group(1).strip()
     quantity = int(_parse_number(qty_match.group(1)))
     total_amount = _parse_number(amount_match.group(1))
     price = total_amount / quantity
 
-    return KbSellResult(name=name, quantity=quantity, price=price)
+    return BrokerMessage(
+        name=name, quantity=quantity, price=price,
+        trade_type=trade_type, broker="KB",
+    )
+
+
+def _parse_shinhan_message(text: str) -> BrokerMessage:
+    """신한증권 체결 알림 메시지 파싱. 체결단가는 주당 가격."""
+    name_match = re.search(r"종목명\s*:\s*(.+)", text)
+    type_match = re.search(r"체결구분\s*:\s*(.+)", text)
+    qty_match = re.search(r"체결수량\s*:\s*(.+)", text)
+    price_match = re.search(r"체결단가\s*:\s*(.+)", text)
+
+    if not all([name_match, type_match, qty_match, price_match]):
+        raise ValueError("신한증권 메시지 형식을 인식할 수 없습니다.")
+
+    content = type_match.group(1).strip()
+    if "매도" in content:
+        trade_type = "sell"
+    elif "매수" in content:
+        trade_type = "buy"
+    else:
+        raise ValueError(f"체결 유형을 인식할 수 없습니다: {content}")
+
+    name = name_match.group(1).strip()
+    quantity = int(_parse_number(qty_match.group(1)))
+    price = _parse_number(price_match.group(1))
+
+    return BrokerMessage(
+        name=name, quantity=quantity, price=price,
+        trade_type=trade_type, broker="신한",
+    )
+
+
+def parse_broker_message(text: str) -> BrokerMessage:
+    """증권사 체결 메시지를 자동 감지하여 파싱."""
+    if text.strip().startswith("[KB증권]"):
+        return _parse_kb_message(text)
+    if text.strip().startswith("계좌명"):
+        return _parse_shinhan_message(text)
+    raise ValueError("지원하는 증권사 메시지 형식이 아닙니다.")
 
 
 def parse_buy_input(text: str) -> BuyInput:

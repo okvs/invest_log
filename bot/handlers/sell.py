@@ -35,7 +35,7 @@ from bot.keyboards import (
 from models.portfolio import Holding
 from models.retrospective import Retrospective
 from models.transaction import Transaction
-from parsers.input_parser import parse_kb_message, parse_sell_input, resolve_name
+from parsers.input_parser import parse_sell_input, resolve_name
 from storage.json_store import (
     load_holdings,
     load_nickname_map,
@@ -50,14 +50,13 @@ from storage.json_store import (
 (
     SELECT,
     INPUT,
-    SELL_REASON,
     RETRO_ASK,
     RETRO_THESIS,
     RETRO_WELL,
     RETRO_REGRETS,
     RETRO_AVOIDABLE,
     RETRO_LESSONS,
-) = range(9)
+) = range(8)
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -186,44 +185,6 @@ async def _process_sell(
         reply_markup=retro_ask_keyboard(),
     )
     return RETRO_ASK
-
-
-async def _receive_kb_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """KB증권 체결 알림 메시지로 매도 시작 → 매도사유만 추가 입력."""
-    text = update.message.text
-
-    try:
-        kb = parse_kb_message(text)
-    except ValueError as e:
-        await update.message.reply_text(f"메시지 인식 실패: {e}")
-        return ConversationHandler.END
-
-    # 닉네임 변환
-    nmap = load_nickname_map()
-    name = resolve_name(kb.name, nickname_map=nmap)
-
-    context.user_data["kb_sell_name"] = name
-    context.user_data["kb_sell_quantity"] = kb.quantity
-    context.user_data["kb_sell_price"] = kb.price
-
-    await update.message.reply_text(
-        f"{name} {kb.quantity}주 {int(kb.price):,}원 체결 확인.\n\n"
-        "매도사유를 입력해주세요."
-    )
-    return SELL_REASON
-
-
-async def _receive_sell_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """KB증권 매도 → 사유 입력 후 매도 처리."""
-    sell_reason = update.message.text.strip()
-    name = context.user_data.pop("kb_sell_name")
-    quantity = context.user_data.pop("kb_sell_quantity")
-    price = context.user_data.pop("kb_sell_price")
-
-    return await _process_sell(
-        update, context, name, quantity, price, sell_reason,
-        error_state=ConversationHandler.END,
-    )
 
 
 async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -406,9 +367,6 @@ def _cleanup_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
         "sell_name",
         "sell_input",
         "sell_holding",
-        "kb_sell_name",
-        "kb_sell_quantity",
-        "kb_sell_price",
         "sell_profit_loss",
         "sell_profit_loss_pct",
         "sell_transaction",
@@ -426,9 +384,6 @@ def sell_conversation() -> ConversationHandler:
     """매도 + 회고 ConversationHandler를 생성하여 반환."""
     return ConversationHandler(
         entry_points=[
-            MessageHandler(
-                filters.Regex(r"(?s)^\[KB증권\]"), _receive_kb_sell
-            ),
             CommandHandler("sell", _start_sell),
             MessageHandler(filters.Regex(r"^매도$"), _start_sell),
         ],
@@ -437,9 +392,6 @@ def sell_conversation() -> ConversationHandler:
                 CallbackQueryHandler(
                     _select_holding, pattern=f"^{SELL_SELECT_PREFIX}"
                 ),
-            ],
-            SELL_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_reason),
             ],
             INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),

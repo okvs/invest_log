@@ -10,6 +10,7 @@ from telegram.ext import (
     filters,
 )
 
+from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.edit import edit_conversation
@@ -62,7 +63,8 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 
-    # ConversationHandler (매수/매도/수정)
+    # ConversationHandler — 증권사 메시지가 먼저 매칭되도록 순서 중요
+    app.add_handler(broker_conversation())
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
     app.add_handler(edit_conversation())
