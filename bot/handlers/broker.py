@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from telegram import Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -15,14 +16,43 @@ from telegram.ext import (
 )
 
 from bot.formatters import format_buy_result, format_sell_result
-from bot.handlers.sell import _process_sell
+from bot.handlers.sell import (
+    _process_sell,
+    _skip_retro,
+    _start_retro,
+    _retro_thesis_eval,
+    _retro_well,
+    _retro_regrets,
+    _retro_regrets_skip,
+    _retro_avoidable,
+    _retro_lessons,
+    _retro_lessons_skip,
+    RETRO_ASK,
+    RETRO_THESIS,
+    RETRO_WELL,
+    RETRO_REGRETS,
+    RETRO_AVOIDABLE,
+    RETRO_LESSONS,
+)
 from bot.handlers.buy import _process_and_save
-from bot.keyboards import retro_ask_keyboard
+from bot.keyboards import (
+    AVOIDABLE_NO,
+    AVOIDABLE_UNKNOWN,
+    AVOIDABLE_YES,
+    SKIP_RETRO,
+    START_RETRO,
+    THESIS_CORRECT,
+    THESIS_PARTIAL,
+    THESIS_WRONG,
+    retro_ask_keyboard,
+)
 from parsers.input_parser import BuyInput, parse_broker_message, resolve_name
 from storage.json_store import load_nickname_map
 
-# ConversationHandler states
-SELL_REASON, BUY_SECTOR, BUY_THESIS = range(3)
+# ConversationHandler states (10~부터 시작하여 sell.py 상태값과 충돌 방지)
+SELL_REASON = 10
+BUY_SECTOR = 11
+BUY_THESIS = 12
 
 
 async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -122,6 +152,33 @@ def broker_conversation() -> ConversationHandler:
             ],
             BUY_THESIS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _buy_thesis),
+            ],
+            RETRO_ASK: [
+                CallbackQueryHandler(_start_retro, pattern=f"^{START_RETRO}$"),
+                CallbackQueryHandler(_skip_retro, pattern=f"^{SKIP_RETRO}$"),
+            ],
+            RETRO_THESIS: [
+                CallbackQueryHandler(
+                    _retro_thesis_eval,
+                    pattern=f"^({THESIS_CORRECT}|{THESIS_WRONG}|{THESIS_PARTIAL})$",
+                ),
+            ],
+            RETRO_WELL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_well),
+            ],
+            RETRO_REGRETS: [
+                CommandHandler("skip", _retro_regrets_skip),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_regrets),
+            ],
+            RETRO_AVOIDABLE: [
+                CallbackQueryHandler(
+                    _retro_avoidable,
+                    pattern=f"^({AVOIDABLE_YES}|{AVOIDABLE_NO}|{AVOIDABLE_UNKNOWN})$",
+                ),
+            ],
+            RETRO_LESSONS: [
+                CommandHandler("skip", _retro_lessons_skip),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_lessons),
             ],
         },
         fallbacks=[CommandHandler("cancel", _cancel)],
