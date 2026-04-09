@@ -156,9 +156,16 @@ async def _pick_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return await _save_buy_from_callback(query, context, buy_input)
 
 
-def _find_existing_thesis(name: str) -> str | None:
-    """기존 보유 종목의 매수 사유를 찾아 반환. 없으면 None."""
+def _find_existing_thesis(ticker: str, name: str) -> str | None:
+    """기존 보유 종목의 매수 사유를 찾아 반환. 티커 우선, 없으면 이름으로 매칭. 없으면 None."""
     holdings_data = load_holdings()
+    # 1차: ticker로 매칭
+    if ticker:
+        for h_dict in holdings_data:
+            if h_dict.get("ticker", "") == ticker:
+                thesis = h_dict.get("buy_thesis", "")
+                return thesis if thesis else None
+    # 2차: 이름으로 매칭 (ticker가 없는 경우 fallback)
     for h_dict in holdings_data:
         if h_dict["name"].lower() == name.lower():
             thesis = h_dict.get("buy_thesis", "")
@@ -169,7 +176,7 @@ def _find_existing_thesis(name: str) -> str | None:
 async def _check_thesis_or_save(update, context, buy_input, *, is_callback=False) -> int:
     """thesis가 비어있고 기존 종목에 사유가 있으면 수정 여부를 묻고, 아니면 바로 저장."""
     if not buy_input.thesis:
-        existing_thesis = _find_existing_thesis(buy_input.name)
+        existing_thesis = _find_existing_thesis(buy_input.ticker, buy_input.name)
         if existing_thesis:
             context.user_data["buy_input"] = buy_input
             msg = (
@@ -206,7 +213,7 @@ async def _thesis_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
 
     if query.data == KEEP_THESIS:
-        existing_thesis = _find_existing_thesis(buy_input.name)
+        existing_thesis = _find_existing_thesis(buy_input.ticker, buy_input.name)
         buy_input.thesis = existing_thesis or ""
         context.user_data.pop("buy_input", None)
         return await _do_save(update, context, buy_input, is_callback=True)
@@ -265,16 +272,24 @@ def _process_and_save(buy_input) -> str:
         research_notes=buy_input.research_notes,
     )
 
-    # 기존 종목 확인
+    # 기존 종목 확인 (ticker 우선, 이름 fallback)
     holdings_data = load_holdings()
     existing: Holding | None = None
     existing_idx: int | None = None
 
-    for idx, h_dict in enumerate(holdings_data):
-        if h_dict["name"].lower() == buy_input.name.lower():
-            existing = Holding.from_dict(h_dict)
-            existing_idx = idx
-            break
+    if buy_input.ticker:
+        for idx, h_dict in enumerate(holdings_data):
+            if h_dict.get("ticker", "") == buy_input.ticker:
+                existing = Holding.from_dict(h_dict)
+                existing_idx = idx
+                break
+
+    if existing is None:
+        for idx, h_dict in enumerate(holdings_data):
+            if h_dict["name"].lower() == buy_input.name.lower():
+                existing = Holding.from_dict(h_dict)
+                existing_idx = idx
+                break
 
     if existing is not None:
         existing.add_buy(buy_input.price, buy_input.quantity, tx.id)
