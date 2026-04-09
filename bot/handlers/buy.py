@@ -453,7 +453,6 @@ def buy_conversation() -> ConversationHandler:
         ],
         name="buy",
         allow_reentry=True,
-        conversation_timeout=300,
     )
 
 

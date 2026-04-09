@@ -299,5 +299,4 @@ def broker_conversation() -> ConversationHandler:
         ],
         name="broker",
         allow_reentry=True,
-        conversation_timeout=300,
     )

@@ -243,7 +243,6 @@ def edit_conversation() -> ConversationHandler:
         ],
         name="edit",
         allow_reentry=True,
-        conversation_timeout=300,
     )
 
 

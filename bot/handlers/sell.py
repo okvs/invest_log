@@ -449,5 +449,4 @@ def sell_conversation() -> ConversationHandler:
         ],
         name="sell",
         allow_reentry=True,
-        conversation_timeout=300,
     )
