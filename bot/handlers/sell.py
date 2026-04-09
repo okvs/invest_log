@@ -380,8 +380,15 @@ def _cleanup_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop(key, None)
 
 
+def _other_command_filter() -> filters.BaseFilter:
+    """다른 명령어 필터 — 매도 대화 중 다른 명령 입력 시 대화 종료용."""
+    return filters.Regex(r"^(매도|매수|현황|도움말|수정)$") | filters.COMMAND
+
+
 def sell_conversation() -> ConversationHandler:
     """매도 + 회고 ConversationHandler를 생성하여 반환."""
+    other_cmd = _other_command_filter()
+
     return ConversationHandler(
         entry_points=[
             CommandHandler("sell", _start_sell),
@@ -394,6 +401,7 @@ def sell_conversation() -> ConversationHandler:
                 ),
             ],
             INPUT: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),
             ],
             RETRO_ASK: [
@@ -407,9 +415,11 @@ def sell_conversation() -> ConversationHandler:
                 ),
             ],
             RETRO_WELL: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_well),
             ],
             RETRO_REGRETS: [
+                MessageHandler(other_cmd, _cancel),
                 CommandHandler("skip", _retro_regrets_skip),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_regrets),
             ],
@@ -420,6 +430,7 @@ def sell_conversation() -> ConversationHandler:
                 ),
             ],
             RETRO_LESSONS: [
+                MessageHandler(other_cmd, _cancel),
                 CommandHandler("skip", _retro_lessons_skip),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_lessons),
             ],
@@ -429,4 +440,5 @@ def sell_conversation() -> ConversationHandler:
         ],
         name="sell",
         allow_reentry=True,
+        conversation_timeout=300,
     )

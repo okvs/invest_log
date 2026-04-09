@@ -230,6 +230,7 @@ def edit_conversation() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", _cancel)],
         name="edit",
         allow_reentry=True,
+        conversation_timeout=300,
     )
 
 

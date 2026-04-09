@@ -406,8 +406,15 @@ def _process_and_save(buy_input) -> str:
 # ConversationHandler
 # ---------------------------------------------------------------------------
 
+def _other_command_filter() -> filters.BaseFilter:
+    """다른 명령어 필터 — 매수 대화 중 다른 명령 입력 시 대화 종료용."""
+    return filters.Regex(r"^(매도|매수|현황|도움말|수정)$") | filters.COMMAND
+
+
 def buy_conversation() -> ConversationHandler:
     """매수 ConversationHandler를 생성하여 반환."""
+    other_cmd = _other_command_filter()
+
     return ConversationHandler(
         entry_points=[
             CommandHandler("buy", _start),
@@ -415,7 +422,7 @@ def buy_conversation() -> ConversationHandler:
         ],
         states={
             INPUT: [
-                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
+                MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input),
             ],
             PICK_STOCK: [
@@ -428,36 +435,26 @@ def buy_conversation() -> ConversationHandler:
                 ),
             ],
             SECTOR_INPUT: [
-                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
+                MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _sector_input),
             ],
             THESIS_INPUT: [
-                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
+                MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", _cancel_fallback),
-            CommandHandler("sell", _exit_to_sell),
+            CommandHandler("cancel", _abort),
         ],
         name="buy",
         allow_reentry=True,
+        conversation_timeout=300,
     )
 
 
-async def _cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """/cancel 명령어로 대화 중단."""
+async def _abort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """매수 대화를 즉시 종료하고 idle로 복귀."""
     context.user_data.pop("buy_input", None)
     context.user_data.pop("_after_sector", None)
     await update.message.reply_text("매수 기록이 취소되었습니다.")
-    return ConversationHandler.END
-
-
-async def _exit_to_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매수 대화 중 매도 명령 → 매수 종료 후 매도 안내."""
-    context.user_data.pop("buy_input", None)
-    context.user_data.pop("_after_sector", None)
-    await update.message.reply_text(
-        "매수 기록을 취소했습니다.\n'매도'를 다시 입력해주세요."
-    )
     return ConversationHandler.END

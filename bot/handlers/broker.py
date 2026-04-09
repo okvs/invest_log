@@ -275,4 +275,5 @@ def broker_conversation() -> ConversationHandler:
         fallbacks=[CommandHandler("cancel", _cancel)],
         name="broker",
         allow_reentry=True,
+        conversation_timeout=300,
     )
