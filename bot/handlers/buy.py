@@ -1,7 +1,8 @@
 """매수(buy) ConversationHandler.
 
 플로우:
-  매수 → 입력 → (종목 검색 결과 1개 초과 시) 종목 선택 → 저장
+  신규: 종목명/수량/매수가 → 티커검색 → 섹터 입력 → 매수근거 입력 → 저장
+  추가매수: 종목명/수량/매수가 → 티커검색 → 기존 섹터+근거 확인 → 유지 or 수정 → 저장
 """
 from __future__ import annotations
 
@@ -22,10 +23,11 @@ from telegram.ext import (
 from bot.formatters import format_buy_result
 from bot.keyboards import (
     BUY_STOCK_PREFIX,
+    EDIT_SECTOR,
     EDIT_THESIS,
-    KEEP_THESIS,
+    KEEP_EXISTING,
+    existing_info_keyboard,
     stock_search_keyboard,
-    thesis_reuse_keyboard,
 )
 from models.portfolio import Holding
 from models.transaction import Transaction
@@ -50,21 +52,52 @@ logger = logging.getLogger(__name__)
 # ConversationHandler 상태
 INPUT = 0
 PICK_STOCK = 1
-THESIS_CONFIRM = 2
-THESIS_INPUT = 3
+EXISTING_CONFIRM = 2
+SECTOR_INPUT = 3
+THESIS_INPUT = 4
 
+
+# ---------------------------------------------------------------------------
+# 기존 보유 종목 조회 헬퍼
+# ---------------------------------------------------------------------------
+
+def _find_existing_holding(ticker: str, name: str) -> dict | None:
+    """기존 보유 종목 dict를 찾아 반환. ticker 우선, 이름 fallback."""
+    holdings_data = load_holdings()
+    if ticker:
+        for h_dict in holdings_data:
+            if h_dict.get("ticker", "") == ticker:
+                return h_dict
+    for h_dict in holdings_data:
+        if h_dict["name"].lower() == name.lower():
+            return h_dict
+    return None
+
+
+def _strip_name(name: str) -> str:
+    """종목명 공백 제거."""
+    return name.replace(" ", "")
+
+
+# ---------------------------------------------------------------------------
+# 대화 시작
+# ---------------------------------------------------------------------------
 
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매수 대화 시작 — 입력 안내 메시지."""
+    """매수 대화 시작."""
     await update.message.reply_text(
-        "종목명 / 섹터 / 수량 / 매수가\n"
+        "종목명 / 수량 / 매수가\n"
         "를 줄바꿈으로 입력해주세요."
     )
     return INPUT
 
 
+# ---------------------------------------------------------------------------
+# 입력 파싱 + 티커 검색
+# ---------------------------------------------------------------------------
+
 async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """사용자 입력을 파싱. 종목 검색 후 후보가 여러 개면 선택 버튼 표시."""
+    """사용자 입력 파싱 → 티커 검색 → 기존/신규 분기."""
     text = update.message.text
 
     try:
@@ -78,11 +111,10 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         nmap = load_nickname_map()
         buy_input.name = resolve_name(buy_input.name, nickname_map=nmap)
 
-        # ticker_map 캐시에 이미 있으면 바로 저장
+        # ticker_map 캐시 확인
         tmap = load_ticker_map()
         cached = tmap.get(buy_input.name, "")
         if not cached:
-            # 대소문자 무시 검색
             for k, v in tmap.items():
                 if k.lower() == buy_input.name.lower():
                     cached = v
@@ -90,9 +122,9 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if cached:
             buy_input.ticker = cached
-            return await _save_buy(update, context, buy_input)
+            return await _after_ticker_resolved(update, context, buy_input)
 
-        # 종목 검색 (별도 subprocess에서 Playwright 실행)
+        # 네이버 종목 검색
         await update.message.reply_text("종목 검색 중...")
         try:
             candidates = await asyncio.to_thread(search_stocks, buy_input.name)
@@ -101,22 +133,20 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             candidates = []
 
         if not candidates:
-            # 검색 결과 없음 → 종목코드 없이 저장
             buy_input.ticker = ""
             await update.message.reply_text(
                 "종목코드를 찾지 못했습니다. 종목코드 없이 저장합니다.\n"
                 "(현황에서 현재가 조회가 안 될 수 있습니다)"
             )
-            return await _save_buy(update, context, buy_input)
+            return await _after_ticker_resolved(update, context, buy_input)
 
-        # 정확히 1개만 매칭 → 바로 저장
         exact = [c for c in candidates if c.name == buy_input.name]
         if len(exact) == 1:
             suffix = ".KQ" if exact[0].market == "KOSDAQ" else ".KS"
             buy_input.ticker = exact[0].code + suffix
-            return await _save_buy(update, context, buy_input)
+            return await _after_ticker_resolved(update, context, buy_input)
 
-        # 후보 표시 → 사용자에게 선택 요청
+        # 후보 여러 개 → 선택 요청
         context.user_data["buy_input"] = buy_input
         keyboard = stock_search_keyboard(candidates)
         await update.message.reply_text(
@@ -134,12 +164,11 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _pick_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """사용자가 종목 선택 버튼을 눌렀을 때 처리."""
+    """종목 선택 버튼 처리."""
     query = update.callback_query
     await query.answer()
 
     data = query.data.removeprefix(BUY_STOCK_PREFIX)
-    # data 형식: "종목명|코드.KS" 또는 "|" (종목코드 없이 진행)
     parts = data.split("|", 1)
     selected_name = parts[0] if parts[0] else ""
     selected_ticker = parts[1] if len(parts) > 1 else ""
@@ -150,60 +179,70 @@ async def _pick_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     if selected_name:
-        buy_input.name = selected_name
+        buy_input.name = _strip_name(selected_name)
     buy_input.ticker = selected_ticker
 
-    return await _save_buy_from_callback(query, context, buy_input)
+    return await _after_ticker_resolved_cb(query, context, buy_input)
 
 
-def _find_existing_thesis(ticker: str, name: str) -> str | None:
-    """기존 보유 종목의 매수 사유를 찾아 반환. 티커 우선, 없으면 이름으로 매칭. 없으면 None."""
-    holdings_data = load_holdings()
-    # 1차: ticker로 매칭
-    if ticker:
-        for h_dict in holdings_data:
-            if h_dict.get("ticker", "") == ticker:
-                thesis = h_dict.get("buy_thesis", "")
-                return thesis if thesis else None
-    # 2차: 이름으로 매칭 (ticker가 없는 경우 fallback)
-    for h_dict in holdings_data:
-        if h_dict["name"].lower() == name.lower():
-            thesis = h_dict.get("buy_thesis", "")
-            return thesis if thesis else None
-    return None
+# ---------------------------------------------------------------------------
+# 티커 확정 후 → 기존/신규 분기
+# ---------------------------------------------------------------------------
+
+async def _after_ticker_resolved(update, context, buy_input) -> int:
+    """티커 확정 후: 기존 보유면 정보 확인, 신규면 섹터 질문."""
+    existing = _find_existing_holding(buy_input.ticker, buy_input.name)
+    if existing:
+        return await _ask_existing_confirm(
+            update, context, buy_input, existing, is_callback=False
+        )
+    # 신규 → 섹터 입력
+    context.user_data["buy_input"] = buy_input
+    await update.message.reply_text("섹터를 입력해주세요. (예: 반도체, IT, 바이오)")
+    return SECTOR_INPUT
 
 
-async def _check_thesis_or_save(update, context, buy_input, *, is_callback=False) -> int:
-    """thesis가 비어있고 기존 종목에 사유가 있으면 수정 여부를 묻고, 아니면 바로 저장."""
-    if not buy_input.thesis:
-        existing_thesis = _find_existing_thesis(buy_input.ticker, buy_input.name)
-        if existing_thesis:
-            context.user_data["buy_input"] = buy_input
-            msg = (
-                f"기존 매수 사유가 있습니다:\n\n"
-                f"📌 {existing_thesis}\n\n"
-                f"수정하시겠습니까?"
-            )
-            if is_callback:
-                await update.edit_message_text(msg, reply_markup=thesis_reuse_keyboard())
-            else:
-                await update.message.reply_text(msg, reply_markup=thesis_reuse_keyboard())
-            return THESIS_CONFIRM
-        else:
-            # 기존 종목 없고 thesis도 없으면 입력 요청
-            context.user_data["buy_input"] = buy_input
-            if is_callback:
-                await update.edit_message_text("매수 근거를 입력해주세요.")
-            else:
-                await update.message.reply_text("매수 근거를 입력해주세요.")
-            return THESIS_INPUT
-
-    # thesis가 있으면 바로 저장
-    return await _do_save(update, context, buy_input, is_callback=is_callback)
+async def _after_ticker_resolved_cb(query, context, buy_input) -> int:
+    """콜백용 _after_ticker_resolved."""
+    existing = _find_existing_holding(buy_input.ticker, buy_input.name)
+    if existing:
+        return await _ask_existing_confirm(
+            query, context, buy_input, existing, is_callback=True
+        )
+    context.user_data["buy_input"] = buy_input
+    await query.edit_message_text("섹터를 입력해주세요. (예: 반도체, IT, 바이오)")
+    return SECTOR_INPUT
 
 
-async def _thesis_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """기존 사유 유지/수정 선택 처리."""
+async def _ask_existing_confirm(update, context, buy_input, existing, *, is_callback):
+    """기존 보유 종목의 섹터+근거를 보여주고 유지/수정 선택."""
+    sector = existing.get("sector", "") or "(없음)"
+    thesis = existing.get("buy_thesis", "") or "(없음)"
+
+    # 기존 섹터/근거를 buy_input에 미리 채워둠
+    buy_input.sector = existing.get("sector", "")
+    buy_input.thesis = existing.get("buy_thesis", "")
+    context.user_data["buy_input"] = buy_input
+
+    msg = (
+        f"기존 보유 종목입니다.\n\n"
+        f"섹터: {sector}\n"
+        f"매수사유: {thesis}\n\n"
+        f"그대로 유지하거나 수정할 항목을 선택해주세요."
+    )
+    if is_callback:
+        await update.edit_message_text(msg, reply_markup=existing_info_keyboard())
+    else:
+        await update.message.reply_text(msg, reply_markup=existing_info_keyboard())
+    return EXISTING_CONFIRM
+
+
+# ---------------------------------------------------------------------------
+# 기존 보유 종목: 유지/수정 선택
+# ---------------------------------------------------------------------------
+
+async def _existing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """기존 섹터/근거 유지 또는 수정 분기."""
     query = update.callback_query
     await query.answer()
 
@@ -212,19 +251,56 @@ async def _thesis_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
         return ConversationHandler.END
 
-    if query.data == KEEP_THESIS:
-        existing_thesis = _find_existing_thesis(buy_input.ticker, buy_input.name)
-        buy_input.thesis = existing_thesis or ""
+    if query.data == KEEP_EXISTING:
         context.user_data.pop("buy_input", None)
         return await _do_save(update, context, buy_input, is_callback=True)
-    else:
-        # EDIT_THESIS
+    elif query.data == EDIT_SECTOR:
+        await query.edit_message_text("새로운 섹터를 입력해주세요.")
+        context.user_data["_after_sector"] = "existing_confirm"
+        return SECTOR_INPUT
+    else:  # EDIT_THESIS
         await query.edit_message_text("새로운 매수 근거를 입력해주세요.")
         return THESIS_INPUT
 
 
+# ---------------------------------------------------------------------------
+# 섹터 입력
+# ---------------------------------------------------------------------------
+
+async def _sector_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """섹터 입력 처리."""
+    buy_input = context.user_data.get("buy_input")
+    if buy_input is None:
+        await update.message.reply_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    buy_input.sector = update.message.text.strip()
+
+    # 기존 종목에서 섹터만 수정한 경우 → 다시 확인 화면
+    after = context.user_data.pop("_after_sector", None)
+    if after == "existing_confirm":
+        existing = _find_existing_holding(buy_input.ticker, buy_input.name)
+        thesis = buy_input.thesis or (existing or {}).get("buy_thesis", "") or "(없음)"
+        msg = (
+            f"기존 보유 종목입니다.\n\n"
+            f"섹터: {buy_input.sector}\n"
+            f"매수사유: {thesis}\n\n"
+            f"그대로 유지하거나 수정할 항목을 선택해주세요."
+        )
+        await update.message.reply_text(msg, reply_markup=existing_info_keyboard())
+        return EXISTING_CONFIRM
+
+    # 신규 종목 → 매수 근거 입력
+    await update.message.reply_text("매수 근거를 입력해주세요.")
+    return THESIS_INPUT
+
+
+# ---------------------------------------------------------------------------
+# 매수 근거 입력
+# ---------------------------------------------------------------------------
+
 async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """새 매수 사유 입력 처리."""
+    """매수 근거 입력 처리."""
     buy_input = context.user_data.pop("buy_input", None)
     if buy_input is None:
         await update.message.reply_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
@@ -233,6 +309,10 @@ async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     buy_input.thesis = update.message.text.strip()
     return await _do_save(update, context, buy_input, is_callback=False)
 
+
+# ---------------------------------------------------------------------------
+# 저장
+# ---------------------------------------------------------------------------
 
 async def _do_save(update, context, buy_input, *, is_callback=False) -> int:
     """매수 정보를 저장하고 결과 메시지 전송."""
@@ -245,22 +325,11 @@ async def _do_save(update, context, buy_input, *, is_callback=False) -> int:
     return ConversationHandler.END
 
 
-async def _save_buy(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    buy_input,
-) -> int:
-    """매수 정보를 저장하고 결과 메시지 전송 (일반 메시지용)."""
-    return await _check_thesis_or_save(update, context, buy_input, is_callback=False)
-
-
-async def _save_buy_from_callback(query, context, buy_input) -> int:
-    """매수 정보를 저장하고 결과 메시지 전송 (콜백 쿼리용)."""
-    return await _check_thesis_or_save(query, context, buy_input, is_callback=True)
-
-
 def _process_and_save(buy_input) -> str:
     """매수 데이터를 처리하고 저장. 결과 텍스트 반환."""
+    # 종목명 공백 제거
+    buy_input.name = _strip_name(buy_input.name)
+
     tx = Transaction(
         type="buy",
         name=buy_input.name,
@@ -293,12 +362,14 @@ def _process_and_save(buy_input) -> str:
 
     if existing is not None:
         existing.add_buy(buy_input.price, buy_input.quantity, tx.id)
-        # 기존 보유 종목에 ticker가 없었으면 업데이트
         if buy_input.ticker and not existing.ticker:
             existing.ticker = buy_input.ticker
-        # 매수 사유 업데이트
+        if buy_input.sector:
+            existing.sector = buy_input.sector
         if buy_input.thesis:
             existing.buy_thesis = buy_input.thesis
+        # 종목명 공백 통일
+        existing.name = _strip_name(existing.name)
         holdings_data[existing_idx] = existing.to_dict()
     else:
         holding = Holding(
@@ -339,6 +410,10 @@ def _process_and_save(buy_input) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# ConversationHandler
+# ---------------------------------------------------------------------------
+
 def buy_conversation() -> ConversationHandler:
     """매수 ConversationHandler를 생성하여 반환."""
     return ConversationHandler(
@@ -351,11 +426,14 @@ def buy_conversation() -> ConversationHandler:
             PICK_STOCK: [
                 CallbackQueryHandler(_pick_stock, pattern=f"^{BUY_STOCK_PREFIX}"),
             ],
-            THESIS_CONFIRM: [
+            EXISTING_CONFIRM: [
                 CallbackQueryHandler(
-                    _thesis_confirm,
-                    pattern=f"^({KEEP_THESIS}|{EDIT_THESIS})$",
+                    _existing_confirm,
+                    pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
                 ),
+            ],
+            SECTOR_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _sector_input),
             ],
             THESIS_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
@@ -370,5 +448,6 @@ def buy_conversation() -> ConversationHandler:
 async def _cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/cancel 명령어로 대화 중단."""
     context.user_data.pop("buy_input", None)
+    context.user_data.pop("_after_sector", None)
     await update.message.reply_text("매수 기록이 취소되었습니다.")
     return ConversationHandler.END

@@ -62,18 +62,29 @@ def avoidable_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# --- 매수 사유 유지/수정 ---
-KEEP_THESIS = "keep_thesis"
+# --- 추가 매수: 기존 섹터+사유 유지/수정 ---
+KEEP_EXISTING = "keep_existing"
+EDIT_SECTOR = "edit_sector"
 EDIT_THESIS = "edit_thesis"
+# 하위 호환용
+KEEP_THESIS = KEEP_EXISTING
 
 
-def thesis_reuse_keyboard() -> InlineKeyboardMarkup:
+def existing_info_keyboard() -> InlineKeyboardMarkup:
+    """기존 보유 종목의 섹터/사유를 유지하거나 수정 선택."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("그대로 유지", callback_data=KEEP_THESIS),
-            InlineKeyboardButton("수정", callback_data=EDIT_THESIS),
-        ]
+            InlineKeyboardButton("그대로 유지", callback_data=KEEP_EXISTING),
+        ],
+        [
+            InlineKeyboardButton("섹터 수정", callback_data=EDIT_SECTOR),
+            InlineKeyboardButton("매수사유 수정", callback_data=EDIT_THESIS),
+        ],
     ])
+
+
+# 하위 호환
+thesis_reuse_keyboard = existing_info_keyboard
 
 
 # --- 매도 종목 선택 ---

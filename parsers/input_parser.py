@@ -53,14 +53,16 @@ def _parse_number(text: str) -> float:
 def resolve_name(name: str, nickname_map: dict[str, str] | None = None) -> str:
     """닉네임/대소문자 변환을 거쳐 실제 종목명을 반환.
 
-    1. nickname_map에서 대소문자 무시하고 검색
-    2. 매칭되면 실제 종목명 반환, 아니면 원본 그대로 반환
+    1. 공백 제거
+    2. nickname_map에서 대소문자 무시하고 검색
+    3. 매칭되면 실제 종목명 반환, 아니면 원본 그대로 반환
     """
+    name = name.replace(" ", "")
     if nickname_map:
         name_lower = name.lower()
         for nick, real in nickname_map.items():
             if nick.lower() == name_lower:
-                return real
+                return real.replace(" ", "")
     return name
 
 
@@ -264,24 +266,28 @@ def parse_broker_message(text: str) -> BrokerMessage:
     raise ValueError("지원하는 증권사 메시지 형식이 아닙니다.")
 
 
+def _strip_spaces(name: str) -> str:
+    """종목명에서 공백을 모두 제거."""
+    return name.replace(" ", "")
+
+
 def parse_buy_input(text: str) -> BuyInput:
     """여러 줄 매수 입력을 파싱.
 
-    4줄: 종목명, 섹터, 수량, 매수가
-    매수 근거는 별도 단계에서 입력받습니다.
+    3줄: 종목명, 수량, 매수가
+    섹터와 매수 근거는 별도 단계에서 처리됩니다.
     """
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
 
-    if len(lines) < 4:
+    if len(lines) < 3:
         raise ValueError(
             "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
-            "종목명\n섹터\n수량(예: 10주)\n매수가(예: 72000원)"
+            "종목명\n수량(예: 10주)\n매수가(예: 72000원)"
         )
 
-    name = lines[0]
-    sector = lines[1]
-    quantity = int(_parse_number(lines[2]))
-    price = _parse_number(lines[3])
+    name = _strip_spaces(lines[0])
+    quantity = int(_parse_number(lines[1]))
+    price = _parse_number(lines[2])
 
     if quantity <= 0:
         raise ValueError("수량은 1 이상이어야 합니다.")
@@ -291,7 +297,7 @@ def parse_buy_input(text: str) -> BuyInput:
     return BuyInput(
         name=name,
         ticker="",  # 핸들러에서 자동 조회
-        sector=sector,
+        sector="",
         quantity=quantity,
         price=price,
         thesis="",
