@@ -61,7 +61,7 @@ from storage.json_store import (
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매도 시작 → 보유 종목 카드 표시."""
-    holdings = load_holdings()
+    holdings = [h for h in load_holdings() if h.get("quantity", 0) > 0]
 
     if not holdings:
         await update.message.reply_text("보유 중인 종목이 없습니다.")
