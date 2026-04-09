@@ -431,7 +431,11 @@ def buy_conversation() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
             ],
         },
-        fallbacks=[CommandHandler("cancel", _cancel_fallback)],
+        fallbacks=[
+            CommandHandler("cancel", _cancel_fallback),
+            CommandHandler("sell", _exit_to_sell),
+            MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
+        ],
         name="buy",
         allow_reentry=True,
     )
@@ -442,4 +446,14 @@ async def _cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data.pop("buy_input", None)
     context.user_data.pop("_after_sector", None)
     await update.message.reply_text("매수 기록이 취소되었습니다.")
+    return ConversationHandler.END
+
+
+async def _exit_to_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """매수 대화 중 매도 명령 → 매수 종료 후 매도 안내."""
+    context.user_data.pop("buy_input", None)
+    context.user_data.pop("_after_sector", None)
+    await update.message.reply_text(
+        "매수 기록을 취소했습니다.\n'매도'를 다시 입력해주세요."
+    )
     return ConversationHandler.END
