@@ -14,6 +14,7 @@ import yaml
 from telegram import CallbackQuery, Chat, Message, Update, User
 from telegram.ext import Application, ExtBot
 
+import storage.json_store as store
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.edit import edit_conversation
@@ -22,6 +23,25 @@ from storage.json_store import save_holdings, save_ticker_map
 
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
+
+# 프로덕션 data 경로 — 이 경로면 fixture가 안 걸린 거라 절대 쓰면 안 됨
+_REAL_DATA_DIR = (Path(__file__).resolve().parent.parent / "data").resolve()
+
+
+def _assert_isolated_data_dir() -> None:
+    """현재 DATA_DIR이 실제 data 디렉토리가 아닌지 확인.
+
+    conftest.py의 tmp_data_dir fixture가 적용되지 않은 채로 ScenarioRunner
+    가 실행되면 실제 portfolio.json 이 덮어써진다. pytest 밖에서 직접
+    import하여 호출하는 경우를 방지하기 위한 안전장치.
+    """
+    current = Path(store.DATA_DIR).resolve()
+    if current == _REAL_DATA_DIR:
+        raise RuntimeError(
+            "ScenarioRunner는 실제 data 디렉토리에 쓰면 안 됩니다. "
+            "tests/conftest.py의 tmp_data_dir fixture를 통해 pytest로 실행해주세요. "
+            f"(현재 DATA_DIR={current})"
+        )
 
 
 class ScenarioRunner:
@@ -142,6 +162,7 @@ class ScenarioRunner:
 
     def _apply_setup(self, setup: dict) -> None:
         """setup: holdings, ticker_map 등 초기 데이터 세팅."""
+        _assert_isolated_data_dir()
         if "holdings" in setup:
             holdings = []
             for i, h in enumerate(setup["holdings"]):

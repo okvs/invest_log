@@ -1,0 +1,54 @@
+# 실제 로그에서 발견된 버그 재현:
+# 1. "매수" 타이핑 → buy_conversation이 INPUT state에 진입
+# 2. 증권사(KB증권) 체결 메시지 붙여넣기 → broker_conversation이 가로채 처리
+#    (buy_conversation은 state 0에 고아로 남음)
+# 3. "그대로 유지" 버튼 → broker 완료, "매수 기록 완료!"
+# 4. "매도" 입력 → buy state 0의 other_cmd 필터가 매칭되어 "매수 기록이 취소되었습니다" 발생
+#
+# 기대 동작: 4번에서 buy가 이미 정리돼 있어서 sell_conversation이 정상 시작돼야 함
+
+name: "매수 명령 → broker 메시지 → 매도 전환"
+description: |
+  '매수' 명령어로 buy 대화를 시작한 직후 증권사 체결 메시지를 붙여넣으면
+  broker가 가로채 처리하는데, 이때 buy 대화가 고아 상태로 남지 않아야 함.
+
+setup:
+  ticker_map:
+    KODEX반도체레버리지: "494310.KS"
+  holdings:
+    - name: "KODEX반도체레버리지"
+      ticker: "494310.KS"
+      sector: "반도체"
+      quantity: 100
+      avg_price: 60000
+      buy_thesis: "넥스원이랑 퐁당퐁당"
+
+steps:
+  # 1. "매수" 명령 → buy INPUT state 진입
+  - send: "매수"
+    expect: "종목명 / 수량 / 매수가"
+
+  # 2. 증권사 체결 메시지 붙여넣기 → broker가 가로챔
+  - send: |
+      [KB증권] 주식 체결 안내
+
+      고객님, 주문하신 KODEX 반도체레버리지 주식이 체결됐으니 확인해주세요.
+
+      ■ 계좌: *-*-*12 [01]
+      ■ 종목명: KODEX 반도체레버리지
+      ■ 주문수량: 120주
+      ■ 체결금액: 67,365원
+      ■ 내용: 매수체결(20374710)
+    expect:
+      - "기존 보유 종목입니다"
+      - "그대로 유지하거나 수정할 항목을 선택해주세요"
+
+  # 3. "그대로 유지" 버튼 → broker 완료
+  - click: "keep_existing"
+    expect: "매수 기록 완료!"
+
+  # 4. "매도" → sell_conversation이 정상 시작되어야 함
+  #    (buy가 고아 상태로 남아있었다면 '매수 기록이 취소되었습니다'가 뜸)
+  - send: "매도"
+    expect: "매도할 종목을 선택해주세요"
+    not_expect: "매수 기록이 취소되었습니다"

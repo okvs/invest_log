@@ -64,8 +64,38 @@ BUY_THESIS = 12
 BROKER_EXISTING_CONFIRM = 13
 
 
+def _end_other_conversations(
+    context: ContextTypes.DEFAULT_TYPE, update: Update, keep: str = "broker"
+) -> None:
+    """다른 ConversationHandler에 남아있는 orphan 상태를 정리.
+
+    사용자가 '매수'/'매도'/'수정' 명령으로 buy/sell/edit 대화를 시작한 뒤
+    broker 메시지를 붙여넣으면, broker가 update를 가로채기 때문에 기존 대화는
+    해당 update를 보지 못하고 state가 남은 채로 방치됨.
+    이후 '매도' 같은 다른 명령을 입력하면 고아 상태에 걸려서
+    '매수 기록이 취소되었습니다' 메시지가 뜨는 문제가 생김.
+    broker 대화가 시작될 때 이 함수를 호출해 다른 ConversationHandler의
+    state를 명시적으로 비워준다.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat is None or user is None:
+        return
+    key = (chat.id, user.id)
+    app = context.application
+    for handlers in app.handlers.values():
+        for handler in handlers:
+            if (
+                isinstance(handler, ConversationHandler)
+                and handler.name != keep
+                and key in handler._conversations
+            ):
+                handler._conversations.pop(key, None)
+
+
 async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """증권사 메시지 파싱 → 매수/매도 분기."""
+    _end_other_conversations(context, update, keep="broker")
     text = update.message.text
 
     try:
