@@ -276,19 +276,11 @@ async def _sector_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     buy_input.sector = update.message.text.strip()
 
-    # 기존 종목에서 섹터만 수정한 경우 → 다시 확인 화면
+    # 기존 종목에서 섹터만 수정한 경우 → 바로 저장
     after = context.user_data.pop("_after_sector", None)
     if after == "existing_confirm":
-        existing = _find_existing_holding(buy_input.ticker, buy_input.name)
-        thesis = buy_input.thesis or (existing or {}).get("buy_thesis", "") or "(없음)"
-        msg = (
-            f"기존 보유 종목입니다.\n\n"
-            f"섹터: {buy_input.sector}\n"
-            f"매수사유: {thesis}\n\n"
-            f"그대로 유지하거나 수정할 항목을 선택해주세요."
-        )
-        await update.message.reply_text(msg, reply_markup=existing_info_keyboard())
-        return EXISTING_CONFIRM
+        context.user_data.pop("buy_input", None)
+        return await _do_save(update, context, buy_input, is_callback=False)
 
     # 신규 종목 → 매수 근거 입력
     await update.message.reply_text("매수 근거를 입력해주세요.")

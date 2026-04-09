@@ -161,22 +161,15 @@ async def _buy_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """섹터 입력."""
     sector = update.message.text.strip()
 
-    # 기존 보유 종목에서 섹터 수정 중인 경우
+    # 기존 보유 종목에서 섹터 수정 중인 경우 → 바로 저장
     edit_mode = context.user_data.pop("_broker_edit", None)
     if edit_mode == "sector":
-        buy_input = context.user_data.get("buy_input")
+        buy_input = context.user_data.pop("buy_input", None)
         if buy_input:
             buy_input.sector = sector
-            existing = _find_existing_holding(buy_input.ticker, buy_input.name)
-            thesis = buy_input.thesis or "(없음)"
-            await update.message.reply_text(
-                f"기존 보유 종목입니다.\n\n"
-                f"섹터: {sector}\n"
-                f"매수사유: {thesis}\n\n"
-                f"그대로 유지하거나 수정할 항목을 선택해주세요.",
-                reply_markup=existing_info_keyboard(),
-            )
-            return BROKER_EXISTING_CONFIRM
+            result_text = _process_and_save(buy_input)
+            await update.message.reply_text(result_text)
+            return ConversationHandler.END
 
     # 신규 종목
     context.user_data["broker_sector"] = sector
@@ -188,21 +181,15 @@ async def _buy_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """매수근거 입력 → 매수 저장."""
     thesis = update.message.text.strip()
 
-    # 기존 보유 종목에서 근거 수정 중인 경우
+    # 기존 보유 종목에서 근거 수정 중인 경우 → 바로 저장
     edit_mode = context.user_data.pop("_broker_edit", None)
     if edit_mode == "thesis":
-        buy_input = context.user_data.get("buy_input")
+        buy_input = context.user_data.pop("buy_input", None)
         if buy_input:
             buy_input.thesis = thesis
-            sector = buy_input.sector or "(없음)"
-            await update.message.reply_text(
-                f"기존 보유 종목입니다.\n\n"
-                f"섹터: {sector}\n"
-                f"매수사유: {thesis}\n\n"
-                f"그대로 유지하거나 수정할 항목을 선택해주세요.",
-                reply_markup=existing_info_keyboard(),
-            )
-            return BROKER_EXISTING_CONFIRM
+            result_text = _process_and_save(buy_input)
+            await update.message.reply_text(result_text)
+            return ConversationHandler.END
 
     # 신규 종목
     msg = context.user_data.pop("broker_buy")
