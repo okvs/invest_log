@@ -1,5 +1,7 @@
 import logging
 import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -20,9 +22,25 @@ from bot.handlers.sell import sell_conversation
 
 load_dotenv()
 
+# 로그 설정: 파일(logs/bot.log) + 콘솔 동시 출력
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "bot.log"
+
+_log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+_formatter = logging.Formatter(_log_format)
+
+_file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setFormatter(_formatter)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_formatter)
+
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.DEBUG,
+    handlers=[_file_handler, _console_handler],
 )
 logger = logging.getLogger(__name__)
 
