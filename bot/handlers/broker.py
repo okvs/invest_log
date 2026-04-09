@@ -38,8 +38,6 @@ from bot.handlers.buy import (
     _process_and_save,
     _find_existing_holding,
     _strip_name,
-    EXISTING_CONFIRM,
-    _existing_confirm,
 )
 from bot.keyboards import (
     AVOIDABLE_NO,
@@ -59,10 +57,11 @@ from bot.keyboards import (
 from parsers.input_parser import BuyInput, parse_broker_message, resolve_name
 from storage.json_store import load_nickname_map
 
-# ConversationHandler states (10~부터 시작하여 sell.py 상태값과 충돌 방지)
+# ConversationHandler states (10~부터 시작하여 buy/sell 상태값과 충돌 방지)
 SELL_REASON = 10
 BUY_SECTOR = 11
 BUY_THESIS = 12
+BROKER_EXISTING_CONFIRM = 13
 
 
 async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -111,7 +110,7 @@ async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"그대로 유지하거나 수정할 항목을 선택해주세요.",
                 reply_markup=existing_info_keyboard(),
             )
-            return EXISTING_CONFIRM
+            return BROKER_EXISTING_CONFIRM
         else:
             context.user_data["broker_buy"] = msg
             await update.message.reply_text(
@@ -177,7 +176,7 @@ async def _buy_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 f"그대로 유지하거나 수정할 항목을 선택해주세요.",
                 reply_markup=existing_info_keyboard(),
             )
-            return EXISTING_CONFIRM
+            return BROKER_EXISTING_CONFIRM
 
     # 신규 종목
     context.user_data["broker_sector"] = sector
@@ -203,7 +202,7 @@ async def _buy_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 f"그대로 유지하거나 수정할 항목을 선택해주세요.",
                 reply_markup=existing_info_keyboard(),
             )
-            return EXISTING_CONFIRM
+            return BROKER_EXISTING_CONFIRM
 
     # 신규 종목
     msg = context.user_data.pop("broker_buy")
@@ -252,7 +251,7 @@ def broker_conversation() -> ConversationHandler:
             BUY_THESIS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _buy_thesis),
             ],
-            EXISTING_CONFIRM: [
+            BROKER_EXISTING_CONFIRM: [
                 CallbackQueryHandler(
                     _broker_existing_confirm,
                     pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
