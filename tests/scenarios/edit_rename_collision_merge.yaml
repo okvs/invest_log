@@ -1,0 +1,58 @@
+# 실제 로그에서 발견된 버그 재현:
+# 1. 같은 종목이 서로 다른 이름으로 두 개 등록된 상태
+#    (반도체레버리지 640주 + KODEX반도체레버리지 116주)
+# 2. '수정'으로 '반도체레버리지'를 'KODEX반도체레버리지'로 rename
+# 3. 두 행이 같은 name/ticker를 갖게 되어 포트폴리오에 중복 발생
+# 4. 이후 매수/매도가 엉뚱한 행만 갱신해 현황이 꼬임
+#
+# 기대 동작: rename 후 자동 병합되어 단일 행(756주)로 남아야 함
+
+name: "수정 rename 충돌 → 자동 병합"
+description: |
+  이름/ticker가 다른 holding과 겹치게 수정하면 중복을 남기지 않고 병합해야 한다.
+
+setup:
+  ticker_map:
+    KODEX반도체레버리지: "494310.KS"
+  holdings:
+    - name: "반도체레버리지"
+      ticker: ""
+      sector: "반도체"
+      quantity: 640
+      avg_price: 69855
+      buy_thesis: "구버전 이름"
+    - name: "KODEX반도체레버리지"
+      ticker: "494310.KS"
+      sector: "반도체"
+      quantity: 116
+      avg_price: 59169
+      buy_thesis: "신버전 이름"
+
+steps:
+  # 1. 수정 시작
+  - send: "수정"
+    expect: "수정할 종목을 선택해주세요"
+
+  # 2. '반도체레버리지' 행 선택
+  - click: "edit_select:반도체레버리지"
+    expect: "현재 정보"
+
+  # 3. 'KODEX반도체레버리지'로 rename (ticker_map 캐시로 ticker 동일해짐)
+  - send: |
+      KODEX반도체레버리지
+      반도체
+      640주
+      69,855원
+      토큰사용은 메모리 수요
+    expect:
+      - "중복 1건을 병합했습니다"
+      - "756주"
+
+  # 4. 매도 시작 → 단일 병합된 행만 표시돼야 함
+  - send: "매도"
+    expect: "매도할 종목을 선택해주세요"
+
+  # 5. 병합된 수량 확인 (640 + 116 = 756)
+  - click: "sell_select:KODEX반도체레버리지"
+    expect: "756주 보유 중"
+    not_expect: "640주 보유 중"

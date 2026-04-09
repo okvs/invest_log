@@ -198,15 +198,49 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if new_ticker:
         h["ticker"] = new_ticker
 
+    # rename 후 다른 holding과 name/ticker가 겹치면 자동 병합
+    # (buy.py는 같은 ticker 자동 병합을 이미 하는데 edit은 빠져있어서 중복 행이 생겼음)
+    merge_indices = []
+    for idx, other in enumerate(holdings):
+        if idx == target_idx:
+            continue
+        same_ticker = bool(new_ticker) and other.get("ticker", "") == new_ticker
+        same_name = other.get("name", "") == new_name
+        if same_ticker or same_name:
+            merge_indices.append(idx)
+
+    merged_count = len(merge_indices)
+    if merged_count:
+        merged_qty = h["quantity"]
+        merged_total = h["total_invested"]
+        merged_tx_ids = list(h.get("transaction_ids", []))
+        for m_idx in merge_indices:
+            other = holdings[m_idx]
+            merged_qty += other.get("quantity", 0)
+            merged_total += other.get("total_invested", 0)
+            for tid in other.get("transaction_ids", []):
+                if tid not in merged_tx_ids:
+                    merged_tx_ids.append(tid)
+        h["quantity"] = merged_qty
+        h["total_invested"] = merged_total
+        h["avg_price"] = round(merged_total / merged_qty) if merged_qty > 0 else 0
+        h["transaction_ids"] = merged_tx_ids
+        # 뒤에서부터 제거해서 idx shift 방지
+        for m_idx in sorted(merge_indices, reverse=True):
+            holdings.pop(m_idx)
+
     save_holdings(holdings)
 
     ticker_display = f" [{new_ticker}]" if new_ticker else ""
-    await update.message.reply_text(
+    msg = (
         f"수정 완료!\n"
         f"{new_name}{ticker_display} ({new_sector}) "
-        f"{new_qty}주 x {new_price:,.0f}원 = {new_price * new_qty:,.0f}원\n"
+        f"{h['quantity']}주 x {h['avg_price']:,.0f}원 = {h['total_invested']:,.0f}원\n"
         f'근거: "{new_thesis}"'
     )
+    if merged_count:
+        msg += f"\n\n중복 {merged_count}건을 병합했습니다."
+    await update.message.reply_text(msg)
     return ConversationHandler.END
 
 
