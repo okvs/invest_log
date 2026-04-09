@@ -399,6 +399,8 @@ def sell_conversation() -> ConversationHandler:
                 CallbackQueryHandler(
                     _select_holding, pattern=f"^{SELL_SELECT_PREFIX}"
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             INPUT: [
                 MessageHandler(other_cmd, _cancel),
@@ -407,12 +409,16 @@ def sell_conversation() -> ConversationHandler:
             RETRO_ASK: [
                 CallbackQueryHandler(_start_retro, pattern=f"^{START_RETRO}$"),
                 CallbackQueryHandler(_skip_retro, pattern=f"^{SKIP_RETRO}$"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_THESIS: [
                 CallbackQueryHandler(
                     _retro_thesis_eval,
                     pattern=f"^({THESIS_CORRECT}|{THESIS_WRONG}|{THESIS_PARTIAL})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_WELL: [
                 MessageHandler(other_cmd, _cancel),
@@ -428,6 +434,8 @@ def sell_conversation() -> ConversationHandler:
                     _retro_avoidable,
                     pattern=f"^({AVOIDABLE_YES}|{AVOIDABLE_NO}|{AVOIDABLE_UNKNOWN})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_LESSONS: [
                 MessageHandler(other_cmd, _cancel),
@@ -436,6 +444,7 @@ def sell_conversation() -> ConversationHandler:
             ],
         },
         fallbacks=[
+            MessageHandler(other_cmd, _cancel),
             CommandHandler("cancel", _cancel),
         ],
         name="sell",

@@ -217,8 +217,15 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+def _other_command_filter() -> filters.BaseFilter:
+    """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
+    return filters.Regex(r"^(매도|매수|현황|도움말|수정)$") | filters.COMMAND
+
+
 def broker_conversation() -> ConversationHandler:
     """증권사 체결 메시지 ConversationHandler."""
+    other_cmd = _other_command_filter()
+
     return ConversationHandler(
         entry_points=[
             MessageHandler(
@@ -230,12 +237,15 @@ def broker_conversation() -> ConversationHandler:
         ],
         states={
             SELL_REASON: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _sell_reason),
             ],
             BUY_SECTOR: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _buy_sector),
             ],
             BUY_THESIS: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _buy_thesis),
             ],
             BROKER_EXISTING_CONFIRM: [
@@ -243,21 +253,29 @@ def broker_conversation() -> ConversationHandler:
                     _broker_existing_confirm,
                     pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_ASK: [
                 CallbackQueryHandler(_start_retro, pattern=f"^{START_RETRO}$"),
                 CallbackQueryHandler(_skip_retro, pattern=f"^{SKIP_RETRO}$"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_THESIS: [
                 CallbackQueryHandler(
                     _retro_thesis_eval,
                     pattern=f"^({THESIS_CORRECT}|{THESIS_WRONG}|{THESIS_PARTIAL})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_WELL: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_well),
             ],
             RETRO_REGRETS: [
+                MessageHandler(other_cmd, _cancel),
                 CommandHandler("skip", _retro_regrets_skip),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_regrets),
             ],
@@ -266,13 +284,19 @@ def broker_conversation() -> ConversationHandler:
                     _retro_avoidable,
                     pattern=f"^({AVOIDABLE_YES}|{AVOIDABLE_NO}|{AVOIDABLE_UNKNOWN})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             RETRO_LESSONS: [
+                MessageHandler(other_cmd, _cancel),
                 CommandHandler("skip", _retro_lessons_skip),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_lessons),
             ],
         },
-        fallbacks=[CommandHandler("cancel", _cancel)],
+        fallbacks=[
+            MessageHandler(other_cmd, _cancel),
+            CommandHandler("cancel", _cancel),
+        ],
         name="broker",
         allow_reentry=True,
         conversation_timeout=300,

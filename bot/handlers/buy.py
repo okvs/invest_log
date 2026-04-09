@@ -427,12 +427,16 @@ def buy_conversation() -> ConversationHandler:
             ],
             PICK_STOCK: [
                 CallbackQueryHandler(_pick_stock, pattern=f"^{BUY_STOCK_PREFIX}"),
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _abort),
             ],
             EXISTING_CONFIRM: [
                 CallbackQueryHandler(
                     _existing_confirm,
                     pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
                 ),
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _abort),
             ],
             SECTOR_INPUT: [
                 MessageHandler(other_cmd, _abort),
@@ -444,6 +448,7 @@ def buy_conversation() -> ConversationHandler:
             ],
         },
         fallbacks=[
+            MessageHandler(other_cmd, _abort),
             CommandHandler("cancel", _abort),
         ],
         name="buy",

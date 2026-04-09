@@ -210,8 +210,15 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 
+def _other_command_filter() -> filters.BaseFilter:
+    """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
+    return filters.Regex(r"^(매도|매수|현황|도움말|수정)$") | filters.COMMAND
+
+
 def edit_conversation() -> ConversationHandler:
     """수정 ConversationHandler를 생성하여 반환."""
+    other_cmd = _other_command_filter()
+
     return ConversationHandler(
         entry_points=[
             CommandHandler("edit", _start),
@@ -222,12 +229,18 @@ def edit_conversation() -> ConversationHandler:
                 CallbackQueryHandler(
                     _select_holding, pattern=f"^{EDIT_SELECT_PREFIX}"
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             INPUT: [
+                MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_edit),
             ],
         },
-        fallbacks=[CommandHandler("cancel", _cancel)],
+        fallbacks=[
+            MessageHandler(other_cmd, _cancel),
+            CommandHandler("cancel", _cancel),
+        ],
         name="edit",
         allow_reentry=True,
         conversation_timeout=300,
