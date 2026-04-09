@@ -414,7 +414,10 @@ def buy_conversation() -> ConversationHandler:
             MessageHandler(filters.Regex(r"^매수$"), _start),
         ],
         states={
-            INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input)],
+            INPUT: [
+                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_input),
+            ],
             PICK_STOCK: [
                 CallbackQueryHandler(_pick_stock, pattern=f"^{BUY_STOCK_PREFIX}"),
             ],
@@ -425,16 +428,17 @@ def buy_conversation() -> ConversationHandler:
                 ),
             ],
             SECTOR_INPUT: [
+                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _sector_input),
             ],
             THESIS_INPUT: [
+                MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", _cancel_fallback),
             CommandHandler("sell", _exit_to_sell),
-            MessageHandler(filters.Regex(r"^매도$"), _exit_to_sell),
         ],
         name="buy",
         allow_reentry=True,
