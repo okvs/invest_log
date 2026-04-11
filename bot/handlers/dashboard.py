@@ -1,7 +1,10 @@
 import asyncio
 import io
+import json
 import logging
+import os
 from collections import defaultdict
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -198,6 +201,56 @@ def _merge_duplicate_holdings(holdings: list[dict]) -> tuple[list[dict], bool]:
     return holdings, changed
 
 
+# Claude 포트폴리오 경로
+CLAUDE_DATA_DIR = Path(os.environ.get(
+    "STOCKS_BATTLE_DIR",
+    str(Path(__file__).resolve().parent.parent.parent.parent / "stocks_battle")
+)) / "data"
+
+
+def _load_claude_holdings() -> list[dict]:
+    """stocks_battle/data/portfolio.json에서 Claude 보유종목 로드."""
+    fp = CLAUDE_DATA_DIR / "portfolio.json"
+    if not fp.exists():
+        return []
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            return json.load(f).get("holdings", [])
+    except Exception:
+        logger.warning("Claude 포트폴리오 로드 실패", exc_info=True)
+        return []
+
+
+def _load_claude_account() -> tuple[float, float] | None:
+    """Claude 계좌 정보 로드. (initial_capital, cash) 반환."""
+    account_fp = CLAUDE_DATA_DIR / "account.json"
+    txn_fp = CLAUDE_DATA_DIR / "transactions.json"
+    if not account_fp.exists():
+        return None
+    try:
+        with open(account_fp, "r", encoding="utf-8") as f:
+            account = json.load(f)
+        initial = account.get("initial_capital", 200_000_000)
+
+        transactions = []
+        if txn_fp.exists():
+            with open(txn_fp, "r", encoding="utf-8") as f:
+                transactions = json.load(f).get("transactions", [])
+
+        cash = initial
+        for txn in transactions:
+            amount = txn.get("total_amount", 0)
+            if txn.get("type") == "buy":
+                cash -= amount
+            elif txn.get("type") == "sell":
+                cash += amount
+
+        return initial, cash
+    except Exception:
+        logger.warning("Claude 계좌 로드 실패", exc_info=True)
+        return None
+
+
 async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """보유 종목 현황 대시보드를 전송한다."""
     holdings = load_holdings()
@@ -211,17 +264,28 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not active:
         await update.message.reply_text("보유 종목이 없습니다.")
-        return
+    else:
+        # ticker 없는 종목 자동 보정
+        filled = await _backfill_missing_tickers(holdings)
+        if filled:
+            await update.message.reply_text(
+                "종목코드 자동 보정:\n" + "\n".join(f"  {n} → {next(h['ticker'] for h in holdings if h['name'] == n)}" for n in filled)
+            )
+            holdings = load_holdings()
 
-    # ticker 없는 종목 자동 보정
-    filled = await _backfill_missing_tickers(holdings)
-    if filled:
-        await update.message.reply_text(
-            "종목코드 자동 보정:\n" + "\n".join(f"  {n} → {next(h['ticker'] for h in holdings if h['name'] == n)}" for n in filled)
+        # 내 HTML 리포트 전송
+        html_file = build_html_report(holdings)
+        await update.message.reply_document(document=html_file, caption="내 포트폴리오")
+
+    # Claude 포트폴리오 전송
+    claude_account = _load_claude_account()
+    if claude_account is not None:
+        initial_capital, cash = claude_account
+        claude_holdings = _load_claude_holdings()
+        claude_html = build_html_report(
+            claude_holdings,
+            title="Claude 투자 현황",
+            initial_capital=initial_capital,
+            show_cash=True,
         )
-        # 보정된 데이터로 다시 로드
-        holdings = load_holdings()
-
-    # HTML 리포트 전송
-    html_file = build_html_report(holdings)
-    await update.message.reply_document(document=html_file, caption="상세 리포트 (브라우저에서 열기)")
+        await update.message.reply_document(document=claude_html, caption="Claude 포트폴리오")

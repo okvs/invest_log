@@ -14,8 +14,20 @@ def _format_man(n: float) -> str:
     return f"{man:,}만"
 
 
-def build_html_report(holdings: list[dict]) -> io.BytesIO:
-    """보유 종목 현황을 HTML 파일로 생성."""
+def build_html_report(
+    holdings: list[dict],
+    title: str = "투자 현황",
+    initial_capital: float | None = None,
+    show_cash: bool = False,
+) -> io.BytesIO:
+    """보유 종목 현황을 HTML 파일로 생성.
+
+    Args:
+        holdings: 보유 종목 리스트
+        title: HTML 헤더 제목
+        initial_capital: 초기자본 (show_cash=True일 때 사용)
+        show_cash: True면 잔여현금 카드를 추가로 표시
+    """
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
     # 현재가 조회
@@ -133,12 +145,25 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
     pnl_class = "profit" if total_pnl >= 0 else "loss"
     pnl_sign = "+" if total_pnl >= 0 else ""
 
+    # 현금 카드 계산 (show_cash 여부와 무관하게 변수 정의)
+    cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
+    total_asset = cash_remaining + total_eval if initial_capital is not None else total_eval
+    total_return = (total_asset - initial_capital) if initial_capital is not None else total_pnl
+    total_return_pct = (total_return / initial_capital * 100) if initial_capital else total_pnl_pct
+    return_class = "profit" if total_return >= 0 else "loss"
+    return_sign = "+" if total_return >= 0 else ""
+
+    # 배지 HTML (Claude 리포트 구분용)
+    badge_html = ""
+    if show_cash:
+        badge_html = '<div class="badge" style="display:inline-block;background:#4A90D9;color:#fff;font-size:11px;padding:3px 10px;border-radius:12px;margin-top:6px;letter-spacing:1px;">AI vs Human Battle</div>'
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>투자 현황 — {now}</title>
+<title>{title} — {now}</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -149,14 +174,14 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
   .header .date {{ font-size:13px; color:#888; margin-top:4px; }}
 
   /* 요약 카드 */
-  .cards {{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:32px; max-width:600px; margin-left:auto; margin-right:auto; }}
+  .cards {{ display:grid; grid-template-columns:repeat({'4' if show_cash else '3'},1fr); gap:12px; margin-bottom:32px; max-width:{'800' if show_cash else '600'}px; margin-left:auto; margin-right:auto; }}
   .card {{ background:#1a1a24; border-radius:12px; padding:16px 12px; text-align:center; }}
   .card .label {{ font-size:11px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }}
   .card .value {{ font-size:18px; font-weight:700; }}
   .card .sub {{ font-size:12px; margin-top:4px; }}
-  @media (max-width: 480px) {{
-    .cards {{ grid-template-columns:1fr; max-width:100%; }}
-    .card .value {{ font-size:20px; }}
+  @media (max-width: 600px) {{
+    .cards {{ grid-template-columns:{'repeat(2,1fr)' if show_cash else '1fr'}; max-width:100%; }}
+    .card .value {{ font-size:{'16' if show_cash else '20'}px; }}
   }}
   .profit {{ color:#22c55e; }}
   .loss {{ color:#ef4444; }}
@@ -200,23 +225,22 @@ def build_html_report(holdings: list[dict]) -> io.BytesIO:
 </head>
 <body>
   <div class="header">
-    <h1>투자 현황</h1>
+    <h1>{title}</h1>
+    {badge_html}
     <div class="date">{now} 기준</div>
   </div>
 
   <div class="cards">
-    <div class="card">
-      <div class="label">총 투자금</div>
-      <div class="value">{format_number(int(total_invested))}원</div>
-    </div>
+    {"<div class='card'><div class='label'>초기자본</div><div class='value'>" + format_number(int(initial_capital)) + "원</div></div>" if show_cash and initial_capital else ""}
+    {"<div class='card'><div class='label'>잔여 현금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div></div>" if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
     <div class="card">
       <div class="label">총 평가금</div>
       <div class="value">{format_number(int(total_eval))}원</div>
     </div>
     <div class="card">
       <div class="label">총 수익</div>
-      <div class="value {pnl_class}">{pnl_sign}{format_number(int(total_pnl))}원</div>
-      <div class="sub {pnl_class}">{pnl_sign}{int(total_pnl_pct)}%</div>
+      <div class="value {return_class if show_cash else pnl_class}">{(return_sign + format_number(int(total_return)) + '원') if show_cash else (pnl_sign + format_number(int(total_pnl)) + '원')}</div>
+      <div class="sub {return_class if show_cash else pnl_class}">{(return_sign + f'{total_return_pct:.1f}%') if show_cash else (pnl_sign + f'{int(total_pnl_pct)}%')}</div>
     </div>
   </div>
 
@@ -285,6 +309,7 @@ document.querySelectorAll('th[data-key]').forEach(th => {{
 </html>"""
 
     buf = io.BytesIO(html.encode("utf-8"))
-    buf.name = f"portfolio_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
+    prefix = "claude_portfolio" if show_cash else "portfolio"
+    buf.name = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
     buf.seek(0)
     return buf
