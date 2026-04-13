@@ -37,7 +37,10 @@
       "Bash(.venv/bin/python3.12 -m py_compile models/portfolio.py)",
       "Bash(git reset:*)",
       "Bash(git pull:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(ls /Users/seung/.openclaw/workspace/invest_log/*.log)",
+      "Bash(ls:*)",
+      "Bash(python3:*)"
     ]
   }
 }

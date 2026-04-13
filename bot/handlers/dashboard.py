@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -207,6 +208,23 @@ CLAUDE_DATA_DIR = Path(os.environ.get(
     str(Path(__file__).resolve().parent.parent.parent.parent / "stocks_battle")
 )) / "data"
 
+# 리포트 저장 경로
+REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
+
+
+def _save_html_locally(html_buf: io.BytesIO, prefix: str) -> io.BytesIO:
+    """HTML BytesIO를 reports/에 저장하고, 텔레그램 전송용 새 BytesIO를 반환."""
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    data = html_buf.getvalue()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fp = REPORTS_DIR / f"{prefix}_{ts}.html"
+    fp.write_bytes(data)
+    logger.info("리포트 저장: %s", fp)
+
+    new_buf = io.BytesIO(data)
+    new_buf.name = fp.name
+    return new_buf
+
 
 def _load_claude_holdings() -> list[dict]:
     """stocks_battle/data/portfolio.json에서 Claude 보유종목 로드."""
@@ -275,6 +293,7 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         # 내 HTML 리포트 전송
         html_file = build_html_report(holdings)
+        html_file = _save_html_locally(html_file, "my_portfolio")
         await update.message.reply_document(document=html_file, caption="내 포트폴리오")
 
     # Claude 포트폴리오 전송
@@ -288,4 +307,5 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             initial_capital=initial_capital,
             show_cash=True,
         )
+        claude_html = _save_html_locally(claude_html, "claude_portfolio")
         await update.message.reply_document(document=claude_html, caption="Claude 포트폴리오")
