@@ -92,6 +92,7 @@ MARGIN_PREFIX = "margin:"
 MARGIN_CASH = "margin:100"
 MARGIN_60 = "margin:60"
 MARGIN_50 = "margin:50"
+MARGIN_45 = "margin:45"
 MARGIN_40 = "margin:40"
 
 
@@ -104,6 +105,9 @@ def margin_ratio_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("신용 60%", callback_data=MARGIN_60),
             InlineKeyboardButton("신용 50%", callback_data=MARGIN_50),
+        ],
+        [
+            InlineKeyboardButton("신용 45%", callback_data=MARGIN_45),
             InlineKeyboardButton("신용 40%", callback_data=MARGIN_40),
         ],
     ])
