@@ -73,6 +73,19 @@ def save_retrospectives(retrospectives: list[dict]) -> None:
     save(RETROSPECTIVES_FILE, {"retrospectives": retrospectives})
 
 
+ACCOUNT_FILE = "account.json"
+
+
+def load_account() -> dict:
+    """계좌 정보 로드. {initial_capital, cash}"""
+    return load(ACCOUNT_FILE)
+
+
+def save_account(data: dict) -> None:
+    """계좌 정보 저장."""
+    save(ACCOUNT_FILE, data)
+
+
 NICKNAME_MAP_FILE = "nickname_map.json"
 
 

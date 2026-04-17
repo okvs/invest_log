@@ -26,7 +26,9 @@ from bot.keyboards import (
     EDIT_SECTOR,
     EDIT_THESIS,
     KEEP_EXISTING,
+    MARGIN_PREFIX,
     existing_info_keyboard,
+    margin_ratio_keyboard,
     stock_search_keyboard,
 )
 from models.portfolio import Holding
@@ -38,10 +40,12 @@ from parsers.input_parser import (
     search_stocks,
 )
 from storage.json_store import (
+    load_account,
     load_holdings,
     load_nickname_map,
     load_ticker_map,
     load_transactions,
+    save_account,
     save_holdings,
     save_ticker_map,
     save_transactions,
@@ -55,6 +59,7 @@ PICK_STOCK = 1
 EXISTING_CONFIRM = 2
 SECTOR_INPUT = 3
 THESIS_INPUT = 4
+MARGIN_SELECT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -307,17 +312,44 @@ async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # ---------------------------------------------------------------------------
 
 async def _do_save(update, context, buy_input, *, is_callback=False) -> int:
-    """매수 정보를 저장하고 결과 메시지 전송."""
-    result_text = _process_and_save(buy_input)
+    """증거금비율 선택 질문. 계좌 미설정 시 바로 저장."""
+    account = load_account()
+    if not account.get("initial_capital"):
+        result_text = _process_and_save(buy_input)
+        if is_callback:
+            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
+            await query.edit_message_text(result_text)
+        else:
+            await update.message.reply_text(result_text)
+        return ConversationHandler.END
+
+    context.user_data["buy_input"] = buy_input
+    msg = "증거금비율을 선택해주세요."
     if is_callback:
         query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
-        await query.edit_message_text(result_text)
+        await query.edit_message_text(msg, reply_markup=margin_ratio_keyboard())
     else:
-        await update.message.reply_text(result_text)
+        await update.message.reply_text(msg, reply_markup=margin_ratio_keyboard())
+    return MARGIN_SELECT
+
+
+async def _margin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """증거금비율 선택 후 매수 저장."""
+    query = update.callback_query
+    await query.answer()
+
+    margin_ratio = int(query.data.removeprefix(MARGIN_PREFIX))
+    buy_input = context.user_data.pop("buy_input", None)
+    if buy_input is None:
+        await query.edit_message_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    result_text = _process_and_save(buy_input, margin_ratio=margin_ratio)
+    await query.edit_message_text(result_text)
     return ConversationHandler.END
 
 
-def _process_and_save(buy_input) -> str:
+def _process_and_save(buy_input, *, margin_ratio: int = 100) -> str:
     """매수 데이터를 처리하고 저장. 결과 텍스트 반환."""
     # 종목명 공백 제거
     buy_input.name = _strip_name(buy_input.name)
@@ -331,6 +363,7 @@ def _process_and_save(buy_input) -> str:
         total_amount=buy_input.price * buy_input.quantity,
         thesis=buy_input.thesis,
         research_notes=buy_input.research_notes,
+        margin_ratio=margin_ratio,
     )
 
     # 기존 종목 확인 (ticker 우선, 이름 fallback)
@@ -353,7 +386,7 @@ def _process_and_save(buy_input) -> str:
                 break
 
     if existing is not None:
-        existing.add_buy(buy_input.price, buy_input.quantity, tx.id)
+        existing.add_buy(buy_input.price, buy_input.quantity, tx.id, margin_ratio)
         if buy_input.ticker and not existing.ticker:
             existing.ticker = buy_input.ticker
         if buy_input.sector:
@@ -364,6 +397,8 @@ def _process_and_save(buy_input) -> str:
         existing.name = _strip_name(existing.name)
         holdings_data[existing_idx] = existing.to_dict()
     else:
+        buy_amount = buy_input.price * buy_input.quantity
+        credit_loan = buy_amount * (1 - margin_ratio / 100) if margin_ratio < 100 else 0.0
         holding = Holding(
             name=buy_input.name,
             ticker=buy_input.ticker,
@@ -371,7 +406,8 @@ def _process_and_save(buy_input) -> str:
             buy_date=datetime.now().strftime("%Y-%m-%d"),
             avg_price=buy_input.price,
             quantity=buy_input.quantity,
-            total_invested=buy_input.price * buy_input.quantity,
+            total_invested=buy_amount,
+            credit_loan=credit_loan,
             buy_thesis=buy_input.thesis,
             research_notes=buy_input.research_notes,
             transaction_ids=[tx.id],
@@ -390,6 +426,14 @@ def _process_and_save(buy_input) -> str:
     transactions = load_transactions()
     transactions.append(tx.to_dict())
     save_transactions(transactions)
+
+    # 예수금 차감
+    account = load_account()
+    if account.get("initial_capital"):
+        cash = account.get("cash", account["initial_capital"])
+        cash_deduct = tx.total_amount * (margin_ratio / 100)
+        account["cash"] = cash - cash_deduct
+        save_account(account)
 
     ticker_display = f" [{buy_input.ticker}]" if buy_input.ticker else ""
     return format_buy_result(
@@ -445,6 +489,11 @@ def buy_conversation() -> ConversationHandler:
             THESIS_INPUT: [
                 MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
+            ],
+            MARGIN_SELECT: [
+                CallbackQueryHandler(_margin_selected, pattern=f"^{MARGIN_PREFIX}"),
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _abort),
             ],
         },
         fallbacks=[

@@ -46,22 +46,25 @@ from bot.keyboards import (
     EDIT_SECTOR,
     EDIT_THESIS,
     KEEP_EXISTING,
+    MARGIN_PREFIX,
     SKIP_RETRO,
     START_RETRO,
     THESIS_CORRECT,
     THESIS_PARTIAL,
     THESIS_WRONG,
     existing_info_keyboard,
+    margin_ratio_keyboard,
     retro_ask_keyboard,
 )
 from parsers.input_parser import BuyInput, parse_broker_message, resolve_name
-from storage.json_store import load_nickname_map
+from storage.json_store import load_account, load_nickname_map
 
 # ConversationHandler states (10~부터 시작하여 buy/sell 상태값과 충돌 방지)
 SELL_REASON = 10
 BUY_SECTOR = 11
 BUY_THESIS = 12
 BROKER_EXISTING_CONFIRM = 13
+BROKER_MARGIN_SELECT = 14
 
 
 def _end_other_conversations(
@@ -162,6 +165,44 @@ async def _sell_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
 
 
+async def _broker_ask_margin(update, context, buy_input, *, is_callback=False) -> int:
+    """증거금비율 질문. 계좌 미설정 시 바로 저장."""
+    account = load_account()
+    if not account.get("initial_capital"):
+        result_text = _process_and_save(buy_input)
+        if is_callback:
+            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
+            await query.edit_message_text(result_text)
+        else:
+            await update.message.reply_text(result_text)
+        return ConversationHandler.END
+
+    context.user_data["buy_input"] = buy_input
+    msg = "증거금비율을 선택해주세요."
+    if is_callback:
+        query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
+        await query.edit_message_text(msg, reply_markup=margin_ratio_keyboard())
+    else:
+        await update.message.reply_text(msg, reply_markup=margin_ratio_keyboard())
+    return BROKER_MARGIN_SELECT
+
+
+async def _broker_margin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """증거금비율 선택 후 매수 저장."""
+    query = update.callback_query
+    await query.answer()
+
+    margin_ratio = int(query.data.removeprefix(MARGIN_PREFIX))
+    buy_input = context.user_data.pop("buy_input", None)
+    if buy_input is None:
+        await query.edit_message_text("세션이 만료되었습니다.")
+        return ConversationHandler.END
+
+    result_text = _process_and_save(buy_input, margin_ratio=margin_ratio)
+    await query.edit_message_text(result_text)
+    return ConversationHandler.END
+
+
 async def _broker_existing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """증권사 매수: 기존 보유 종목 섹터/근거 유지/수정."""
     query = update.callback_query
@@ -173,10 +214,7 @@ async def _broker_existing_confirm(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     if query.data == KEEP_EXISTING:
-        context.user_data.pop("buy_input", None)
-        result_text = _process_and_save(buy_input)
-        await query.edit_message_text(result_text)
-        return ConversationHandler.END
+        return await _broker_ask_margin(update, context, buy_input, is_callback=True)
     elif query.data == EDIT_SECTOR:
         await query.edit_message_text("새로운 섹터를 입력해주세요.")
         context.user_data["_broker_edit"] = "sector"
@@ -197,9 +235,7 @@ async def _buy_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         buy_input = context.user_data.pop("buy_input", None)
         if buy_input:
             buy_input.sector = sector
-            result_text = _process_and_save(buy_input)
-            await update.message.reply_text(result_text)
-            return ConversationHandler.END
+            return await _broker_ask_margin(update, context, buy_input)
 
     # 신규 종목
     context.user_data["broker_sector"] = sector
@@ -217,9 +253,7 @@ async def _buy_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         buy_input = context.user_data.pop("buy_input", None)
         if buy_input:
             buy_input.thesis = thesis
-            result_text = _process_and_save(buy_input)
-            await update.message.reply_text(result_text)
-            return ConversationHandler.END
+            return await _broker_ask_margin(update, context, buy_input)
 
     # 신규 종목
     msg = context.user_data.pop("broker_buy")
@@ -234,9 +268,7 @@ async def _buy_thesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         thesis=thesis,
     )
 
-    result_text = _process_and_save(buy_input)
-    await update.message.reply_text(result_text)
-    return ConversationHandler.END
+    return await _broker_ask_margin(update, context, buy_input)
 
 
 async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -283,6 +315,11 @@ def broker_conversation() -> ConversationHandler:
                     _broker_existing_confirm,
                     pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
                 ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
+            ],
+            BROKER_MARGIN_SELECT: [
+                CallbackQueryHandler(_broker_margin_selected, pattern=f"^{MARGIN_PREFIX}"),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],

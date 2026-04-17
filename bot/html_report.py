@@ -19,6 +19,7 @@ def build_html_report(
     title: str = "투자 현황",
     initial_capital: float | None = None,
     show_cash: bool = False,
+    cash_override: float | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -27,6 +28,7 @@ def build_html_report(
         title: HTML 헤더 제목
         initial_capital: 초기자본 (show_cash=True일 때 사용)
         show_cash: True면 잔여현금 카드를 추가로 표시
+        cash_override: 직접 관리하는 예수금 값 (None이면 initial_capital - total_invested로 계산)
     """
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
@@ -146,7 +148,10 @@ def build_html_report(
     pnl_sign = "+" if total_pnl >= 0 else ""
 
     # 현금 카드 계산 (show_cash 여부와 무관하게 변수 정의)
-    cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
+    if cash_override is not None:
+        cash_remaining = cash_override
+    else:
+        cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
     total_asset = cash_remaining + total_eval if initial_capital is not None else total_eval
     total_return = (total_asset - initial_capital) if initial_capital is not None else total_pnl
     total_return_pct = (total_return / initial_capital * 100) if initial_capital else total_pnl_pct

@@ -14,6 +14,7 @@ from telegram.ext import (
 
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
+from bot.handlers.cash import cash_conversation
 from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.edit import edit_conversation
 from bot.handlers.help import help_handler
@@ -53,6 +54,7 @@ async def start(update: Update, context) -> None:
         "매도 - 매도 기록 + 회고\n"
         "수정 - 보유 종목 수정\n"
         "현황 - 투자 현황\n"
+        "예수금 - 초기자본/예수금 설정\n"
         "닉네임 - 종목 닉네임 관리\n"
         "도움말 - 사용법"
     )
@@ -83,6 +85,7 @@ def main() -> None:
 
     # ConversationHandler — 증권사 메시지가 먼저 매칭되도록 순서 중요
     app.add_handler(broker_conversation())
+    app.add_handler(cash_conversation())
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
     app.add_handler(edit_conversation())

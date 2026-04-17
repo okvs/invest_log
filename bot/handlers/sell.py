@@ -37,10 +37,12 @@ from models.retrospective import Retrospective
 from models.transaction import Transaction
 from parsers.input_parser import parse_sell_input, resolve_name
 from storage.json_store import (
+    load_account,
     load_holdings,
     load_nickname_map,
     load_retrospectives,
     load_transactions,
+    save_account,
     save_holdings,
     save_retrospectives,
     save_transactions,
@@ -138,7 +140,7 @@ async def _process_sell(
 
     # Holding 업데이트
     holding = Holding.from_dict(holding_dict)
-    holding.remove_sell(quantity)
+    loan_repay = holding.remove_sell(quantity)
 
     new_holdings = []
     for h in holdings:
@@ -148,6 +150,13 @@ async def _process_sell(
         else:
             new_holdings.append(h)
     save_holdings(new_holdings)
+
+    # 예수금 가산 (매도금액 - 대출상환)
+    account = load_account()
+    if account.get("initial_capital"):
+        cash = account.get("cash", account["initial_capital"])
+        account["cash"] = cash + total - loan_repay
+        save_account(account)
 
     # Transaction 생성 및 저장
     tx = Transaction(

@@ -18,7 +18,7 @@ from telegram.ext import ContextTypes
 from bot.formatters import format_dashboard, fetch_current_prices, format_number, _resolve_tickers
 from bot.html_report import build_html_report
 from parsers.input_parser import search_stocks
-from storage.json_store import load_holdings, save_holdings, load_ticker_map, save_ticker_map
+from storage.json_store import load_account, load_holdings, save_holdings, load_ticker_map, save_ticker_map
 
 logger = logging.getLogger(__name__)
 
@@ -291,8 +291,16 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             holdings = load_holdings()
 
-        # 내 HTML 리포트 전송
-        html_file = build_html_report(holdings)
+        # 내 HTML 리포트 전송 (예수금 설정되어 있으면 표시)
+        account = load_account()
+        user_capital = account.get("initial_capital")
+        user_cash = account.get("cash")
+        html_file = build_html_report(
+            holdings,
+            initial_capital=user_capital,
+            show_cash=bool(user_capital),
+            cash_override=user_cash,
+        )
         html_file = _save_html_locally(html_file, "my_portfolio")
         await update.message.reply_document(document=html_file, caption="내 포트폴리오")
 

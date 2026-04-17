@@ -87,6 +87,28 @@ def existing_info_keyboard() -> InlineKeyboardMarkup:
 thesis_reuse_keyboard = existing_info_keyboard
 
 
+# --- 증거금비율 선택 ---
+MARGIN_PREFIX = "margin:"
+MARGIN_CASH = "margin:100"
+MARGIN_60 = "margin:60"
+MARGIN_50 = "margin:50"
+MARGIN_40 = "margin:40"
+
+
+def margin_ratio_keyboard() -> InlineKeyboardMarkup:
+    """매수 시 증거금비율 선택 키보드."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("현금 100%", callback_data=MARGIN_CASH),
+        ],
+        [
+            InlineKeyboardButton("신용 60%", callback_data=MARGIN_60),
+            InlineKeyboardButton("신용 50%", callback_data=MARGIN_50),
+            InlineKeyboardButton("신용 40%", callback_data=MARGIN_40),
+        ],
+    ])
+
+
 # --- 매도 종목 선택 ---
 SELL_SELECT_PREFIX = "sell_select:"
 
