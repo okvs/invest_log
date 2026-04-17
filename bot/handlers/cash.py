@@ -31,11 +31,12 @@ from storage.json_store import (
 logger = logging.getLogger(__name__)
 
 # ConversationHandler states (20~부터 시작)
-CAPITAL_INPUT = 20
-HOLDING_MARGIN = 21
+MODE_SELECT = 20
+CAPITAL_INPUT = 21
+HOLDING_MARGIN = 22
 
-RESET_CONFIRM = "cash_reset"
-CASH_CANCEL = "cash_cancel"
+CASH_MODE_CAPITAL = "cash_mode:capital"
+CASH_MODE_FULL = "cash_mode:full"
 
 
 async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -45,22 +46,45 @@ async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if account.get("initial_capital"):
         cash = account.get("cash", 0)
         capital = account["initial_capital"]
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("초기자본만 변경", callback_data=CASH_MODE_CAPITAL)],
+            [InlineKeyboardButton("전체 재설정 (증거금비율 포함)", callback_data=CASH_MODE_FULL)],
+        ])
         await update.message.reply_text(
             f"초기자본: {format_number(capital)}원\n"
             f"현재 예수금: {format_number(cash)}원\n\n"
-            "초기자본을 재설정하려면 금액을 입력해주세요.\n"
-            "취소하려면 /cancel 을 입력해주세요."
+            "변경할 항목을 선택해주세요.",
+            reply_markup=keyboard,
         )
+        return MODE_SELECT
     else:
         await update.message.reply_text(
             "초기자본을 입력해주세요.\n"
             "(예: 1억 → 100000000, 5000만원 → 50000000)"
         )
+        context.user_data["cash_full_reset"] = True
+        return CAPITAL_INPUT
+
+
+async def _mode_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """초기자본만 변경 vs 전체 재설정 선택."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == CASH_MODE_CAPITAL:
+        context.user_data["cash_full_reset"] = False
+    else:
+        context.user_data["cash_full_reset"] = True
+
+    await query.edit_message_text(
+        "초기자본을 입력해주세요.\n"
+        "(예: 1억 → 100000000, 5000만원 → 50000000)"
+    )
     return CAPITAL_INPUT
 
 
 async def _capital_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """초기자본 입력 처리 → 기존 보유종목 증거금비율 순차 질문."""
+    """초기자본 입력 처리."""
     import re
     text = update.message.text.strip()
     cleaned = re.sub(r"[^\d.]", "", text.replace(",", ""))
@@ -73,6 +97,24 @@ async def _capital_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("0보다 큰 금액을 입력해주세요.")
         return CAPITAL_INPUT
 
+    full_reset = context.user_data.pop("cash_full_reset", True)
+
+    # 초기자본만 변경: 기존 credit_loan 기반으로 예수금 재계산
+    if not full_reset:
+        holdings = load_holdings()
+        total_cash_spent = sum(
+            h.get("total_invested", 0) - h.get("credit_loan", 0)
+            for h in holdings if h.get("quantity", 0) > 0
+        )
+        cash = capital - total_cash_spent
+        save_account({"initial_capital": capital, "cash": cash})
+        await update.message.reply_text(
+            f"초기자본 변경 완료!\n\n"
+            f"초기자본: {format_number(capital)}원\n"
+            f"예수금: {format_number(cash)}원"
+        )
+        return ConversationHandler.END
+
     context.user_data["cash_capital"] = capital
 
     # 기존 보유종목 확인
@@ -80,7 +122,6 @@ async def _capital_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
     if not active:
-        # 보유종목 없으면 바로 저장
         account = {"initial_capital": capital, "cash": capital}
         save_account(account)
         await update.message.reply_text(
@@ -166,7 +207,7 @@ async def _holding_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """대화 취소."""
-    for key in ["cash_capital", "cash_holdings", "cash_idx", "cash_margins"]:
+    for key in ["cash_capital", "cash_holdings", "cash_idx", "cash_margins", "cash_full_reset"]:
         context.user_data.pop(key, None)
     await update.message.reply_text("예수금 설정이 취소되었습니다.")
     return ConversationHandler.END
@@ -186,6 +227,11 @@ def cash_conversation() -> ConversationHandler:
             MessageHandler(filters.Regex(r"^예수금$"), _start),
         ],
         states={
+            MODE_SELECT: [
+                CallbackQueryHandler(_mode_select, pattern=r"^cash_mode:"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
+            ],
             CAPITAL_INPUT: [
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _capital_input),
