@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-04-21
+### 신용거래 도입 후 현황 리포트 상단 총수익과 테이블 손익합 불일치
+- **문제**: `/현황` HTML 리포트에서 상단 "총 수익" 카드 값과 보유종목 테이블의 수익 컬럼 합계가 맞지 않음. 신용거래 + 예수금 설정 기능을 도입한 이후 발생.
+- **원인**: `bot/html_report.py`의 `show_cash` 분기에서 `total_return = (cash_remaining + total_eval) - initial_capital`로 계산. 그런데 신용거래 시 `cash_override`로 넘어오는 `cash_remaining`은 **신용대출을 차감한 실제 예수금**이고, `total_invested`는 여전히 **신용대출 포함 전체 포지션 가치**. 두 변수의 기준이 달라서 `cash_remaining + total_eval`이 `sum(credit_loan)` 만큼 실제 순자산보다 크게 잡힘 → 상단 수익이 대출금만큼 과대계상.
+- **해결**: 상단 카드도 테이블과 동일하게 `total_pnl = total_eval - total_invested`를 사용하도록 통일. 이 값은 신용대출 유무와 무관하게 항상 정확(각 행의 `pnl = eval - invested` 합과 수학적으로 동일).
+- **교훈**:
+  1. 동일한 "수익"이라는 수치가 UI 상에서 두 군데(요약 카드/상세 테이블) 이상 표시될 때는 **같은 원천 값에서 파생**시켜야 한다. 서로 다른 공식을 쓰면 한 쪽이 바뀔 때 반드시 드리프트한다.
+  2. 신용/레버리지를 다루는 계산에서 `invested`/`cash`/`asset`이 각각 "대출 포함"인지 "대출 차감 후"인지 변수별 기준을 명확히 문서화하거나 네이밍에 반영해야 함. 여기선 `total_invested`(대출 포함) vs `cash_remaining`(대출 차감) 혼합이 원인.
+  3. 기능을 **확장**(신용거래 도입)할 때 기존 수식이 "무대출 가정"으로 수렴해 우연히 맞던 경우가 있다 — 확장 후 항등식을 재검증해야 한다. (기존: `cash_remaining = initial_capital - total_invested` → `total_asset - initial_capital = total_pnl`, 신용 도입 후에는 이 항등식이 깨짐)
+
 ## 2026-04-20
 ### 현황 조회 시 yfinance가 한국 종목 현재가를 반환하지 않음
 - **문제**: `/현황` 실행 시 한국 종목(`.KS`/`.KQ`)의 현재가가 비어서 평가금/수익률이 표시되지 않음. 로그에 `possibly delisted; no price data found (period=1d)` 에러.

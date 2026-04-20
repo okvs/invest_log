@@ -152,9 +152,9 @@ def build_html_report(
         cash_remaining = cash_override
     else:
         cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
-    total_asset = cash_remaining + total_eval if initial_capital is not None else total_eval
-    total_return = (total_asset - initial_capital) if initial_capital is not None else total_pnl
-    total_return_pct = (total_return / initial_capital * 100) if initial_capital else total_pnl_pct
+    # 총 수익은 테이블 손익 합(total_pnl) 기준 — 신용대출을 total_invested에 포함시켜도 일치함
+    total_return = total_pnl
+    total_return_pct = (total_pnl / initial_capital * 100) if initial_capital else total_pnl_pct
     return_class = "profit" if total_return >= 0 else "loss"
     return_sign = "+" if total_return >= 0 else ""
 
