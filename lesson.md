@@ -1,5 +1,15 @@
 # Lessons Learned
 
+## 2026-04-20
+### 현황 조회 시 yfinance가 한국 종목 현재가를 반환하지 않음
+- **문제**: `/현황` 실행 시 한국 종목(`.KS`/`.KQ`)의 현재가가 비어서 평가금/수익률이 표시되지 않음. 로그에 `possibly delisted; no price data found (period=1d)` 에러.
+- **원인**: `bot/formatters.py`의 `fetch_current_prices`가 `yf.download(tickers, period="1d")`를 사용. 이 API는 "최근 1거래일 **일봉**"을 요청하므로, 당일 일봉이 yfinance에 아직 반영되지 않은 시점(한국 장중/장 직후)에는 한국 종목에 대해 빈 DataFrame을 반환. 미국 종목만 금요일 종가가 잡혀 정합성이 깨짐.
+- **해결**: 종목별 `yf.Ticker(sym).fast_info.last_price`로 교체. 이 속성은 장중이면 체결가, 마감 후면 당일 종가를 즉시 반환. 단, `fast_info['last_price']`처럼 dict 스타일이 아닌 **속성 접근**(`.last_price`)을 써야 정상값이 나옴 — dict 스타일은 None을 반환함.
+- **교훈**:
+  1. yfinance에서 "현재가"는 `download(period='1d')`가 아니라 `Ticker.fast_info.last_price`로 조회해야 함. `download`는 일봉(historical bar) 전용.
+  2. `fast_info`는 dict-like지만 `.last_price`/`.previous_close` 등 **속성 접근이 공식 인터페이스**. `.get('last_price')`나 `['last_price']`는 일부 키에서 None을 반환할 수 있음.
+  3. 한국 주식은 당일 일봉 반영이 미국보다 느릴 수 있으니, 다중 마켓 포트폴리오에서 period='1d'는 특히 위험.
+
 ## 2026-04-09
 ### 수정 rename 충돌로 인한 중복 holding 생성
 - **문제**: 같은 종목이 서로 다른 이름으로 두 개 등록된 상태(`반도체레버리지` 640주, `KODEX반도체레버리지` 116주)에서 `수정`으로 한 쪽을 다른 쪽과 같은 이름으로 rename하자 포트폴리오에 **같은 name/ticker를 가진 두 행**이 남음. 이후 매수가 첫 매칭 행만 갱신하고 매도/현황 조회는 두 행을 합쳐 보여주니 수량이 실제보다 많게 나오고 정합성이 깨짐.

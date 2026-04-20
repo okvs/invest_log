@@ -19,32 +19,15 @@ def format_number(n: float) -> str:
 
 
 def fetch_current_prices(tickers: list[str]) -> dict[str, float]:
-    """yfinance로 현재가 일괄 조회."""
+    """yfinance fast_info로 종목별 현재가 조회 (장중 체결가/마감 후 종가)."""
     prices = {}
-    if not tickers:
-        return prices
-    try:
-        data = yf.download(tickers, period="1d", progress=False)
-        if data.empty:
-            return prices
-        close = data["Close"]
-        if len(tickers) == 1:
-            val = close.iloc[-1]
-            # 단일 종목: Series가 반환될 수 있음
-            if hasattr(val, 'item'):
-                val = val.item()
-            if val == val:  # NaN 체크
-                prices[tickers[0]] = float(val)
-        else:
-            for t in tickers:
-                if t in close.columns:
-                    val = close[t].iloc[-1]
-                    if hasattr(val, 'item'):
-                        val = val.item()
-                    if val == val:
-                        prices[t] = float(val)
-    except Exception as e:
-        logger.warning(f"현재가 조회 실패: {e}")
+    for t in tickers:
+        try:
+            price = yf.Ticker(t).fast_info.last_price
+            if price is not None and price == price:
+                prices[t] = float(price)
+        except Exception as e:
+            logger.warning(f"{t} 현재가 조회 실패: {e}")
     return prices
 
 
