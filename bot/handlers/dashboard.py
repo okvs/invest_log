@@ -203,10 +203,12 @@ def _merge_duplicate_holdings(holdings: list[dict]) -> tuple[list[dict], bool]:
 
 
 # Claude 포트폴리오 경로
-CLAUDE_DATA_DIR = Path(os.environ.get(
+_STOCKS_BATTLE_ROOT = Path(os.environ.get(
     "STOCKS_BATTLE_DIR",
     str(Path(__file__).resolve().parent.parent.parent.parent / "stocks_battle")
-)) / "data"
+))
+CLAUDE_DATA_DIR = _STOCKS_BATTLE_ROOT / "data"
+CLAUDE_KIS_DATA_DIR = _STOCKS_BATTLE_ROOT / "data_kis"
 
 # 리포트 저장 경로
 REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
@@ -226,23 +228,23 @@ def _save_html_locally(html_buf: io.BytesIO, prefix: str) -> io.BytesIO:
     return new_buf
 
 
-def _load_claude_holdings() -> list[dict]:
-    """stocks_battle/data/portfolio.json에서 Claude 보유종목 로드."""
-    fp = CLAUDE_DATA_DIR / "portfolio.json"
+def _load_claude_holdings(data_dir: Path = CLAUDE_DATA_DIR) -> list[dict]:
+    """stocks_battle/<data_dir>/portfolio.json에서 Claude 보유종목 로드."""
+    fp = data_dir / "portfolio.json"
     if not fp.exists():
         return []
     try:
         with open(fp, "r", encoding="utf-8") as f:
             return json.load(f).get("holdings", [])
     except Exception:
-        logger.warning("Claude 포트폴리오 로드 실패", exc_info=True)
+        logger.warning("Claude 포트폴리오 로드 실패 (%s)", data_dir, exc_info=True)
         return []
 
 
-def _load_claude_account() -> tuple[float, float] | None:
+def _load_claude_account(data_dir: Path = CLAUDE_DATA_DIR) -> tuple[float, float] | None:
     """Claude 계좌 정보 로드. (initial_capital, cash) 반환."""
-    account_fp = CLAUDE_DATA_DIR / "account.json"
-    txn_fp = CLAUDE_DATA_DIR / "transactions.json"
+    account_fp = data_dir / "account.json"
+    txn_fp = data_dir / "transactions.json"
     if not account_fp.exists():
         return None
     try:
@@ -265,7 +267,7 @@ def _load_claude_account() -> tuple[float, float] | None:
 
         return initial, cash
     except Exception:
-        logger.warning("Claude 계좌 로드 실패", exc_info=True)
+        logger.warning("Claude 계좌 로드 실패 (%s)", data_dir, exc_info=True)
         return None
 
 
@@ -317,3 +319,20 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         claude_html = _save_html_locally(claude_html, "claude_portfolio")
         await update.message.reply_document(document=claude_html, caption="Claude 포트폴리오")
+
+    # Claude KIS 모의투자 포트폴리오 전송
+    claude_kis_account = _load_claude_account(CLAUDE_KIS_DATA_DIR)
+    if claude_kis_account is not None:
+        kis_initial, kis_cash = claude_kis_account
+        claude_kis_holdings = _load_claude_holdings(CLAUDE_KIS_DATA_DIR)
+        claude_kis_html = build_html_report(
+            claude_kis_holdings,
+            title="Claude KIS 모의투자 현황",
+            initial_capital=kis_initial,
+            show_cash=True,
+        )
+        claude_kis_html = _save_html_locally(claude_kis_html, "claude_kis_portfolio")
+        await update.message.reply_document(
+            document=claude_kis_html,
+            caption="Claude KIS 모의투자 포트폴리오",
+        )

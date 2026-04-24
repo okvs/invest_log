@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 현황 명령에 Claude KIS 모의투자 포트폴리오 HTML 추가 (2026-04-24) — stocks_battle/data_kis/ 로드, 3개 HTML(내/Claude/Claude-KIS) 전송
 - [x] 현황 리포트 상단 총수익과 테이블 손익합 일치 (2026-04-21) — 신용대출 도입 후 깨진 항등식을 `total_pnl` 기반으로 통일
 - [x] 현황 조회 현재가 yfinance로 정상 동작 (2026-04-20) — `fast_info.last_price`로 교체
 
