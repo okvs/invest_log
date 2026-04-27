@@ -16,45 +16,19 @@ from telegram.ext import (
 )
 
 from bot.formatters import format_buy_result, format_sell_result
-from bot.handlers.sell import (
-    _process_sell,
-    _skip_retro,
-    _start_retro,
-    _retro_thesis_eval,
-    _retro_well,
-    _retro_regrets,
-    _retro_regrets_skip,
-    _retro_avoidable,
-    _retro_lessons,
-    _retro_lessons_skip,
-    RETRO_ASK,
-    RETRO_THESIS,
-    RETRO_WELL,
-    RETRO_REGRETS,
-    RETRO_AVOIDABLE,
-    RETRO_LESSONS,
-)
+from bot.handlers.sell import _process_sell
 from bot.handlers.buy import (
     _process_and_save,
     _find_existing_holding,
     _strip_name,
 )
 from bot.keyboards import (
-    AVOIDABLE_NO,
-    AVOIDABLE_UNKNOWN,
-    AVOIDABLE_YES,
     EDIT_SECTOR,
     EDIT_THESIS,
     KEEP_EXISTING,
     MARGIN_PREFIX,
-    SKIP_RETRO,
-    START_RETRO,
-    THESIS_CORRECT,
-    THESIS_PARTIAL,
-    THESIS_WRONG,
     existing_info_keyboard,
     margin_ratio_keyboard,
-    retro_ask_keyboard,
 )
 from parsers.input_parser import BuyInput, parse_broker_message, resolve_name
 from storage.json_store import load_account, load_nickname_map
@@ -281,7 +255,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _other_command_filter() -> filters.BaseFilter:
     """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
-    return filters.Regex(r"^(매도|매수|현황|도움말|수정)$") | filters.COMMAND
+    return filters.Regex(r"^(매도|매수|현황|도움말|수정|회고)$") | filters.COMMAND
 
 
 def broker_conversation() -> ConversationHandler:
@@ -322,42 +296,6 @@ def broker_conversation() -> ConversationHandler:
                 CallbackQueryHandler(_broker_margin_selected, pattern=f"^{MARGIN_PREFIX}"),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-            RETRO_ASK: [
-                CallbackQueryHandler(_start_retro, pattern=f"^{START_RETRO}$"),
-                CallbackQueryHandler(_skip_retro, pattern=f"^{SKIP_RETRO}$"),
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-            RETRO_THESIS: [
-                CallbackQueryHandler(
-                    _retro_thesis_eval,
-                    pattern=f"^({THESIS_CORRECT}|{THESIS_WRONG}|{THESIS_PARTIAL})$",
-                ),
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-            RETRO_WELL: [
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_well),
-            ],
-            RETRO_REGRETS: [
-                MessageHandler(other_cmd, _cancel),
-                CommandHandler("skip", _retro_regrets_skip),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_regrets),
-            ],
-            RETRO_AVOIDABLE: [
-                CallbackQueryHandler(
-                    _retro_avoidable,
-                    pattern=f"^({AVOIDABLE_YES}|{AVOIDABLE_NO}|{AVOIDABLE_UNKNOWN})$",
-                ),
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-            RETRO_LESSONS: [
-                MessageHandler(other_cmd, _cancel),
-                CommandHandler("skip", _retro_lessons_skip),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _retro_lessons),
             ],
         },
         fallbacks=[

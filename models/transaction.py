@@ -22,6 +22,7 @@ class Transaction:
     profit_loss_pct: float = 0.0
     sell_reason: str = ""
     holding_id: str = ""
+    buy_thesis: str = ""  # sell 시점의 원래 매수 근거 스냅샷 (회고에 사용)
     retrospective_id: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
@@ -45,6 +46,7 @@ class Transaction:
             d["profit_loss_pct"] = self.profit_loss_pct
             d["sell_reason"] = self.sell_reason
             d["holding_id"] = self.holding_id
+            d["buy_thesis"] = self.buy_thesis
             d["retrospective_id"] = self.retrospective_id
         return d
 
@@ -66,5 +68,6 @@ class Transaction:
             profit_loss_pct=data.get("profit_loss_pct", 0.0),
             sell_reason=data.get("sell_reason", ""),
             holding_id=data.get("holding_id", ""),
+            buy_thesis=data.get("buy_thesis", ""),
             retrospective_id=data.get("retrospective_id", ""),
         )

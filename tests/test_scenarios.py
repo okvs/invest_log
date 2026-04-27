@@ -18,6 +18,7 @@ import storage.json_store as store
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.edit import edit_conversation
+from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
 from storage.json_store import save_holdings, save_ticker_map
 
@@ -223,6 +224,7 @@ class ScenarioRunner:
         app.add_handler(broker_conversation())
         app.add_handler(buy_conversation())
         app.add_handler(sell_conversation())
+        app.add_handler(retro_conversation())
         app.add_handler(edit_conversation())
 
         await app.initialize()

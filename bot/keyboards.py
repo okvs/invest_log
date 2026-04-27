@@ -16,18 +16,34 @@ def buy_confirm_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# --- 회고 시작 여부 ---
-START_RETRO = "start_retro"
-SKIP_RETRO = "skip_retro"
+# --- 회고 대상 매도 선택 ---
+RETRO_SELECT_PREFIX = "retro_select:"
 
 
-def retro_ask_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("회고 시작", callback_data=START_RETRO),
-            InlineKeyboardButton("나중에", callback_data=SKIP_RETRO),
-        ]
-    ])
+def retro_select_keyboard(transactions: list[dict]) -> InlineKeyboardMarkup:
+    """회고할 매도 거래를 선택할 수 있는 인라인 키보드 생성.
+
+    각 카드: 종목명 | 수량주 | 손익(±%) | 날짜
+    callback_data: retro_select:<transaction_id>
+    """
+    buttons = []
+    for tx in transactions:
+        name = tx.get("name", "")
+        qty = tx.get("quantity", 0)
+        pnl = tx.get("profit_loss", 0.0)
+        pnl_pct = tx.get("profit_loss_pct", 0.0)
+        sign = "+" if pnl >= 0 else ""
+        date = tx.get("date", "")[:10]  # YYYY-MM-DD만
+        label = (
+            f"{name} | {qty}주 | {sign}{int(pnl):,}원({sign}{pnl_pct:.1f}%) | {date}"
+        )
+        buttons.append([
+            InlineKeyboardButton(
+                label,
+                callback_data=f"{RETRO_SELECT_PREFIX}{tx['id']}",
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
 
 
 # --- 투자 판단 평가 ---

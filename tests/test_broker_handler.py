@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from telegram.ext import ConversationHandler
+
 from bot.handlers.broker import (
     _receive_broker_msg,
     _sell_reason,
@@ -14,7 +16,6 @@ from bot.handlers.broker import (
     BUY_SECTOR,
     BUY_THESIS,
 )
-from bot.handlers.sell import RETRO_ASK
 from storage.json_store import (
     load_holdings,
     load_transactions,
@@ -98,10 +99,10 @@ async def test_kb_sell_full_flow():
     update1, context = _make_update_and_context(KB_SELL_MSG)
     await _receive_broker_msg(update1, context)
 
-    # Step 2: 매도사유
+    # Step 2: 매도사유 → 매도 저장 후 즉시 종료 (회고는 별도 명령)
     update2, _ = _make_update_and_context("목표가 도달")
     result = await _sell_reason(update2, context)
-    assert result == RETRO_ASK
+    assert result == ConversationHandler.END
 
     holdings = load_holdings()
     assert holdings[0]["quantity"] == 5
@@ -110,6 +111,7 @@ async def test_kb_sell_full_flow():
     assert txs[0]["type"] == "sell"
     assert txs[0]["sell_reason"] == "목표가 도달"
     assert txs[0]["profit_loss"] == (85000 - 72000) * 5
+    assert txs[0]["retrospective_id"] == ""
 
 
 @pytest.mark.asyncio
@@ -214,7 +216,7 @@ async def test_shinhan_sell_full_flow():
 
     update2, _ = _make_update_and_context("익절")
     result = await _sell_reason(update2, context)
-    assert result == RETRO_ASK
+    assert result == ConversationHandler.END
 
     holdings = load_holdings()
     assert holdings[0]["quantity"] == 5

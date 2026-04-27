@@ -5,11 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from telegram.ext import ConversationHandler
+
 from bot.handlers.sell import (
     _receive_sell_input,
     _select_holding,
     _start_sell,
-    RETRO_ASK,
     SELECT,
     INPUT,
 )
@@ -143,7 +144,7 @@ async def test_receive_sell_partial():
     context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
-    assert result == RETRO_ASK
+    assert result == ConversationHandler.END
 
     # 보유량 5주로 감소
     holdings = load_holdings()
@@ -155,15 +156,15 @@ async def test_receive_sell_partial():
     assert len(txs) == 1
     assert txs[0]["type"] == "sell"
     assert txs[0]["profit_loss"] == (85000 - 72000) * 5  # +65000
+    # buy_thesis 스냅샷 저장
+    assert txs[0]["buy_thesis"] == "테스트 근거"
+    # 회고는 매도 시점에 진행하지 않음
+    assert txs[0]["retrospective_id"] == ""
 
-    # 결과 메시지
-    calls = update.message.reply_text.call_args_list
-    result_msg = calls[0][0][0]
+    # 결과 메시지에 매도 결과 + 회고 안내 문구 포함
+    result_msg = update.message.reply_text.call_args[0][0]
     assert "매도 기록 완료" in result_msg
-
-    # 회고 질문
-    retro_msg = calls[1][0][0]
-    assert "회고" in retro_msg
+    assert "회고" in result_msg
 
 
 # ── 전량 매도 → 보유 목록에서 제거 ──
@@ -177,7 +178,7 @@ async def test_receive_sell_full_removes_holding():
     context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
-    assert result == RETRO_ASK
+    assert result == ConversationHandler.END
 
     holdings = load_holdings()
     assert len(holdings) == 0  # 전량 매도 시 제거
@@ -194,7 +195,7 @@ async def test_receive_sell_loss():
     context.user_data["sell_name"] = "삼성전자"
 
     result = await _receive_sell_input(update, context)
-    assert result == RETRO_ASK
+    assert result == ConversationHandler.END
 
     txs = load_transactions()
     assert txs[0]["profit_loss"] == (60000 - 72000) * 5  # -60000

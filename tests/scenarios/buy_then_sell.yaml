@@ -10,11 +10,11 @@
 #
 # 주요 callback_data 값:
 #   keep_existing / edit_sector / edit_thesis  — 기존보유 확인
-#   start_retro / skip_retro                    — 회고 시작/건너뛰기
 #   sell_select:<종목명>                        — 매도 종목 선택
+#   retro_select:<transaction_id>               — 회고할 매도 거래 선택
 #   buy_stock:<종목명>|<코드>                   — 매수 종목 검색결과 선택
 
-name: "broker 기존보유 추가매수 → 매수사유 수정 → 매도 → 회고 건너뛰기"
+name: "broker 기존보유 추가매수 → 매수사유 수정 → 매도"
 description: |
   증권사 체결 메시지로 기존 보유 종목을 추가매수하고, 매수사유를 수정한 뒤
   매수 완료 후 idle로 돌아와서 매도 명령이 정상 동작하는지 확인.
@@ -62,15 +62,11 @@ steps:
   - click: "sell_select:KODEX반도체레버리지"
     expect: "수량 / 매도가 / 사유"
 
-  # 6. 매도 정보 입력
+  # 6. 매도 정보 입력 → 매도 저장 후 즉시 종료 (회고는 별도 명령어)
   - send: |
       50
       75000
       목표가 도달
     expect:
       - "매도 기록 완료!"
-      - "이 매도에 대해 회고를 진행할까요?"
-
-  # 7. "나중에" 버튼 (회고 건너뛰기)
-  - click: "skip_retro"
-    expect: "회고를 건너뛰었습니다"
+      - "회고하려면 '회고' 를 입력해주세요"

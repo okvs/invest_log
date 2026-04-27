@@ -19,6 +19,7 @@ from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.edit import edit_conversation
 from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
+from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
 
 load_dotenv()
@@ -51,7 +52,8 @@ async def start(update: Update, context) -> None:
         "안녕하세요! 투자 로그 봇입니다.\n"
         "사용 가능한 명령어:\n"
         "매수 - 매수 기록\n"
-        "매도 - 매도 기록 + 회고\n"
+        "매도 - 매도 기록\n"
+        "회고 - 매도 회고 작성\n"
         "수정 - 보유 종목 수정\n"
         "현황 - 투자 현황\n"
         "예수금 - 초기자본/예수금 설정\n"
@@ -88,6 +90,7 @@ def main() -> None:
     app.add_handler(cash_conversation())
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
+    app.add_handler(retro_conversation())
     app.add_handler(edit_conversation())
 
     logger.info("봇 시작!")
