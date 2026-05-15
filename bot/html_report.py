@@ -79,17 +79,32 @@ def build_html_report(
     total_pnl = total_eval - total_invested
     total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0
 
-    # 섹터별 집계
+    # 현금 카드 계산 (섹터 비중에 포함시키기 위해 미리 계산)
+    if cash_override is not None:
+        cash_remaining = cash_override
+    else:
+        cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
+
+    # 섹터별 집계 — 현금도 한 섹터로 포함
     sector_data: dict[str, float] = defaultdict(float)
     for r in rows:
         sector_data[r["sector"]] += r["eval"]
+    if show_cash and cash_remaining > 0:
+        sector_data["현금"] += cash_remaining
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
     sector_total = sum(v for _, v in sector_sorted)
 
-    # 섹터별 색상
+    # 섹터별 색상 — 현금은 회색 고정
     colors = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12", "#9B59B6",
               "#1ABC9C", "#E67E22", "#3498DB", "#E91E63", "#00BCD4"]
-    sector_colors = {s: colors[i % len(colors)] for i, (s, _) in enumerate(sector_sorted)}
+    sector_colors: dict[str, str] = {}
+    color_idx = 0
+    for s, _ in sector_sorted:
+        if s == "현금":
+            sector_colors[s] = "#6b7280"
+        else:
+            sector_colors[s] = colors[color_idx % len(colors)]
+            color_idx += 1
 
     now = datetime.now().strftime("%Y.%m.%d %H:%M")
 
@@ -147,11 +162,6 @@ def build_html_report(
     pnl_class = "profit" if total_pnl >= 0 else "loss"
     pnl_sign = "+" if total_pnl >= 0 else ""
 
-    # 현금 카드 계산 (show_cash 여부와 무관하게 변수 정의)
-    if cash_override is not None:
-        cash_remaining = cash_override
-    else:
-        cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
     # 총 수익은 테이블 손익 합(total_pnl) 기준 — 신용대출을 total_invested에 포함시켜도 일치함
     total_return = total_pnl
     total_return_pct = (total_pnl / initial_capital * 100) if initial_capital else total_pnl_pct
