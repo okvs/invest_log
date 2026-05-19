@@ -6,22 +6,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from bot.handlers.buy import (
+    APPEND_INPUT,
     EXISTING_CONFIRM,
     SECTOR_INPUT,
     THESIS_INPUT,
-    _receive_input,
-    _start,
+    _append_input,
     _existing_confirm,
+    _receive_input,
     _sector_input,
+    _start,
     _thesis_input,
+    _thesis_pick,
 )
+from bot.keyboards import REASON_PICK_PREFIX
 from parsers.input_parser import StockCandidate
 from storage.json_store import (
+    get_recent_reasons,
     load_holdings,
     load_ticker_map,
     load_transactions,
     save_nickname_map,
     save_ticker_map,
+    save_transactions,
 )
 
 
@@ -263,3 +269,131 @@ async def test_stock_name_no_spaces():
     # 공백이 제거되어 "삼성전자"로 매칭
     assert result == SECTOR_INPUT
     assert context.user_data["buy_input"].name == "삼성전자"
+
+
+# ── 매수 사유 입력: 최근 사유 버튼 노출 + 직접 입력 + 버튼 선택 ──
+
+
+def _seed_buy_transactions(name: str, theses: list[str]) -> None:
+    """주어진 종목의 매수 거래 히스토리를 시드."""
+    txs = []
+    for i, thesis in enumerate(theses):
+        txs.append({
+            "id": f"tx-{i}",
+            "type": "buy",
+            "name": name,
+            "sector": "테스트",
+            "date": f"2026-04-0{i+1}T10:00:00",
+            "price": 1000.0,
+            "quantity": 1,
+            "total_amount": 1000.0,
+            "thesis": thesis,
+            "research_notes": "",
+        })
+    save_transactions(txs)
+
+
+def test_get_recent_reasons_buy_dedup():
+    _seed_buy_transactions("삼성전자", ["사유A", "사유B", "사유A", "사유C"])
+    reasons = get_recent_reasons("삼성전자", "buy")
+    # 최신순 + 중복 제거 (가장 최근 등장 순)
+    assert reasons == ["사유C", "사유A", "사유B"]
+
+
+def test_get_recent_reasons_filters_by_name():
+    _seed_buy_transactions("삼성전자", ["사유A"])
+    txs = load_transactions()
+    txs.append({
+        "id": "other",
+        "type": "buy",
+        "name": "다른종목",
+        "sector": "",
+        "date": "2026-05-01T10:00:00",
+        "price": 1.0,
+        "quantity": 1,
+        "total_amount": 1.0,
+        "thesis": "다른사유",
+        "research_notes": "",
+    })
+    save_transactions(txs)
+    assert get_recent_reasons("삼성전자", "buy") == ["사유A"]
+    assert get_recent_reasons("다른종목", "buy") == ["다른사유"]
+
+
+@pytest.mark.asyncio
+async def test_thesis_prompt_shows_recent_reasons_buttons():
+    """신규 종목 매수 시 같은 이름의 과거 매수 사유가 버튼으로 노출."""
+    save_ticker_map({"삼성전자": "005930.KS"})
+    _seed_buy_transactions("삼성전자", ["사유A", "사유B"])
+
+    text = "삼성전자\n10주\n72000원"
+    update, context = _make_update_and_context(text)
+    await _receive_input(update, context)
+
+    sector_update, _ = _make_update_and_context("반도체")
+    result = await _sector_input(sector_update, context)
+    assert result == THESIS_INPUT
+
+    # 마지막 reply_text에 reply_markup 있고 recent_reasons가 user_data에 저장
+    last_call = sector_update.message.reply_text.call_args
+    assert last_call.kwargs.get("reply_markup") is not None
+    assert context.user_data["recent_reasons"] == ["사유B", "사유A"]
+
+
+@pytest.mark.asyncio
+async def test_thesis_pick_uses_clicked_reason():
+    """매수 사유 버튼 클릭 시 해당 사유로 저장."""
+    save_ticker_map({"삼성전자": "005930.KS"})
+    _seed_buy_transactions("삼성전자", ["기존사유"])
+
+    text = "삼성전자\n10주\n72000원"
+    update, context = _make_update_and_context(text)
+    await _receive_input(update, context)
+
+    sector_update, _ = _make_update_and_context("반도체")
+    await _sector_input(sector_update, context)
+
+    # 인덱스 0번 버튼 클릭
+    cb_update = _make_callback_update(f"{REASON_PICK_PREFIX}0")
+    result = await _thesis_pick(cb_update, context)
+    assert result == -1  # END
+
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["buy_thesis"] == "기존사유"
+
+
+# ── 추가 매수: 기존 사유에 이어쓰기 (APPEND_THESIS) ──
+
+
+@pytest.mark.asyncio
+async def test_additional_buy_append_thesis():
+    save_ticker_map({"삼성전자": "005930.KS"})
+
+    # 1차 매수
+    text1 = "삼성전자\n10주\n70000원"
+    update1, context1 = _make_update_and_context(text1)
+    await _receive_input(update1, context1)
+    await _sector_input(_make_update_and_context("반도체")[0], context1)
+    await _thesis_input(_make_update_and_context("AI 수요")[0], context1)
+
+    # 2차 매수 → 기존 정보 확인
+    text2 = "삼성전자\n10주\n80000원"
+    update2, context2 = _make_update_and_context(text2)
+    result = await _receive_input(update2, context2)
+    assert result == EXISTING_CONFIRM
+
+    # "매수사유 이어쓰기" 선택
+    cb_update = _make_callback_update("append_thesis")
+    result = await _existing_confirm(cb_update, context2)
+    assert result == APPEND_INPUT
+    assert context2.user_data["append_base"] == "AI 수요"
+
+    # 이어쓸 텍스트 입력
+    append_update, _ = _make_update_and_context("HBM 가속")
+    result = await _append_input(append_update, context2)
+    assert result == -1  # END
+
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["buy_thesis"] == "AI 수요\nHBM 가속"

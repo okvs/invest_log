@@ -308,27 +308,28 @@ def parse_buy_input(text: str) -> BuyInput:
 def parse_sell_input(text: str, name: str = "") -> SellInput:
     """여러 줄 매도 입력을 파싱.
 
-    name이 제공되면 3줄: 수량, 매도가, 매도사유
-    name이 없으면 4줄: 종목명, 수량, 매도가, 매도사유
+    name이 제공되면 최소 2줄: 수량, 매도가 (사유는 3줄 이후 선택사항)
+    name이 없으면 최소 3줄: 종목명, 수량, 매도가 (사유는 4줄 이후 선택사항)
+    사유가 비어 있으면 핸들러가 다음 단계로 넘어가 사유를 별도로 받는다.
     """
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
 
     if name:
-        # 종목이 이미 선택된 경우 — 3줄만 필요
-        if len(lines) < 3:
+        # 종목이 이미 선택된 경우 — 수량/매도가 2줄만 필수
+        if len(lines) < 2:
             raise ValueError(
                 "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
-                "수량(예: 5주)\n매도가(예: 85000원)\n매도 사유"
+                "수량(예: 5주)\n매도가(예: 85000원)\n(사유는 다음 단계에서 선택/입력)"
             )
         quantity = int(_parse_number(lines[0]))
         price = _parse_number(lines[1])
         sell_reason = "\n".join(lines[2:])
     else:
-        # 종목 미선택 — 4줄 필요
-        if len(lines) < 4:
+        # 종목 미선택 — 종목명/수량/매도가 3줄 필수
+        if len(lines) < 3:
             raise ValueError(
                 "입력이 부족합니다. 다음 형식으로 입력해주세요:\n"
-                "종목명\n수량(예: 5주)\n매도가(예: 85000원)\n매도 사유"
+                "종목명\n수량(예: 5주)\n매도가(예: 85000원)\n(사유는 다음 단계에서 선택/입력)"
             )
         name = lines[0]
         quantity = int(_parse_number(lines[1]))

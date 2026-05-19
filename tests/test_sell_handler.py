@@ -8,17 +8,21 @@ import pytest
 from telegram.ext import ConversationHandler
 
 from bot.handlers.sell import (
+    INPUT,
+    REASON,
+    SELECT,
+    _reason_pick,
+    _reason_text,
     _receive_sell_input,
     _select_holding,
     _start_sell,
-    SELECT,
-    INPUT,
 )
-from bot.keyboards import SELL_SELECT_PREFIX
+from bot.keyboards import REASON_PICK_PREFIX, SELL_SELECT_PREFIX
 from storage.json_store import (
     load_holdings,
     load_transactions,
     save_holdings,
+    save_transactions,
 )
 
 
@@ -40,6 +44,9 @@ def _make_callback_update(data: str):
     update.callback_query.data = data
     update.callback_query.answer = AsyncMock()
     update.callback_query.edit_message_text = AsyncMock()
+    # query.message.reply_text 도 비동기 호출이 일어날 수 있어 AsyncMock으로 세팅
+    update.callback_query.message = MagicMock()
+    update.callback_query.message.reply_text = AsyncMock()
 
     context = MagicMock()
     context.user_data = {}
@@ -200,3 +207,85 @@ async def test_receive_sell_loss():
     txs = load_transactions()
     assert txs[0]["profit_loss"] == (60000 - 72000) * 5  # -60000
     assert txs[0]["profit_loss_pct"] < 0
+
+
+# ── 사유 미입력 → REASON 상태로 진입하여 사유 별도 입력 ──
+
+
+def _seed_past_sells(name: str, reasons: list[str]) -> None:
+    """과거 매도 거래를 시드 (최근 사유 버튼 노출용)."""
+    txs = []
+    for i, reason in enumerate(reasons):
+        txs.append({
+            "id": f"sell-{i}",
+            "type": "sell",
+            "name": name,
+            "sector": "",
+            "date": f"2026-03-0{i+1}T10:00:00",
+            "price": 100.0,
+            "quantity": 1,
+            "total_amount": 100.0,
+            "sell_reason": reason,
+        })
+    save_transactions(txs)
+
+
+@pytest.mark.asyncio
+async def test_receive_sell_two_lines_goes_to_reason():
+    """수량/매도가만 입력하면 REASON 상태로 가서 사유 입력을 별도로 받음."""
+    _seed_holding(quantity=10, avg_price=72000)
+    _seed_past_sells("삼성전자", ["목표가 도달", "리밸런싱"])
+
+    text = "5주\n85000원"
+    update, context = _make_update_and_context(text)
+    context.user_data["sell_name"] = "삼성전자"
+
+    result = await _receive_sell_input(update, context)
+    assert result == REASON
+    assert context.user_data["sell_qty"] == 5
+    assert context.user_data["sell_price"] == 85000
+    # 최근 사유가 컨텍스트와 키보드에 노출
+    assert context.user_data["recent_reasons"] == ["리밸런싱", "목표가 도달"]
+    last_call = update.message.reply_text.call_args
+    assert last_call.kwargs.get("reply_markup") is not None
+
+
+@pytest.mark.asyncio
+async def test_reason_pick_saves_clicked_reason():
+    """REASON 상태에서 버튼 클릭 시 그 사유로 매도 저장."""
+    _seed_holding(quantity=10, avg_price=72000)
+    _seed_past_sells("삼성전자", ["목표가 도달"])
+
+    # 2-line 입력으로 REASON 상태 진입
+    update, context = _make_update_and_context("5주\n85000원")
+    context.user_data["sell_name"] = "삼성전자"
+    await _receive_sell_input(update, context)
+
+    # 버튼 클릭
+    cb_update = _make_callback_update(f"{REASON_PICK_PREFIX}0")[0]
+    # context 그대로 사용
+    result = await _reason_pick(cb_update, context)
+    assert result == ConversationHandler.END
+
+    txs = [t for t in load_transactions() if t["type"] == "sell" and t["quantity"] == 5]
+    assert len(txs) == 1
+    assert txs[0]["sell_reason"] == "목표가 도달"
+
+
+@pytest.mark.asyncio
+async def test_reason_text_saves_typed_reason():
+    """REASON 상태에서 텍스트 직접 입력 시 그 사유로 저장."""
+    _seed_holding(quantity=10, avg_price=72000)
+
+    update, context = _make_update_and_context("5주\n85000원")
+    context.user_data["sell_name"] = "삼성전자"
+    await _receive_sell_input(update, context)
+
+    text_update, _ = _make_update_and_context("새로운 매도 사유")
+    result = await _reason_text(text_update, context)
+    assert result == ConversationHandler.END
+
+    txs = load_transactions()
+    sells = [t for t in txs if t["type"] == "sell"]
+    assert len(sells) == 1
+    assert sells[0]["sell_reason"] == "새로운 매도 사유"

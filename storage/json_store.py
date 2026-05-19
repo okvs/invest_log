@@ -65,6 +65,39 @@ def save_transactions(transactions: list[dict]) -> None:
     save(TRANSACTIONS_FILE, {"transactions": transactions})
 
 
+def get_recent_reasons(name: str, tx_type: str, limit: int = 5) -> list[str]:
+    """해당 종목명의 최근 고유 사유를 최신순으로 반환.
+
+    tx_type: "buy" → thesis 필드, "sell" → sell_reason 필드.
+    종목명 매칭은 대소문자/공백 무시.
+    """
+    field = "thesis" if tx_type == "buy" else "sell_reason"
+    target = (name or "").lower().replace(" ", "")
+    if not target:
+        return []
+
+    matching = []
+    for t in load_transactions():
+        if t.get("type") != tx_type:
+            continue
+        t_name = (t.get("name") or "").lower().replace(" ", "")
+        if t_name == target:
+            matching.append(t)
+    matching.sort(key=lambda t: t.get("date", ""), reverse=True)
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for t in matching:
+        reason = (t.get(field) or "").strip()
+        if not reason or reason in seen:
+            continue
+        seen.add(reason)
+        result.append(reason)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def load_retrospectives() -> list[dict]:
     return load(RETROSPECTIVES_FILE).get("retrospectives", [])
 

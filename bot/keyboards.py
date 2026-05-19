@@ -78,25 +78,50 @@ def avoidable_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# --- 추가 매수: 기존 섹터+사유 유지/수정 ---
+# --- 추가 매수: 기존 섹터+사유 유지/이어쓰기/대체 ---
 KEEP_EXISTING = "keep_existing"
 EDIT_SECTOR = "edit_sector"
-EDIT_THESIS = "edit_thesis"
+EDIT_THESIS = "edit_thesis"          # 기존거 대체
+APPEND_THESIS = "append_thesis"      # 기존거에서 추가(이어쓰기)
 # 하위 호환용
 KEEP_THESIS = KEEP_EXISTING
 
 
 def existing_info_keyboard() -> InlineKeyboardMarkup:
-    """기존 보유 종목의 섹터/사유를 유지하거나 수정 선택."""
+    """기존 보유 종목의 섹터/사유를 유지하거나 이어쓰기/대체 선택."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("그대로 유지", callback_data=KEEP_EXISTING),
         ],
         [
             InlineKeyboardButton("섹터 수정", callback_data=EDIT_SECTOR),
-            InlineKeyboardButton("매수사유 수정", callback_data=EDIT_THESIS),
+        ],
+        [
+            InlineKeyboardButton("매수사유 이어쓰기", callback_data=APPEND_THESIS),
+            InlineKeyboardButton("매수사유 새로쓰기", callback_data=EDIT_THESIS),
         ],
     ])
+
+
+# --- 최근 사유 빠른 선택 ---
+REASON_PICK_PREFIX = "reason_pick:"
+
+
+def reason_select_keyboard(reasons: list[str]) -> InlineKeyboardMarkup:
+    """최근 사유를 클릭으로 고를 수 있는 인라인 키보드.
+
+    callback_data: reason_pick:<idx> (실제 사유는 user_data에 따로 저장).
+    버튼 라벨은 줄바꿈을 ' / '로 치환하고 40자에서 잘라낸다.
+    """
+    buttons = []
+    for idx, reason in enumerate(reasons):
+        label = reason.replace("\n", " / ")
+        if len(label) > 40:
+            label = label[:37] + "..."
+        buttons.append([
+            InlineKeyboardButton(label, callback_data=f"{REASON_PICK_PREFIX}{idx}")
+        ])
+    return InlineKeyboardMarkup(buttons)
 
 
 # 하위 호환

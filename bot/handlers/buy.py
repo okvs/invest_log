@@ -22,13 +22,16 @@ from telegram.ext import (
 
 from bot.formatters import format_buy_result
 from bot.keyboards import (
+    APPEND_THESIS,
     BUY_STOCK_PREFIX,
     EDIT_SECTOR,
     EDIT_THESIS,
     KEEP_EXISTING,
     MARGIN_PREFIX,
+    REASON_PICK_PREFIX,
     existing_info_keyboard,
     margin_ratio_keyboard,
+    reason_select_keyboard,
     stock_search_keyboard,
 )
 from models.portfolio import Holding
@@ -40,6 +43,7 @@ from parsers.input_parser import (
     search_stocks,
 )
 from storage.json_store import (
+    get_recent_reasons,
     load_account,
     load_holdings,
     load_nickname_map,
@@ -60,6 +64,7 @@ EXISTING_CONFIRM = 2
 SECTOR_INPUT = 3
 THESIS_INPUT = 4
 MARGIN_SELECT = 5
+APPEND_INPUT = 6  # 기존 매수사유에 이어쓸 텍스트 입력
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +252,7 @@ async def _ask_existing_confirm(update, context, buy_input, existing, *, is_call
 # ---------------------------------------------------------------------------
 
 async def _existing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """기존 섹터/근거 유지 또는 수정 분기."""
+    """기존 섹터/근거 유지·이어쓰기·대체 분기."""
     query = update.callback_query
     await query.answer()
 
@@ -263,9 +268,20 @@ async def _existing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.edit_message_text("새로운 섹터를 입력해주세요.")
         context.user_data["_after_sector"] = "existing_confirm"
         return SECTOR_INPUT
-    else:  # EDIT_THESIS
-        await query.edit_message_text("새로운 매수 근거를 입력해주세요.")
-        return THESIS_INPUT
+    elif query.data == APPEND_THESIS:
+        # 기존 매수사유에 이어붙일 텍스트 입력
+        existing_thesis = buy_input.thesis or ""
+        context.user_data["append_base"] = existing_thesis
+        preview = existing_thesis if existing_thesis else "(기존 사유 없음)"
+        await query.edit_message_text(
+            f"기존 매수사유:\n{preview}\n\n이어붙일 내용을 입력해주세요."
+        )
+        return APPEND_INPUT
+    else:  # EDIT_THESIS — 대체
+        return await _ask_thesis(
+            update, context, buy_input, is_callback=True,
+            prompt="새로운 매수 근거를 입력해주세요.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -287,23 +303,86 @@ async def _sector_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data.pop("buy_input", None)
         return await _do_save(update, context, buy_input, is_callback=False)
 
-    # 신규 종목 → 매수 근거 입력
-    await update.message.reply_text("매수 근거를 입력해주세요.")
-    return THESIS_INPUT
+    # 신규 종목 → 매수 근거 입력 (최근 사유 버튼 + 자유 입력)
+    return await _ask_thesis(update, context, buy_input, is_callback=False)
 
 
 # ---------------------------------------------------------------------------
 # 매수 근거 입력
 # ---------------------------------------------------------------------------
 
-async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매수 근거 입력 처리."""
+async def _ask_thesis(
+    update,
+    context: ContextTypes.DEFAULT_TYPE,
+    buy_input,
+    *,
+    is_callback: bool,
+    prompt: str = "매수 근거를 입력해주세요.",
+) -> int:
+    """매수 근거를 입력받기 직전 프롬프트.
+    해당 종목의 최근 사유가 있으면 클릭 가능한 버튼을 함께 보여주고,
+    실제 사유 텍스트는 context.user_data['recent_reasons']에 저장한다.
+    """
+    context.user_data["buy_input"] = buy_input
+    reasons = get_recent_reasons(buy_input.name, "buy")
+    context.user_data["recent_reasons"] = reasons
+
+    keyboard = reason_select_keyboard(reasons) if reasons else None
+    msg = prompt
+    if reasons:
+        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+
+    if is_callback:
+        query = update.callback_query if hasattr(update, "callback_query") and update.callback_query else update
+        await query.edit_message_text(msg, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(msg, reply_markup=keyboard)
+    return THESIS_INPUT
+
+
+async def _thesis_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """최근 사유 버튼 클릭 → 해당 사유로 저장."""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        idx = int(query.data.removeprefix(REASON_PICK_PREFIX))
+    except ValueError:
+        idx = -1
+    reasons = context.user_data.get("recent_reasons", [])
     buy_input = context.user_data.pop("buy_input", None)
+    context.user_data.pop("recent_reasons", None)
+
+    if buy_input is None or idx < 0 or idx >= len(reasons):
+        await query.edit_message_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    buy_input.thesis = reasons[idx]
+    return await _do_save(update, context, buy_input, is_callback=True)
+
+
+async def _thesis_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """매수 근거 직접 입력 처리."""
+    buy_input = context.user_data.pop("buy_input", None)
+    context.user_data.pop("recent_reasons", None)
     if buy_input is None:
         await update.message.reply_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
         return ConversationHandler.END
 
     buy_input.thesis = update.message.text.strip()
+    return await _do_save(update, context, buy_input, is_callback=False)
+
+
+async def _append_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """기존 매수사유에 이어쓰기 → 결합 후 저장."""
+    buy_input = context.user_data.pop("buy_input", None)
+    base = context.user_data.pop("append_base", "")
+    if buy_input is None:
+        await update.message.reply_text("세션이 만료되었습니다. 다시 매수를 시작해주세요.")
+        return ConversationHandler.END
+
+    extra = update.message.text.strip()
+    buy_input.thesis = f"{base}\n{extra}" if base else extra
     return await _do_save(update, context, buy_input, is_callback=False)
 
 
@@ -477,7 +556,7 @@ def buy_conversation() -> ConversationHandler:
             EXISTING_CONFIRM: [
                 CallbackQueryHandler(
                     _existing_confirm,
-                    pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS})$",
+                    pattern=f"^({KEEP_EXISTING}|{EDIT_SECTOR}|{EDIT_THESIS}|{APPEND_THESIS})$",
                 ),
                 MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _abort),
@@ -487,8 +566,13 @@ def buy_conversation() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _sector_input),
             ],
             THESIS_INPUT: [
+                CallbackQueryHandler(_thesis_pick, pattern=f"^{REASON_PICK_PREFIX}"),
                 MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _thesis_input),
+            ],
+            APPEND_INPUT: [
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _append_input),
             ],
             MARGIN_SELECT: [
                 CallbackQueryHandler(_margin_selected, pattern=f"^{MARGIN_PREFIX}"),
@@ -507,7 +591,7 @@ def buy_conversation() -> ConversationHandler:
 
 async def _abort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매수 대화를 즉시 종료하고 idle로 복귀."""
-    context.user_data.pop("buy_input", None)
-    context.user_data.pop("_after_sector", None)
+    for key in ("buy_input", "_after_sector", "recent_reasons", "append_base"):
+        context.user_data.pop(key, None)
     await update.message.reply_text("매수 기록이 취소되었습니다.")
     return ConversationHandler.END

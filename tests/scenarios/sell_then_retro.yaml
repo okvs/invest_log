@@ -25,7 +25,7 @@ steps:
 
   # 2. 종목 선택
   - click: "sell_select:삼성전자"
-    expect: "수량 / 매도가 / 사유"
+    expect: "수량 / 매도가"
 
   # 3. 매도 정보 입력 → 즉시 종료, 회고 안내 문구 포함
   - send: |

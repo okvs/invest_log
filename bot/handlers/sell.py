@@ -19,13 +19,16 @@ from telegram.ext import (
 
 from bot.formatters import format_sell_result
 from bot.keyboards import (
+    REASON_PICK_PREFIX,
     SELL_SELECT_PREFIX,
     holdings_select_keyboard,
+    reason_select_keyboard,
 )
 from models.portfolio import Holding
 from models.transaction import Transaction
 from parsers.input_parser import parse_sell_input, resolve_name
 from storage.json_store import (
+    get_recent_reasons,
     load_account,
     load_holdings,
     load_nickname_map,
@@ -36,7 +39,7 @@ from storage.json_store import (
 )
 
 # ConversationHandler states
-SELECT, INPUT = range(2)
+SELECT, INPUT, REASON = range(3)
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -72,8 +75,9 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await query.edit_message_text(
         f"[{name}] {qty}주 보유 중\n\n"
-        "수량 / 매도가 / 사유\n"
-        "를 줄바꿈으로 입력해주세요."
+        "수량 / 매도가\n"
+        "를 줄바꿈으로 입력해주세요.\n"
+        "(사유는 다음 단계에서 선택하거나 입력합니다 — 한 메시지에 사유까지 함께 적어도 됩니다)"
     )
     return INPUT
 
@@ -170,26 +174,83 @@ async def _process_sell(
 
 
 async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """매도 정보 파싱 → 저장 → 종료."""
+    """매도 정보 파싱. 사유가 함께 입력되면 즉시 저장,
+    아니면 사유 입력 단계(REASON)로 넘어가 최근 사유 버튼을 노출.
+    """
     text = update.message.text
     sell_name = context.user_data.get("sell_name", "")
 
-    # 파싱
     try:
         sell_input = parse_sell_input(text, name=sell_name)
     except ValueError as e:
         await update.message.reply_text(f"입력 오류: {e}")
         return INPUT
 
-    # 이름이 직접 입력된 경우 닉네임 변환
     if not sell_name:
         nmap = load_nickname_map()
         sell_input.name = resolve_name(sell_input.name, nickname_map=nmap)
 
-    return await _process_sell(
-        update, context,
-        sell_input.name, sell_input.quantity, sell_input.price, sell_input.sell_reason,
+    if sell_input.sell_reason:
+        return await _process_sell(
+            update, context,
+            sell_input.name, sell_input.quantity, sell_input.price, sell_input.sell_reason,
+        )
+
+    # 사유 미입력 → 최근 사유 버튼 + 자유 입력 단계로 이동
+    context.user_data["sell_name"] = sell_input.name
+    context.user_data["sell_qty"] = sell_input.quantity
+    context.user_data["sell_price"] = sell_input.price
+
+    reasons = get_recent_reasons(sell_input.name, "sell")
+    context.user_data["recent_reasons"] = reasons
+
+    msg = (
+        f"[{sell_input.name}] {sell_input.quantity}주 / {int(sell_input.price):,}원\n\n"
+        "매도 사유를 입력해주세요."
     )
+    if reasons:
+        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+    keyboard = reason_select_keyboard(reasons) if reasons else None
+    await update.message.reply_text(msg, reply_markup=keyboard)
+    return REASON
+
+
+async def _reason_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """최근 매도 사유 버튼 클릭."""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        idx = int(query.data.removeprefix(REASON_PICK_PREFIX))
+    except ValueError:
+        idx = -1
+    reasons = context.user_data.get("recent_reasons", [])
+
+    name = context.user_data.get("sell_name", "")
+    qty = context.user_data.get("sell_qty")
+    price = context.user_data.get("sell_price")
+    if not name or qty is None or price is None or idx < 0 or idx >= len(reasons):
+        await query.edit_message_text("세션이 만료되었습니다. 다시 매도를 시작해주세요.")
+        _cleanup_user_data(context)
+        return ConversationHandler.END
+
+    reason = reasons[idx]
+    await query.edit_message_text(f"매도 사유: {reason}")
+    return await _process_sell(query, context, name, qty, price, reason, error_state=REASON)
+
+
+async def _reason_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """매도 사유 직접 입력."""
+    name = context.user_data.get("sell_name", "")
+    qty = context.user_data.get("sell_qty")
+    price = context.user_data.get("sell_price")
+    if not name or qty is None or price is None:
+        await update.message.reply_text("세션이 만료되었습니다. 다시 매도를 시작해주세요.")
+        _cleanup_user_data(context)
+        return ConversationHandler.END
+
+    reason = update.message.text.strip()
+    return await _process_sell(update, context, name, qty, price, reason, error_state=REASON)
 
 
 async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -201,7 +262,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _cleanup_user_data(context: ContextTypes.DEFAULT_TYPE) -> None:
     """매도 관련 user_data 정리."""
-    for key in ["sell_name", "sell_input"]:
+    for key in ["sell_name", "sell_input", "sell_qty", "sell_price", "recent_reasons"]:
         context.user_data.pop(key, None)
 
 
@@ -230,6 +291,11 @@ def sell_conversation() -> ConversationHandler:
             INPUT: [
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sell_input),
+            ],
+            REASON: [
+                CallbackQueryHandler(_reason_pick, pattern=f"^{REASON_PICK_PREFIX}"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _reason_text),
             ],
         },
         fallbacks=[
