@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from filelock import FileLock
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_reason(s: str) -> str:
+    """연속된 공백류(NBSP, 탭, 줄바꿈 등)를 단일 공백으로 압축하고 양 끝을 자른다.
+    겉보기에 같은 사유가 다른 공백 때문에 중복으로 보이는 것을 막기 위함.
+    """
+    return _WHITESPACE_RE.sub(" ", s or "").strip()
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -76,20 +86,26 @@ def get_recent_reasons(
     pinned: 결과 맨 앞에 항상 포함될 사유(중복 제거됨). 예: ["자동손절"].
     """
     field = "thesis" if tx_type == "buy" else "sell_reason"
-    pinned_list = [p.strip() for p in (pinned or []) if p and p.strip()]
 
     matching = [t for t in load_transactions() if t.get("type") == tx_type]
     matching.sort(key=lambda t: t.get("date", ""), reverse=True)
 
-    seen: set[str] = set(pinned_list)
-    result: list[str] = list(pinned_list)
+    # 공백 정규화 후 비교/저장하여 겉보기에 같은 사유는 한 번만 노출.
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in pinned or []:
+        norm = _normalize_reason(p)
+        if norm and norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    pinned_count = len(result)
     for t in matching:
-        reason = (t.get(field) or "").strip()
-        if not reason or reason in seen:
+        norm = _normalize_reason(t.get(field) or "")
+        if not norm or norm in seen:
             continue
-        seen.add(reason)
-        result.append(reason)
-        if len(result) >= len(pinned_list) + limit:
+        seen.add(norm)
+        result.append(norm)
+        if len(result) >= pinned_count + limit:
             break
     return result
 

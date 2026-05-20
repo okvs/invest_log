@@ -321,6 +321,27 @@ def test_get_recent_reasons_is_global():
     assert get_recent_reasons("buy") == ["다른사유", "사유A"]
 
 
+def test_get_recent_reasons_dedup_normalizes_whitespace():
+    """NBSP/연속 공백만 다른 사유는 동일하게 보고 한 번만 노출."""
+    save_transactions([
+        {
+            "id": "1", "type": "sell", "name": "A", "sector": "",
+            "date": "2026-05-01T10:00:00",
+            "price": 1.0, "quantity": 1, "total_amount": 1.0,
+            "sell_reason": "종목압축\xa0 퓨어하닉이 더 나은듯",
+        },
+        {
+            "id": "2", "type": "sell", "name": "A", "sector": "",
+            "date": "2026-05-02T10:00:00",
+            "price": 1.0, "quantity": 1, "total_amount": 1.0,
+            "sell_reason": "종목압축  퓨어하닉이 더 나은듯",
+        },
+    ])
+    reasons = get_recent_reasons("sell")
+    # 정규화된 단일 공백 형태로 한 번만 노출
+    assert reasons == ["종목압축 퓨어하닉이 더 나은듯"]
+
+
 def test_get_recent_reasons_pinned_always_first():
     """pinned 인자가 결과 맨 앞에 위치하고 중복은 제거된다."""
     save_transactions([
