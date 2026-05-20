@@ -324,7 +324,7 @@ async def _ask_thesis(
     실제 사유 텍스트는 context.user_data['recent_reasons']에 저장한다.
     """
     context.user_data["buy_input"] = buy_input
-    reasons = get_recent_reasons(buy_input.name, "buy")
+    reasons = get_recent_reasons("buy")
     context.user_data["recent_reasons"] = reasons
 
     keyboard = reason_select_keyboard(reasons) if reasons else None

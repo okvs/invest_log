@@ -20,6 +20,7 @@ from telegram.ext import (
 from bot.formatters import format_sell_result
 from bot.keyboards import (
     REASON_PICK_PREFIX,
+    SELL_PINNED_REASONS,
     SELL_SELECT_PREFIX,
     holdings_select_keyboard,
     reason_select_keyboard,
@@ -201,17 +202,15 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["sell_qty"] = sell_input.quantity
     context.user_data["sell_price"] = sell_input.price
 
-    reasons = get_recent_reasons(sell_input.name, "sell")
+    reasons = get_recent_reasons("sell", pinned=SELL_PINNED_REASONS)
     context.user_data["recent_reasons"] = reasons
 
     msg = (
         f"[{sell_input.name}] {sell_input.quantity}주 / {int(sell_input.price):,}원\n\n"
-        "매도 사유를 입력해주세요."
+        "매도 사유를 입력해주세요.\n\n"
+        "최근 사유를 선택하거나 직접 입력하세요."
     )
-    if reasons:
-        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
-    keyboard = reason_select_keyboard(reasons) if reasons else None
-    await update.message.reply_text(msg, reply_markup=keyboard)
+    await update.message.reply_text(msg, reply_markup=reason_select_keyboard(reasons))
     return REASON
 
 

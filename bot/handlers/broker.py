@@ -29,6 +29,7 @@ from bot.keyboards import (
     KEEP_EXISTING,
     MARGIN_PREFIX,
     REASON_PICK_PREFIX,
+    SELL_PINNED_REASONS,
     existing_info_keyboard,
     margin_ratio_keyboard,
     reason_select_keyboard,
@@ -95,17 +96,16 @@ async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if msg.trade_type == "sell":
         context.user_data["broker_sell"] = msg
-        reasons = get_recent_reasons(msg.name, "sell")
+        reasons = get_recent_reasons("sell", pinned=SELL_PINNED_REASONS)
         context.user_data["recent_reasons"] = reasons
         prompt = (
             f"{msg.name} {msg.quantity}주 {int(msg.price):,}원 매도 체결 확인.\n\n"
-            "매도사유를 입력해주세요."
+            "매도사유를 입력해주세요.\n\n"
+            "최근 사유를 선택하거나 직접 입력하세요."
         )
-        if reasons:
-            prompt += "\n\n최근 사유를 선택하거나 직접 입력하세요."
         await update.message.reply_text(
             prompt,
-            reply_markup=reason_select_keyboard(reasons) if reasons else None,
+            reply_markup=reason_select_keyboard(reasons),
         )
         return SELL_REASON
     else:
@@ -247,7 +247,7 @@ async def _broker_existing_confirm(update: Update, context: ContextTypes.DEFAULT
     else:  # EDIT_THESIS — 대체
         context.user_data["_broker_edit"] = "thesis"
         return await _broker_ask_thesis(
-            query, context, buy_input.name, is_callback=True,
+            query, context, is_callback=True,
             prompt="새로운 매수 근거를 입력해주세요.",
         )
 
@@ -266,20 +266,18 @@ async def _buy_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     # 신규 종목 → 매수 근거 입력 (최근 사유 버튼)
     context.user_data["broker_sector"] = sector
-    name = context.user_data.get("broker_buy").name
-    return await _broker_ask_thesis(update, context, name, is_callback=False)
+    return await _broker_ask_thesis(update, context, is_callback=False)
 
 
 async def _broker_ask_thesis(
     update_or_query,
     context: ContextTypes.DEFAULT_TYPE,
-    name: str,
     *,
     is_callback: bool,
     prompt: str = "매수 근거를 입력해주세요.",
 ) -> int:
     """증권사 매수의 매수근거 입력 프롬프트 (최근 사유 버튼 포함)."""
-    reasons = get_recent_reasons(name, "buy")
+    reasons = get_recent_reasons("buy")
     context.user_data["recent_reasons"] = reasons
 
     msg = prompt

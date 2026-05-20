@@ -244,8 +244,26 @@ async def test_receive_sell_two_lines_goes_to_reason():
     assert result == REASON
     assert context.user_data["sell_qty"] == 5
     assert context.user_data["sell_price"] == 85000
-    # 최근 사유가 컨텍스트와 키보드에 노출
-    assert context.user_data["recent_reasons"] == ["리밸런싱", "목표가 도달"]
+    # 자동손절이 맨 앞에 고정되고, 그 뒤로 최근 사유가 따라온다.
+    reasons = context.user_data["recent_reasons"]
+    assert reasons[0] == "자동손절"
+    assert "리밸런싱" in reasons
+    assert "목표가 도달" in reasons
+    last_call = update.message.reply_text.call_args
+    assert last_call.kwargs.get("reply_markup") is not None
+
+
+@pytest.mark.asyncio
+async def test_reason_step_always_shows_auto_stoploss():
+    """과거 매도 거래가 전혀 없어도 자동손절 버튼이 노출된다."""
+    _seed_holding(quantity=10, avg_price=72000)
+
+    update, context = _make_update_and_context("5주\n85000원")
+    context.user_data["sell_name"] = "삼성전자"
+
+    result = await _receive_sell_input(update, context)
+    assert result == REASON
+    assert context.user_data["recent_reasons"] == ["자동손절"]
     last_call = update.message.reply_text.call_args
     assert last_call.kwargs.get("reply_markup") is not None
 
@@ -261,15 +279,35 @@ async def test_reason_pick_saves_clicked_reason():
     context.user_data["sell_name"] = "삼성전자"
     await _receive_sell_input(update, context)
 
-    # 버튼 클릭
-    cb_update = _make_callback_update(f"{REASON_PICK_PREFIX}0")[0]
-    # context 그대로 사용
+    # 자동손절이 idx 0에 고정되므로 "목표가 도달"은 idx 1
+    reasons = context.user_data["recent_reasons"]
+    target_idx = reasons.index("목표가 도달")
+    cb_update = _make_callback_update(f"{REASON_PICK_PREFIX}{target_idx}")[0]
     result = await _reason_pick(cb_update, context)
     assert result == ConversationHandler.END
 
     txs = [t for t in load_transactions() if t["type"] == "sell" and t["quantity"] == 5]
     assert len(txs) == 1
     assert txs[0]["sell_reason"] == "목표가 도달"
+
+
+@pytest.mark.asyncio
+async def test_reason_pick_auto_stoploss():
+    """자동손절 버튼 클릭 → sell_reason='자동손절'로 저장."""
+    _seed_holding(quantity=10, avg_price=72000)
+
+    update, context = _make_update_and_context("5주\n85000원")
+    context.user_data["sell_name"] = "삼성전자"
+    await _receive_sell_input(update, context)
+
+    reasons = context.user_data["recent_reasons"]
+    idx = reasons.index("자동손절")
+    cb_update = _make_callback_update(f"{REASON_PICK_PREFIX}{idx}")[0]
+    result = await _reason_pick(cb_update, context)
+    assert result == ConversationHandler.END
+
+    sells = [t for t in load_transactions() if t["type"] == "sell"]
+    assert sells[0]["sell_reason"] == "자동손절"
 
 
 @pytest.mark.asyncio

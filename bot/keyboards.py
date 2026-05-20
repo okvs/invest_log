@@ -106,6 +106,10 @@ def existing_info_keyboard() -> InlineKeyboardMarkup:
 # --- 최근 사유 빠른 선택 ---
 REASON_PICK_PREFIX = "reason_pick:"
 
+# 매도 사유 입력 시 항상 노출되는 고정 사유
+AUTO_STOPLOSS_REASON = "자동손절"
+SELL_PINNED_REASONS = [AUTO_STOPLOSS_REASON]
+
 
 def reason_select_keyboard(reasons: list[str]) -> InlineKeyboardMarkup:
     """최근 사유를 클릭으로 고를 수 있는 인라인 키보드.

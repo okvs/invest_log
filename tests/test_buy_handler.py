@@ -295,12 +295,13 @@ def _seed_buy_transactions(name: str, theses: list[str]) -> None:
 
 def test_get_recent_reasons_buy_dedup():
     _seed_buy_transactions("삼성전자", ["사유A", "사유B", "사유A", "사유C"])
-    reasons = get_recent_reasons("삼성전자", "buy")
+    reasons = get_recent_reasons("buy")
     # 최신순 + 중복 제거 (가장 최근 등장 순)
     assert reasons == ["사유C", "사유A", "사유B"]
 
 
-def test_get_recent_reasons_filters_by_name():
+def test_get_recent_reasons_is_global():
+    """종목을 가리지 않고 전체 거래에서 최근 사유를 합산한다."""
     _seed_buy_transactions("삼성전자", ["사유A"])
     txs = load_transactions()
     txs.append({
@@ -316,8 +317,41 @@ def test_get_recent_reasons_filters_by_name():
         "research_notes": "",
     })
     save_transactions(txs)
-    assert get_recent_reasons("삼성전자", "buy") == ["사유A"]
-    assert get_recent_reasons("다른종목", "buy") == ["다른사유"]
+    # "다른사유"가 더 최신 → 맨 앞
+    assert get_recent_reasons("buy") == ["다른사유", "사유A"]
+
+
+def test_get_recent_reasons_pinned_always_first():
+    """pinned 인자가 결과 맨 앞에 위치하고 중복은 제거된다."""
+    save_transactions([
+        {
+            "id": "1",
+            "type": "sell",
+            "name": "삼성전자",
+            "sector": "",
+            "date": "2026-05-01T10:00:00",
+            "price": 1.0,
+            "quantity": 1,
+            "total_amount": 1.0,
+            "sell_reason": "익절",
+        },
+        {
+            "id": "2",
+            "type": "sell",
+            "name": "삼성전자",
+            "sector": "",
+            "date": "2026-05-02T10:00:00",
+            "price": 1.0,
+            "quantity": 1,
+            "total_amount": 1.0,
+            "sell_reason": "자동손절",
+        },
+    ])
+    reasons = get_recent_reasons("sell", pinned=["자동손절"])
+    # pinned이 맨 앞, 그 다음 최근 사유에서 자동손절은 중복 제거됨
+    assert reasons[0] == "자동손절"
+    assert "익절" in reasons
+    assert reasons.count("자동손절") == 1
 
 
 @pytest.mark.asyncio
@@ -334,7 +368,8 @@ async def test_thesis_prompt_shows_recent_reasons_buttons():
     result = await _sector_input(sector_update, context)
     assert result == THESIS_INPUT
 
-    # 마지막 reply_text에 reply_markup 있고 recent_reasons가 user_data에 저장
+    # 마지막 reply_text에 reply_markup 있고 recent_reasons가 user_data에 저장.
+    # 전역 최근 사유이므로 같은 종목의 과거 사유가 포함됨.
     last_call = sector_update.message.reply_text.call_args
     assert last_call.kwargs.get("reply_markup") is not None
     assert context.user_data["recent_reasons"] == ["사유B", "사유A"]

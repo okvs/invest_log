@@ -65,35 +65,31 @@ def save_transactions(transactions: list[dict]) -> None:
     save(TRANSACTIONS_FILE, {"transactions": transactions})
 
 
-def get_recent_reasons(name: str, tx_type: str, limit: int = 5) -> list[str]:
-    """해당 종목명의 최근 고유 사유를 최신순으로 반환.
+def get_recent_reasons(
+    tx_type: str,
+    limit: int = 5,
+    pinned: list[str] | None = None,
+) -> list[str]:
+    """전체 거래 중 해당 타입의 최근 고유 사유를 최신순으로 반환.
 
     tx_type: "buy" → thesis 필드, "sell" → sell_reason 필드.
-    종목명 매칭은 대소문자/공백 무시.
+    pinned: 결과 맨 앞에 항상 포함될 사유(중복 제거됨). 예: ["자동손절"].
     """
     field = "thesis" if tx_type == "buy" else "sell_reason"
-    target = (name or "").lower().replace(" ", "")
-    if not target:
-        return []
+    pinned_list = [p.strip() for p in (pinned or []) if p and p.strip()]
 
-    matching = []
-    for t in load_transactions():
-        if t.get("type") != tx_type:
-            continue
-        t_name = (t.get("name") or "").lower().replace(" ", "")
-        if t_name == target:
-            matching.append(t)
+    matching = [t for t in load_transactions() if t.get("type") == tx_type]
     matching.sort(key=lambda t: t.get("date", ""), reverse=True)
 
-    seen: set[str] = set()
-    result: list[str] = []
+    seen: set[str] = set(pinned_list)
+    result: list[str] = list(pinned_list)
     for t in matching:
         reason = (t.get(field) or "").strip()
         if not reason or reason in seen:
             continue
         seen.add(reason)
         result.append(reason)
-        if len(result) >= limit:
+        if len(result) >= len(pinned_list) + limit:
             break
     return result
 
