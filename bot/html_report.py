@@ -165,7 +165,8 @@ def build_html_report(
         </tr>"""
 
     # 섹터별 한 줄짜리 막대를 만들 row 리스트 구성.
-    # 같은 섹터에 현물과 선물이 둘 다 있으면 행을 분리해 "반도체" / "반도체(선물)" 두 줄로 표시.
+    # 정렬 규칙: 섹터 단위 합계 내림차순으로 가되, 같은 섹터에 현물·선물이 둘 다 있으면
+    # 현물 바로 아래에 선물(빗금) 행을 붙임. sector_sorted 가 이미 합계 내림차순.
     detail_rows: list[tuple[str, float, str, bool]] = []
     # (label, value, color, is_futures)
     for sector, val in sector_sorted:
@@ -176,10 +177,8 @@ def build_html_report(
             detail_rows.append((sector, spot_val, color, False))
         if fut_val > 0:
             detail_rows.append((f"{sector}(선물)", fut_val, color, True))
-    # 분리된 행 기준 내림차순 정렬 (제일 큰 비중부터)
-    detail_rows.sort(key=lambda r: r[1], reverse=True)
 
-    max_row_val = detail_rows[0][1] if detail_rows else 0
+    max_row_val = max((r[1] for r in detail_rows), default=0)
     sector_bars_html = ""
     for label, val, color, is_futures in detail_rows:
         pct = (val / sector_total * 100) if sector_total else 0
