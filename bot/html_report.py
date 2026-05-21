@@ -164,55 +164,34 @@ def build_html_report(
           <td class="num">{format_number(int(r["invested"]))}원</td>
         </tr>"""
 
-    # 섹터 바 HTML — 가장 큰 섹터 기준 상대 비율
-    max_pct = (sector_sorted[0][1] / sector_total * 100) if sector_sorted and sector_total else 100
-    sector_bars_html = ""
+    # 섹터별 한 줄짜리 막대를 만들 row 리스트 구성.
+    # 같은 섹터에 현물과 선물이 둘 다 있으면 행을 분리해 "반도체" / "반도체(선물)" 두 줄로 표시.
+    detail_rows: list[tuple[str, float, str, bool]] = []
+    # (label, value, color, is_futures)
     for sector, val in sector_sorted:
-        pct = (val / sector_total * 100) if sector_total else 0
-        bar_width = (pct / max_pct * 100) if max_pct else 0
-        color = sector_colors[sector]
         fut_val = sector_futures.get(sector, 0)
         spot_val = val - fut_val
-        fut_share = (fut_val / val * 100) if val else 0
-        spot_share = 100 - fut_share
-
-        # 가장 큰 섹터를 100%로 했을 때 현재 섹터가 차지하는 너비(%)
-        spot_in_wrap = bar_width * (spot_val / val) if val else 0
-        fut_in_wrap = bar_width * (fut_val / val) if val else 0
-        # 전체 포트폴리오 대비 각각의 비중(%)
-        spot_pct_total = (spot_val / sector_total * 100) if sector_total else 0
-        fut_pct_total = (fut_val / sector_total * 100) if sector_total else 0
-
+        color = sector_colors[sector]
+        if spot_val > 0:
+            detail_rows.append((sector, spot_val, color, False))
         if fut_val > 0:
-            bar_inner = (
-                f'<div class="sector-bar" style="width:{spot_in_wrap}%;background:{color}"></div>'
-                f'<div class="sector-bar futures-stripe" style="width:{fut_in_wrap}%;background-color:{color}"></div>'
-            )
-            breakdown_html = (
-                f'<div class="sector-breakdown">'
-                f'현물 {spot_pct_total:.1f}% · '
-                f'<span class="futures-tag-strong">선물 {fut_pct_total:.1f}%</span>'
-                f'</div>'
-            )
-            amt_html = (
-                f'{format_number(int(val))}원'
-                f'<span class="futures-tag"> · 선물 {format_number(int(fut_val))}원</span>'
-            )
-        else:
-            bar_inner = f'<div class="sector-bar" style="width:{bar_width}%;background:{color}"></div>'
-            breakdown_html = ""
-            amt_html = f'{format_number(int(val))}원'
+            detail_rows.append((f"{sector}(선물)", fut_val, color, True))
+    # 분리된 행 기준 내림차순 정렬 (제일 큰 비중부터)
+    detail_rows.sort(key=lambda r: r[1], reverse=True)
 
+    max_row_val = detail_rows[0][1] if detail_rows else 0
+    sector_bars_html = ""
+    for label, val, color, is_futures in detail_rows:
+        pct = (val / sector_total * 100) if sector_total else 0
+        bar_width = (val / max_row_val * 100) if max_row_val else 0
+        bar_class = "sector-bar futures-stripe" if is_futures else "sector-bar"
         sector_bars_html += f"""
         <div class="sector-row">
-          <div class="sector-label">{sector}</div>
+          <div class="sector-label">{label}</div>
           <div class="sector-bar-wrap">
-            <div style="display:flex;height:100%">{bar_inner}</div>
+            <div class="{bar_class}" style="width:{bar_width}%;background:{color}"></div>
           </div>
-          <div class="sector-val">
-            <div>{pct:.1f}% <span class="sector-amt">{amt_html}</span></div>
-            {breakdown_html}
-          </div>
+          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(int(val))}원</span></div>
         </div>"""
 
     # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리
