@@ -89,10 +89,20 @@ def _quadrant_badge(
 
 
 def _wave_glyph(cx: float, cy: float, color: str = "#fbbf24") -> str:
-    """수평 사인 물결(∿) 글리프. 약 16px 폭, 중심 (cx, cy)."""
+    """수평 사인 물결(∿) 글리프 — cubic Bezier 4 반파, 폭 18px, 진폭 ~4.5px, 좌우대칭."""
     return (
-        f'<path d="M {cx - 8:.2f},{cy:.2f} q 2,-5 4,0 t 4,0 t 4,0 t 4,0" '
-        f'stroke="{color}" stroke-width="2.5" fill="none" stroke-linecap="round"/>'
+        f'<path d="M {cx - 9:.2f},{cy:.2f} '
+        f'c 1.5,-6 3,-6 4.5,0 s 3,6 4.5,0 s 3,-6 4.5,0 s 3,6 4.5,0" '
+        f'stroke="{color}" stroke-width="1.8" fill="none" stroke-linecap="round"/>'
+    )
+
+
+def _wave_glyph_v(cx: float, cy: float, color: str = "#fbbf24") -> str:
+    """수직 사인 물결 글리프 — 위→아래 cubic Bezier 4 반파, 높이 18px, 진폭 ~4.5px."""
+    return (
+        f'<path d="M {cx:.2f},{cy - 9:.2f} '
+        f'c -6,1.5 -6,3 0,4.5 s 6,3 0,4.5 s -6,3 0,4.5 s 6,3 0,4.5" '
+        f'stroke="{color}" stroke-width="1.8" fill="none" stroke-linecap="round"/>'
     )
 
 
@@ -114,10 +124,10 @@ def _build_quadrants_svg(
 ) -> str:
     """수익률(X) × 비중(Y) 4사분면 산점도를 inline SVG 로 그린다.
 
-    원점(0,0) 기준 4사분면 — 두 축 모두 0 중심 대칭이라 4분면 크기가 동일.
-    비중(Y)은 항상 양수라 위쪽 영역에 데이터가 찍히고, 아래는 시각적 미러
-    (Y 눈금 라벨도 양쪽 다 양수). 점 크기/모양은 SIZE_TABLE/MARKER_TABLE
-    (10% tier). 범례는 T1~T5 전부 표시.
+    분리선: 수익률 X=0, 비중 Y=10% (비중부족 기준). X축은 ±50% 대칭, Y축은
+    0~max 비대칭 (바닥이 0%). 50% 초과 종목은 plot 좌우 끝에 마커를 찍고
+    세로 물결로 클립 신호 + (±NN%) 실측 라벨. 점 크기/모양은 SIZE_TABLE/
+    MARKER_TABLE (10% tier). 범례는 T1~T5 전부 표시.
     """
     if not rows or total_eval <= 0:
         return ""
@@ -135,21 +145,22 @@ def _build_quadrants_svg(
             "color": sector_colors.get(r["sector"], "#9ca3af"),
         })
 
-    # SVG 영역 — 정사각형 plot 으로 4분면 크기 동일성 보장
+    # SVG 영역 — 정사각형 plot
     W, H = 720, 720
     pad_l, pad_r, pad_t, pad_b = 70, 36, 40, 60
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
-    # X축: 수익률(%). ±50% 고정, 그 너머는 클립 + 물결 표시.
+    # X축: 수익률(%). ±50% 고정, 그 너머는 클립 + 세로 물결 표시.
     x_abs = 50.0
 
-    # Y축: 비중(%). 가장 높은 비중 + 10% 정도를 max 로 (10단위 올림, 최소 20).
+    # Y축: 비중(%). 0 ~ ceil((max_w+10)/10)*10 (최소 20). 비대칭.
+    Y_THRESH = 10.0  # 비중부족/과체중 분리선
     max_w = max(p["weight"] for p in points)
-    y_abs = max(math.ceil((max_w + 10.0) / 10.0) * 10.0, 20.0)
+    y_max = max(math.ceil((max_w + 10.0) / 10.0) * 10.0, 20.0)
+    y_min = 0.0
 
     x_min, x_max = -x_abs, x_abs
-    y_min, y_max = -y_abs, y_abs
 
     def sx(x: float) -> float:
         return pad_l + (x - x_min) / (x_max - x_min) * plot_w
@@ -157,7 +168,8 @@ def _build_quadrants_svg(
     def sy(y: float) -> float:
         return pad_t + (y_max - y) / (y_max - y_min) * plot_h
 
-    ox, oy = sx(0), sy(0)  # 정확히 plot 중심
+    ox = sx(0)  # X축 0 (수익률 분리선)
+    oty = sy(Y_THRESH)  # Y=10% (비중 분리선)
     x_left, x_right = pad_l, pad_l + plot_w
     y_top, y_bottom = pad_t, pad_t + plot_h
 
@@ -167,27 +179,27 @@ def _build_quadrants_svg(
         f'style="background:#0f0f14;width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
     )
 
-    # 사분면 배경 — invset_mind 색감(우상 연분홍 / 좌상 연하늘 / 좌하 연초록 / 우하 연노랑)
+    # 사분면 배경 — invset_mind 색감
     parts.append(
-        f'<rect x="{ox}" y="{y_top}" width="{x_right - ox}" height="{oy - y_top}" '
+        f'<rect x="{ox}" y="{y_top}" width="{x_right - ox}" height="{oty - y_top}" '
         f'fill="#ef4444" fill-opacity="0.11"/>'
     )  # Q1 top-right · 잘하는 것 · 연빨강
     parts.append(
-        f'<rect x="{x_left}" y="{y_top}" width="{ox - x_left}" height="{oy - y_top}" '
+        f'<rect x="{x_left}" y="{y_top}" width="{ox - x_left}" height="{oty - y_top}" '
         f'fill="#6366f1" fill-opacity="0.13"/>'
     )  # Q2 top-left · 큰 위험 · 연파랑/라벤더
     parts.append(
-        f'<rect x="{x_left}" y="{oy}" width="{ox - x_left}" height="{y_bottom - oy}" '
+        f'<rect x="{x_left}" y="{oty}" width="{ox - x_left}" height="{y_bottom - oty}" '
         f'fill="#22c55e" fill-opacity="0.10"/>'
     )  # Q3 bottom-left · 다행 · 연초록
     parts.append(
-        f'<rect x="{ox}" y="{oy}" width="{x_right - ox}" height="{y_bottom - oy}" '
+        f'<rect x="{ox}" y="{oty}" width="{x_right - ox}" height="{y_bottom - oty}" '
         f'fill="#fbbf24" fill-opacity="0.11"/>'
     )  # Q4 bottom-right · 비중 부족 · 연노랑
 
     # 격자 (10% 단위)
     ticks_x = list(range(-int(x_abs), int(x_abs) + 1, 10))
-    ticks_y = list(range(-int(y_abs), int(y_abs) + 1, 10))
+    ticks_y = list(range(0, int(y_max) + 1, 10))
     for tx in ticks_x:
         px = sx(tx)
         parts.append(
@@ -201,13 +213,13 @@ def _build_quadrants_svg(
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
 
-    # 사분면 구분선 (원점 0,0) — 정확히 plot 중심
+    # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
         f'<line x1="{ox:.2f}" y1="{y_top}" x2="{ox:.2f}" y2="{y_bottom}" '
         f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
     parts.append(
-        f'<line x1="{x_left}" y1="{oy:.2f}" x2="{x_right}" y2="{oy:.2f}" '
+        f'<line x1="{x_left}" y1="{oty:.2f}" x2="{x_right}" y2="{oty:.2f}" '
         f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
 
@@ -229,11 +241,11 @@ def _build_quadrants_svg(
             f'<text x="{sx(tx):.2f}" y="{y_bottom + 14}" font-size="10" '
             f'fill="#888" text-anchor="middle">{label}</text>'
         )
-    # Y 눈금 텍스트 — 비중은 양쪽 다 양수(미러)
+    # Y 눈금 텍스트 — 0% 바닥, 위로만 양수
     for ty in ticks_y:
         parts.append(
             f'<text x="{x_left - 6}" y="{sy(ty) + 3:.2f}" font-size="10" '
-            f'fill="#888" text-anchor="end">{abs(ty)}%</text>'
+            f'fill="#888" text-anchor="end">{ty}%</text>'
         )
 
     # 축 제목
@@ -247,26 +259,26 @@ def _build_quadrants_svg(
         f'transform="rotate(-90 16 {mid_y:.2f})">비중 (%)</text>'
     )
 
-    # 사분면 이름표(배지) — 사분면 배경색과 같은 계열로 매칭.
+    # 사분면 이름표(배지)
     badge_inset = 4
     parts.append(_quadrant_badge(
         anchor_x=x_right - badge_inset, anchor_y=y_top + badge_inset,
-        text="잘하는 것 (高비중·수익)",
+        text="잘하는 것 (비중↑·수익)",
         bg="#ef4444", fg="#ffffff", side="tr",
     ))
     parts.append(_quadrant_badge(
         anchor_x=x_left + badge_inset, anchor_y=y_top + badge_inset,
-        text="큰 위험 (高비중·손실)",
+        text="큰 위험 (비중↑·손실)",
         bg="#6366f1", fg="#ffffff", side="tl",
     ))
     parts.append(_quadrant_badge(
         anchor_x=x_left + badge_inset, anchor_y=y_bottom - badge_inset,
-        text="다행 (低비중·손실)",
+        text="다행 (비중↓·손실)",
         bg="#22c55e", fg="#0f0f14", side="bl",
     ))
     parts.append(_quadrant_badge(
         anchor_x=x_right - badge_inset, anchor_y=y_bottom - badge_inset,
-        text="비중 부족 (低비중·수익)",
+        text="비중 부족 (비중↓·수익)",
         bg="#fbbf24", fg="#0f0f14", side="br",
     ))
 
@@ -275,23 +287,23 @@ def _build_quadrants_svg(
     for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
         r = SVG_RADIUS[p["tier"]]
         clipped = abs(p["return"]) > 50.0
+        cy = sy(p["weight"])
         if clipped:
             direction = 1 if p["return"] > 0 else -1
-            # 마커를 축 안쪽으로 살짝 밀어 프레임과 겹치지 않게.
-            cx = sx(direction * 50.0) - direction * (r + 2)
+            # 마커를 plot 좌/우 끝에 바짝 붙임 (프레임과 r+2 간격).
+            cx = (x_right - r - 2) if direction > 0 else (x_left + r + 2)
         else:
             cx = sx(p["return"])
-        cy = sy(p["weight"])
         parts.append(_tier_marker_svg(cx, cy, p["tier"], p["color"]))
 
         if clipped:
             direction = 1 if p["return"] > 0 else -1
-            # 물결 글리프 — 마커 안쪽 (차트 중심 방향) 에 위치
+            # 세로 물결 — 마커 안쪽에 세로 방향으로
             parts.append(
-                _wave_glyph(cx - direction * (r + 9), cy, WAVE_COLOR)
+                _wave_glyph_v(cx - direction * (r + 8), cy, WAVE_COLOR)
             )
-            # 라벨 — 물결 너머 (역시 안쪽 방향) 에. 실제 수익률 % 도 함께 표기.
-            label_x = cx - direction * (r + 20)
+            # 라벨 — 물결 너머 안쪽. 실제 수익률 % 함께.
+            label_x = cx - direction * (r + 18)
             anchor = "end" if direction > 0 else "start"
             label_html = (
                 f'{p["name"]} <tspan fill="{WAVE_COLOR}" font-weight="700" '
