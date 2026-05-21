@@ -381,6 +381,7 @@ def build_html_report(
     cash_override: float | None = None,
     futures_positions: list[dict] | None = None,
     futures_prices: dict[str, float] | None = None,
+    futures_cash: float | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -455,6 +456,7 @@ def build_html_report(
         sector_data[r["sector"]] += r["eval"]
 
     # 선물 포지션을 섹터에 합산
+    total_margin = 0.0
     for fp in futures_positions or []:
         if fp.get("contracts", 0) <= 0:
             continue
@@ -469,9 +471,23 @@ def build_html_report(
         notional = float(price) * int(fp.get("contracts", 0)) * int(fp.get("multiplier", 10))
         sector_data[sector] += notional
         sector_futures[sector] += notional
+        total_margin += float(fp.get("initial_margin", 0))
 
+    # 현금 분할: futures_cash 가 지정되면 현물/선물 cash 를 분리.
+    # - 현물 cash = total cash - futures_cash (≥0 clamp)
+    # - 선물 free cash = futures_cash - total_margin (≥0 clamp, 마진 차감 후 가용분)
+    futures_cash_val = float(futures_cash) if futures_cash else 0.0
     if show_cash and cash_remaining > 0:
-        sector_data["현금"] += cash_remaining
+        if futures_cash_val > 0:
+            spot_part = max(cash_remaining - futures_cash_val, 0.0)
+            fut_free_part = max(futures_cash_val - total_margin, 0.0)
+            if spot_part > 0:
+                sector_data["현금"] += spot_part
+            if fut_free_part > 0:
+                sector_data["현금"] += fut_free_part
+                sector_futures["현금"] += fut_free_part
+        else:
+            sector_data["현금"] += cash_remaining
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
     sector_total = sum(v for _, v in sector_sorted)
 
@@ -731,7 +747,7 @@ def build_html_report(
 
   {"<div class='warning'>⚠ 종목코드 미등록: " + ", ".join(missing) + "</div>" if missing else ""}
 
-  {build_futures_section(futures_positions or [], futures_prices or {})}
+  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining)}
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{

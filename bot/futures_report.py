@@ -26,6 +26,7 @@ def _days_to_expiry(expiry_iso: str) -> int | None:
 def build_futures_section(
     positions: list[dict],
     current_prices: dict | None = None,
+    total_equity: float | None = None,
 ) -> str:
     """선물 포지션을 HTML 조각으로 반환. 빈 리스트면 빈 문자열.
 
@@ -148,6 +149,19 @@ def build_futures_section(
     total_class = "profit" if total_unrealized >= 0 else "loss"
     total_sign = "+" if total_unrealized >= 0 else ""
 
+    # 평가액 대비 증거금(레버리지 노출률) — 내가 굴리는 자산 중 선물 증거금으로 묶여 있는 비율.
+    if total_equity and total_equity > 0:
+        equity_ratio = total_margin / total_equity * 100
+    else:
+        equity_ratio = 0.0
+    # 30% 넘으면 위험 신호, 10% 이하면 여유, 그 사이는 보통.
+    if equity_ratio >= 30:
+        equity_class = "loss"
+    elif equity_ratio > 0 and equity_ratio < 10:
+        equity_class = "profit"
+    else:
+        equity_class = ""
+
     # 시세 출처 안내 — KIS 실시간이 잡혔으면 추정치 문구 생략
     if sources_seen == {"kis"} or sources_seen == {"kis", "manual"} or sources_seen == {"manual"}:
         quote_note = ""
@@ -177,9 +191,9 @@ def build_futures_section(
       <div class="value {total_class}">{total_sign}{format_number(int(total_unrealized))}원</div>
     </div>
     <div class="card">
-      <div class="label">증거금 잠식률</div>
-      <div class="value {burn_class}">{margin_burn:.1f}%</div>
-      <div class="sub">총 증거금 {format_number(int(total_margin))}원</div>
+      <div class="label">평가액 대비 증거금</div>
+      <div class="value {equity_class}">{equity_ratio:.1f}%</div>
+      <div class="sub">잠식 <span class="{burn_class}">{margin_burn:.1f}%</span> · 총 {format_number(int(total_margin))}원</div>
     </div>
   </div>
   <div class="table-wrap">
