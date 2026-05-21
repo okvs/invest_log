@@ -65,12 +65,16 @@ def build_futures_section(
             cur = entry.get("price")
             change_pct = entry.get("change_pct")
             source = entry.get("source")
+            u_price = entry.get("underlying_price")
+            u_change = entry.get("underlying_change_pct")
             if source:
                 sources_seen.add(source)
         else:
             cur = entry
             change_pct = None
             source = None
+            u_price = None
+            u_change = None
 
         if cur is None:
             cur_display = "-"
@@ -89,6 +93,19 @@ def build_futures_section(
             unrealized = (cur - avg) * contracts * mult * sign
             notional = avg * contracts * mult
             unrealized_pct = (unrealized / notional * 100) if notional else 0.0
+
+        # 기초자산 셀
+        if u_price is None:
+            underlying_display = "-"
+        else:
+            underlying_display = f"{format_number(int(u_price))}원"
+            if u_change is not None:
+                uc_class = "profit" if u_change >= 0 else "loss"
+                uc_sign = "+" if u_change >= 0 else ""
+                underlying_display += (
+                    f'<br><small class="{uc_class}">'
+                    f'({uc_sign}{u_change:.2f}%)</small>'
+                )
 
         total_unrealized += unrealized
         total_margin += margin
@@ -114,6 +131,7 @@ def build_futures_section(
           <td class="num {d_class}">{d_display}</td>
           <td class="num">{format_number(int(avg))}원</td>
           <td class="num">{cur_display}</td>
+          <td class="num">{underlying_display}</td>
           <td class="num {pnl_class}">{pnl_sign}{format_number(int(unrealized))}원<br><small>{pnl_sign}{unrealized_pct:.1f}%</small></td>
           <td class="num">{format_number(int(margin))}원</td>
           <td class="thesis">{p.get("thesis","")}</td>
@@ -169,7 +187,7 @@ def build_futures_section(
       <thead>
         <tr>
           <th>섹터</th><th>종목</th><th>방향</th><th>계약수</th><th>결제월</th><th>만기</th>
-          <th>평균진입</th><th>현재가</th><th>미실현</th><th>증거금</th><th>사유</th>
+          <th>평균진입</th><th>현재가</th><th>기초자산</th><th>미실현</th><th>증거금</th><th>사유</th>
         </tr>
       </thead>
       <tbody>{rows_html}</tbody>

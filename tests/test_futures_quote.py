@@ -111,13 +111,16 @@ async def test_fetch_uses_kis_when_available():
     with patch("bot.futures_quote._kis_quote") as mock_kis, \
          patch("bot.futures_quote.fetch_current_quotes") as mock_y:
         mock_kis.return_value = {"price": 300500.0, "change_pct": 7.5}
-        # yfinance는 호출되지 않아야 함
+        # 기초자산 컬럼용 yfinance는 항상 호출되지만, 선물가는 KIS 값이 우선
+        mock_y.return_value = {"005930.KS": {"price": 70000.0, "change_pct": 1.2}}
         result = await fq.fetch_futures_quotes([pos.to_dict()])
-    mock_y.assert_not_called()
     entry = result["005930|202606"]
     assert entry["price"] == 300500.0
     assert entry["change_pct"] == 7.5
     assert entry["source"] == "kis"
+    # 기초자산 시세도 함께 채워짐
+    assert entry["underlying_price"] == 70000.0
+    assert entry["underlying_change_pct"] == 1.2
 
 
 @pytest.mark.asyncio

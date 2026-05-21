@@ -90,10 +90,28 @@ def build_html_report(
     else:
         cash_remaining = (initial_capital - total_invested) if initial_capital is not None else 0
 
-    # 섹터별 집계 — 현금도 한 섹터로 포함
+    # 섹터별 집계 — 현물 평가금 + 선물 명목금(현재가×계약×승수) + 현금
     sector_data: dict[str, float] = defaultdict(float)
+    sector_futures: dict[str, float] = defaultdict(float)  # 선물 부분만 별도 추적
     for r in rows:
         sector_data[r["sector"]] += r["eval"]
+
+    # 선물 포지션을 섹터에 합산
+    for fp in futures_positions or []:
+        if fp.get("contracts", 0) <= 0:
+            continue
+        sector = fp.get("sector", "") or "기타"
+        sym = fp.get("symbol", "")
+        cm = fp.get("contract_month", "")
+        key = f"{sym}|{cm}"
+        q = (futures_prices or {}).get(key) or (futures_prices or {}).get(sym) or {}
+        price = q.get("price") if isinstance(q, dict) else q
+        if price is None:
+            price = float(fp.get("avg_entry_price", 0))
+        notional = float(price) * int(fp.get("contracts", 0)) * int(fp.get("multiplier", 10))
+        sector_data[sector] += notional
+        sector_futures[sector] += notional
+
     if show_cash and cash_remaining > 0:
         sector_data["현금"] += cash_remaining
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
@@ -153,24 +171,65 @@ def build_html_report(
         pct = (val / sector_total * 100) if sector_total else 0
         bar_width = (pct / max_pct * 100) if max_pct else 0
         color = sector_colors[sector]
+        fut_val = sector_futures.get(sector, 0)
+        spot_val = val - fut_val
+        fut_share = (fut_val / val * 100) if val else 0
+        spot_share = 100 - fut_share
+
+        # 가장 큰 섹터를 100%로 했을 때 현재 섹터가 차지하는 너비(%)
+        spot_in_wrap = bar_width * (spot_val / val) if val else 0
+        fut_in_wrap = bar_width * (fut_val / val) if val else 0
+        if fut_val > 0:
+            bar_inner = (
+                f'<div class="sector-bar" style="width:{spot_in_wrap}%;background:{color}"></div>'
+                f'<div class="sector-bar futures-stripe" style="width:{fut_in_wrap}%;background-color:{color}"></div>'
+            )
+            amt_html = (
+                f'{format_number(int(val))}원'
+                f'<span class="futures-tag"> · 선물 {format_number(int(fut_val))}원</span>'
+            )
+        else:
+            bar_inner = f'<div class="sector-bar" style="width:{bar_width}%;background:{color}"></div>'
+            amt_html = f'{format_number(int(val))}원'
+
         sector_bars_html += f"""
         <div class="sector-row">
           <div class="sector-label">{sector}</div>
           <div class="sector-bar-wrap">
-            <div class="sector-bar" style="width:{bar_width}%;background:{color}"></div>
+            <div style="display:flex;height:100%">{bar_inner}</div>
           </div>
-          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(int(val))}원</span></div>
+          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{amt_html}</span></div>
         </div>"""
 
-    # 스택바 (섹터 비중 한 줄)
+    # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리
     stack_segments = ""
     for sector, val in sector_sorted:
         pct = (val / sector_total * 100) if sector_total else 0
         color = sector_colors[sector]
-        if pct >= 3:
-            stack_segments += f'<div class="stack-seg" style="width:{pct}%;background:{color}" title="{sector} {pct:.1f}%"><span>{sector}<br>{pct:.0f}%</span></div>'
-        else:
-            stack_segments += f'<div class="stack-seg" style="width:{pct}%;background:{color}" title="{sector} {pct:.1f}%"></div>'
+        fut_val = sector_futures.get(sector, 0)
+        spot_val = val - fut_val
+        spot_pct = (spot_val / sector_total * 100) if sector_total else 0
+        fut_pct = (fut_val / sector_total * 100) if sector_total else 0
+
+        # 레이블은 면적이 큰 쪽에 표시 (보통 둘을 합쳐 한 섹터로 인식하게)
+        label_seg = "spot" if spot_pct >= fut_pct else "futures"
+        label_html = (
+            f'<span>{sector}<br>{pct:.0f}%</span>' if pct >= 3 else ''
+        )
+
+        if spot_pct > 0:
+            seg_label = label_html if label_seg == "spot" else ""
+            stack_segments += (
+                f'<div class="stack-seg" style="width:{spot_pct}%;background:{color}" '
+                f'title="{sector} 현물 {spot_pct:.1f}%">{seg_label}</div>'
+            )
+        if fut_pct > 0:
+            seg_label = label_html if label_seg == "futures" else ""
+            stack_segments += (
+                f'<div class="stack-seg futures-stripe" '
+                f'style="width:{fut_pct}%;background-color:{color}" '
+                f'title="{sector} 선물 {fut_pct:.1f}%">{seg_label}</div>'
+            )
 
     pnl_class = "profit" if total_pnl >= 0 else "loss"
     pnl_sign = "+" if total_pnl >= 0 else ""
@@ -226,9 +285,20 @@ def build_html_report(
   .sector-row {{ display:flex; align-items:center; margin-bottom:10px; }}
   .sector-label {{ width:120px; font-size:13px; font-weight:600; flex-shrink:0; }}
   .sector-bar-wrap {{ width:200px; height:20px; background:#1a1a24; border-radius:4px; overflow:hidden; margin:0 12px; flex-shrink:0; }}
-  .sector-bar {{ height:100%; border-radius:4px; }}
+  .sector-bar {{ height:100%; }}
   .sector-val {{ font-size:13px; font-weight:600; white-space:nowrap; }}
   .sector-amt {{ color:#888; font-weight:400; margin-left:6px; }}
+  .futures-tag {{ color:#aaa; font-size:11px; }}
+  /* 선물 영역 빗금 오버레이 — 섹터 색은 그대로 유지하고 그 위에 줄무늬 */
+  .futures-stripe {{
+    background-image: repeating-linear-gradient(
+      135deg,
+      rgba(255,255,255,0.30) 0,
+      rgba(255,255,255,0.30) 3px,
+      transparent 3px,
+      transparent 8px
+    );
+  }}
   @media (max-width: 480px) {{
     .sector-bar-wrap {{ width:120px; }}
   }}
@@ -273,6 +343,7 @@ def build_html_report(
   </div>
 
   <div class="stack">{stack_segments}</div>
+  {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
   <div class="section-title">섹터별 비중</div>
   {sector_bars_html}

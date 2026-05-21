@@ -74,23 +74,45 @@ async def fetch_futures_prices(positions: list[dict]) -> dict[str, float]:
 
 
 async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
-    """선물 포지션 리스트 → {position_key: {price, change_pct, source}} 매핑.
+    """선물 포지션 리스트 → {position_key: {…}} 매핑.
 
-    position_key: 같은 symbol 의 다른 결제월을 구분하기 위해 "symbol|contract_month" 사용.
-    source: "manual" | "kis" | "underlying".
+    각 항목:
+      price, change_pct, source              # 선물가 (KIS / manual / underlying)
+      underlying_price, underlying_change_pct # 기초자산 시세 (항상 채움 시도)
+    position_key = "symbol|contract_month".
     """
     if not positions:
         return {}
 
-    result: dict[str, dict] = {}
-
     # 1. 수동 시세 (symbol 단위)
     manual = _read_fresh_manual_quotes()
-
-    # 2. KIS 선물 시세 (symbol+월 단위)
-    # 3. 기초자산 폴백을 위한 ticker_map 준비
     ticker_map = load_ticker_map()
 
+    # 기초자산 yfinance 시세를 한 번에 batch 조회
+    symbol_to_ticker: dict[str, str] = {}
+    for p in positions:
+        sym = p.get("symbol", "")
+        if not sym or sym in symbol_to_ticker:
+            continue
+        name = p.get("name", "")
+        ticker = ticker_map.get(name, "") or next(
+            (v for k, v in ticker_map.items() if k.lower() == name.lower()),
+            "",
+        )
+        if not ticker:
+            ticker = f"{sym}.KS"
+        symbol_to_ticker[sym] = ticker
+
+    tickers = list({t for t in symbol_to_ticker.values() if t})
+    try:
+        underlying_quotes = (
+            await asyncio.to_thread(fetch_current_quotes, tickers) if tickers else {}
+        )
+    except Exception:
+        logger.warning("선물 기초자산 시세 조회 실패", exc_info=True)
+        underlying_quotes = {}
+
+    result: dict[str, dict] = {}
     for p in positions:
         sym = p.get("symbol", "")
         cm = p.get("contract_month", "")
@@ -98,15 +120,22 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
             continue
         key = f"{sym}|{cm}"
 
+        ticker = symbol_to_ticker.get(sym, "")
+        u_quote = underlying_quotes.get(ticker) or {}
+        u_price = u_quote.get("price")
+        u_change = u_quote.get("change_pct")
+
         if sym in manual:
             result[key] = {
                 "price": manual[sym],
                 "change_pct": None,
                 "source": "manual",
+                "underlying_price": u_price,
+                "underlying_change_pct": u_change,
             }
             continue
 
-        # KIS 실시간 선물가 시도 (실패해도 폴백)
+        # KIS 실시간 선물가 시도
         try:
             kis_quote = await asyncio.to_thread(_kis_quote, sym, cm)
         except Exception:
@@ -116,28 +145,19 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
                 "price": kis_quote["price"],
                 "change_pct": kis_quote.get("change_pct"),
                 "source": "kis",
+                "underlying_price": u_price,
+                "underlying_change_pct": u_change,
             }
             continue
 
-        # 기초자산 yfinance 폴백
-        name = p.get("name", "")
-        ticker = ticker_map.get(name, "") or next(
-            (v for k, v in ticker_map.items() if k.lower() == name.lower()),
-            "",
-        )
-        if not ticker:
-            ticker = f"{sym}.KS"
-        try:
-            quotes = await asyncio.to_thread(fetch_current_quotes, [ticker])
-        except Exception:
-            logger.warning("선물 기초자산 시세 조회 실패", exc_info=True)
-            quotes = {}
-        q = quotes.get(ticker)
-        if q:
+        # 기초자산 폴백
+        if u_price is not None:
             result[key] = {
-                "price": q["price"],
-                "change_pct": q.get("change_pct"),
+                "price": u_price,
+                "change_pct": u_change,
                 "source": "underlying",
+                "underlying_price": u_price,
+                "underlying_change_pct": u_change,
             }
 
     return result
