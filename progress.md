@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 4사분면 산점도 라벨을 배지 형태로 + 크기 720×720으로 확대 (2026-05-22) — 색 이모지(🔴🚨🟢🟡)가 데이터 점 모양과 혼동되어, 라벨을 배경색 칠한 이름표(rounded rect)로 교체. `_quadrant_badge()` 추가, 텍스트 폭은 CJK/ASCII 글자수 추정. 사분면 외곽 모서리에 inset 4px로 부착. 122 passed.
 - [x] 4사분면 산점도 축 재배치: X=수익률, Y=비중(미러), 정사각 plot로 4분면 동일 크기 (2026-05-22) — 원점(0,0)이 plot 정중앙. Y축(비중)은 위·아래 둘 다 양수 라벨(미러), X축(수익률)은 부호 있는 표준 표기. 라벨도 사분면별 의미 풀어서: 🔴 잘하는 것(高비중·수익) / 🚨 큰 위험(高비중·손실) / 🟢 다행(低비중·손실) / 🟡 비중 부족(低비중·수익). 122 passed.
 - [x] 잔고 HTML에 비중×수익률 4사분면 산점도 추가 (2026-05-22) — `bot/html_report.py`에 `_build_quadrants_svg()` 신설. 인라인 SVG로 원점(0,0) 기준 4사분면 격자, 10% 단위 tier 마커(T1=작은원/T2=중간원/T3=큰원/T4=육각형/T5=별, SIZE_TABLE/MARKER_TABLE invset_mind 룰 그대로), 종목명 우측 라벨, 사분면 4개 라벨(🔴 잘하는 것/🚨 큰 위험/🟡 비중 부족/🟢 다행), T1~T5 항상 표시되는 범례, "점 크기 = 비중 tier (10% 단위)" 캡션. 데이터는 이미 계산된 rows(eval, pnl_pct) 그대로 재사용. 122 passed.
 - [x] KIS Open Trading API 개별주식선물 실시간 시세 연동 (2026-05-21) — `stocks_battle/broker/kis.py`에 `futures_current_price` 추가 (TR_ID `FHMIF10000000`, FID_COND_MRKT_DIV_CODE `JF`). `invest_log/bot/kis_futures.py` 신설: KIS 선물 마스터(`fo_stk_code_mts.mst`)를 받아 (기초자산 종목코드 + YYYYMM) → KIS 단축코드 매핑 + 5분 가격 캐시. `bot/futures_quote.py` 우선순위 재배치: 수동 시세 → KIS → 기초자산 yfinance 폴백. 키는 stocks_battle/.env 절대경로로 로드(default 실전). HTML 선물 표 현재가 셀에 오늘 등락률(%) 표시, KIS로 다 채워지면 "추정치" 안내 제거. 실전 키 라이브 확인: 삼성전자 6월물 30만/+7.53%, 현대모비스 6월물 67.2만/+23.99%. 122 passed.

@@ -41,6 +41,53 @@ def _star_points(cx: float, cy: float, r_out: float, r_in: float) -> str:
     return " ".join(pts)
 
 
+def _text_width_est(text: str, font_px: int = 13) -> float:
+    """간이 SVG 텍스트 폭 추정. CJK 1글자 ≈ font_px·1.05, ASCII ≈ font_px·0.6."""
+    w = 0.0
+    for ch in text:
+        if ch == " ":
+            w += font_px * 0.35
+        elif ord(ch) > 127 and ch not in "·":
+            w += font_px * 1.05
+        else:
+            w += font_px * 0.6
+    return w
+
+
+def _quadrant_badge(
+    anchor_x: float,
+    anchor_y: float,
+    text: str,
+    bg: str,
+    fg: str,
+    side: str,  # "tl" / "tr" / "bl" / "br"
+) -> str:
+    """사분면 모서리에 붙는 이름표(배지) SVG. anchor_x/y 는 사분면 외곽 모서리 좌표."""
+    pad_x = 10
+    h = 26
+    font_px = 13
+    w = _text_width_est(text, font_px) + pad_x * 2
+    if side in ("tr", "br"):
+        rx = anchor_x - w
+        text_anchor = "end"
+        tx = anchor_x - pad_x
+    else:
+        rx = anchor_x
+        text_anchor = "start"
+        tx = anchor_x + pad_x
+    if side in ("tl", "tr"):
+        ry = anchor_y
+    else:
+        ry = anchor_y - h
+    ty = ry + h / 2 + 4  # text baseline 보정
+    return (
+        f'<rect x="{rx:.2f}" y="{ry:.2f}" width="{w:.2f}" height="{h}" '
+        f'rx="6" ry="6" fill="{bg}" fill-opacity="0.92"/>'
+        f'<text x="{tx:.2f}" y="{ty:.2f}" font-size="{font_px}" fill="{fg}" '
+        f'text-anchor="{text_anchor}" font-weight="700">{text}</text>'
+    )
+
+
 def _tier_marker_svg(cx: float, cy: float, tier: int, color: str) -> str:
     marker = MARKER_TABLE[tier]
     r = SVG_RADIUS[tier]
@@ -81,8 +128,8 @@ def _build_quadrants_svg(
         })
 
     # SVG 영역 — 정사각형 plot 으로 4분면 크기 동일성 보장
-    W, H = 560, 560
-    pad_l, pad_r, pad_t, pad_b = 60, 30, 30, 50
+    W, H = 720, 720
+    pad_l, pad_r, pad_t, pad_b = 70, 36, 40, 60
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
@@ -196,23 +243,29 @@ def _build_quadrants_svg(
         f'transform="rotate(-90 16 {mid_y:.2f})">비중 (%)</text>'
     )
 
-    # 사분면 라벨 4개 — 데이터는 위쪽 절반(Y>0)에만 찍힘
-    parts.append(
-        f'<text x="{x_right - 8}" y="{y_top + 16}" font-size="11" fill="#22c55e" '
-        f'text-anchor="end" font-weight="700">🔴 잘하는 것 (高비중·수익)</text>'
-    )
-    parts.append(
-        f'<text x="{x_left + 8}" y="{y_top + 16}" font-size="11" fill="#ef4444" '
-        f'text-anchor="start" font-weight="700">🚨 큰 위험 (高비중·손실)</text>'
-    )
-    parts.append(
-        f'<text x="{x_left + 8}" y="{y_bottom - 8}" font-size="11" fill="#9ca3af" '
-        f'text-anchor="start" font-weight="700">🟢 다행 (低비중·손실)</text>'
-    )
-    parts.append(
-        f'<text x="{x_right - 8}" y="{y_bottom - 8}" font-size="11" fill="#fbbf24" '
-        f'text-anchor="end" font-weight="700">🟡 비중 부족 (低비중·수익)</text>'
-    )
+    # 사분면 이름표(배지) — 색 동그라미 대신 배경색으로 사분면 구분.
+    # 위치는 각 사분면의 plot 외곽 모서리에 붙인다.
+    badge_inset = 4
+    parts.append(_quadrant_badge(
+        anchor_x=x_right - badge_inset, anchor_y=y_top + badge_inset,
+        text="잘하는 것 (高비중·수익)",
+        bg="#22c55e", fg="#0f0f14", side="tr",
+    ))
+    parts.append(_quadrant_badge(
+        anchor_x=x_left + badge_inset, anchor_y=y_top + badge_inset,
+        text="큰 위험 (高비중·손실)",
+        bg="#ef4444", fg="#ffffff", side="tl",
+    ))
+    parts.append(_quadrant_badge(
+        anchor_x=x_left + badge_inset, anchor_y=y_bottom - badge_inset,
+        text="다행 (低비중·손실)",
+        bg="#6b7280", fg="#ffffff", side="bl",
+    ))
+    parts.append(_quadrant_badge(
+        anchor_x=x_right - badge_inset, anchor_y=y_bottom - badge_inset,
+        text="비중 부족 (低비중·수익)",
+        bg="#f59e0b", fg="#0f0f14", side="br",
+    ))
 
     # 데이터 점 — 큰 마커가 먼저 그려져서 작은 마커가 위에 오도록 tier desc 정렬
     for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
