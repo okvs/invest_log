@@ -86,10 +86,12 @@ def test_parse_returns_futures_message():
     assert msg.broker == "KB"
 
 
-def test_price_per_share_hypothesis_A():
-    """체결금액=총 체결대금 가설: 676,000 / (2 × 10) = 33,800."""
+def test_price_per_share_is_raw_amount():
+    """KB 선물 알림의 `체결금액`은 주당 단가 그대로다."""
     msg = parse_broker_message(SAMPLE)
-    assert msg.price_per_share() == 33800.0
+    assert msg.price_per_share() == 676000.0
+    # 총 매수대금 = 676,000 × 2계약 × 10승수 = 13,520,000원
+    assert msg.total_amount() == 13_520_000.0
 
 
 def test_sell_variant():
@@ -115,9 +117,10 @@ async def test_buy_with_no_position_new_long_entry():
     assert result == FUT_MARGIN
     assert ctx.user_data["fut_action"] == "new"
     assert ctx.user_data["fut_direction"] == "long"
-    # 메시지에 단가가 노출되어 사용자가 검증 가능
+    # 단가·계약수·총대금이 그대로 노출되어 사용자가 즉시 검증 가능
     msg_text = update.message.reply_text.call_args[0][0]
-    assert "33,800" in msg_text
+    assert "676,000" in msg_text          # 단가
+    assert "13,520,000" in msg_text       # 총 매수대금
 
 
 @pytest.mark.asyncio
@@ -142,7 +145,7 @@ async def test_full_new_entry_flow():
     assert p["name"] == "현대모비스"
     assert p["direction"] == "long"
     assert p["contracts"] == 2
-    assert p["avg_entry_price"] == 33800.0
+    assert p["avg_entry_price"] == 676000.0
     assert p["contract_month"] == "202606"
     assert p["expiry_date"] == "2026-06-11"  # 두 번째 목요일
     assert p["multiplier"] == 10
@@ -165,7 +168,7 @@ def _seed(name="현대모비스", direction="long", contracts=2, cm="202606"):
         expiry_date="2026-06-11",
         direction=direction,
         contracts=contracts,
-        avg_entry_price=33000.0,
+        avg_entry_price=670000.0,
         initial_margin=2400000.0,
         thesis="원래 사유",
     )
@@ -189,9 +192,9 @@ async def test_buy_with_existing_long_is_add():
     positions = load_futures_positions()
     assert len(positions) == 1
     p = positions[0]
-    # (33000*1 + 33800*2) / 3 = 33533.33...
+    # (670000*1 + 676000*2) / 3 = 674000
     assert p["contracts"] == 3
-    assert round(p["avg_entry_price"], 2) == round((33000.0 + 33800.0 * 2) / 3, 2)
+    assert round(p["avg_entry_price"], 2) == round((670000.0 + 676000.0 * 2) / 3, 2)
     assert p["initial_margin"] == 2400000.0 + 2520000.0
 
 
@@ -207,7 +210,7 @@ async def test_sell_with_existing_long_is_close():
     assert result == FUT_CLOSE_REASON
     assert ctx.user_data["fut_close_pos_id"] == pos.id
     assert ctx.user_data["fut_close_contracts"] == 2
-    assert ctx.user_data["fut_close_price"] == 33800.0
+    assert ctx.user_data["fut_close_price"] == 676000.0
 
     # 사유 입력 → 청산 처리
     r_update = _make_update("목표가 도달")[0]
@@ -219,8 +222,8 @@ async def test_sell_with_existing_long_is_close():
     txs = load_futures_transactions()
     closes = [t for t in txs if t["type"] == "close"]
     assert len(closes) == 1
-    # 롱: (33800-33000) * 2 * 10 = 16000
-    assert closes[0]["pnl"] == 16000.0
+    # 롱: (676000-670000) * 2 * 10 = 120,000
+    assert closes[0]["pnl"] == 120000.0
     assert closes[0]["reason"] == "목표가 도달"
 
 
@@ -237,8 +240,8 @@ async def test_buy_with_existing_short_is_close():
 
     txs = load_futures_transactions()
     closes = [t for t in txs if t["type"] == "close"]
-    # 숏 (33800-33000)*2*10*-1 = -16000 (가격이 오른 시점에 청산 = 손실)
-    assert closes[0]["pnl"] == -16000.0
+    # 숏 (676000-670000)*2*10*-1 = -120,000 (가격이 오른 시점에 청산 = 손실)
+    assert closes[0]["pnl"] == -120000.0
 
 
 @pytest.mark.asyncio

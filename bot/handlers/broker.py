@@ -474,10 +474,11 @@ def _format_msg_summary(msg: FuturesBrokerMessage) -> str:
     cm_label = f"{cm[2:4]}년{cm[4:6]}월물" if len(cm) == 6 else cm
     side = "매수" if msg.trade_type == "buy" else "매도"
     pps = msg.price_per_share()
+    total = msg.total_amount()
     return (
         f"[KB 선물 체결] {msg.name} {cm_label} {side} {msg.quantity}계약\n"
-        f"체결금액 {int(msg.raw_amount):,}원 → 단가 {int(pps):,}원/주 "
-        f"(승수 {msg.multiplier})"
+        f"단가 {int(pps):,}원 × {msg.quantity}계약 × {msg.multiplier}승수 "
+        f"= 총 {int(total):,}원"
     )
 
 

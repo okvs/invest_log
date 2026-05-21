@@ -205,27 +205,22 @@ class BrokerMessage:
 class FuturesBrokerMessage:
     """KB증권 등에서 받은 선물 체결 메시지.
 
-    체결금액 해석 가설 — KB증권 개별주식선물 메시지의 `체결금액`은
-    `계약수 × multiplier × 주당가`인 총 체결대금으로 가정한다.
-    즉 `price_per_share()`로 단가를 산출한다. 사용자가 다른 의미로
-    온다고 알리면 이 함수를 다른 가설로 교체한다.
+    KB증권 개별주식선물 알림의 `■ 체결금액`은 **주당 단가**(체결가)다.
+    총 체결대금은 `단가 × 계약수 × multiplier`로 계산한다.
     """
     name: str
     contract_month: str          # YYYYMM
     multiplier: int
     quantity: int                # 계약수
-    raw_amount: float            # 메시지의 체결금액 (해석은 price_per_share)
+    raw_amount: float            # 체결금액 = 주당 단가
     trade_type: str              # "buy" | "sell"
     broker: str                  # "KB"
 
     def price_per_share(self) -> float:
-        denom = self.quantity * self.multiplier
-        if denom <= 0:
-            return 0.0
-        return self.raw_amount / denom
+        return self.raw_amount
 
     def total_amount(self) -> float:
-        return self.raw_amount
+        return self.raw_amount * self.quantity * self.multiplier
 
 
 def _parse_kb_message(text: str) -> BrokerMessage:
