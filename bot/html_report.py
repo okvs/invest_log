@@ -57,10 +57,12 @@ def _tier_marker_svg(cx: float, cy: float, tier: int, color: str) -> str:
 def _build_quadrants_svg(
     rows: list[dict], sector_colors: dict[str, str], total_eval: float
 ) -> str:
-    """비중(X) × 수익률(Y) 4사분면 산점도를 inline SVG 로 그린다.
+    """수익률(X) × 비중(Y) 4사분면 산점도를 inline SVG 로 그린다.
 
-    원점(0,0) 기준 4사분면. 점 크기/모양은 SIZE_TABLE/MARKER_TABLE (10% tier).
-    범례는 T1~T5 전부 표시.
+    원점(0,0) 기준 4사분면 — 두 축 모두 0 중심 대칭이라 4분면 크기가 동일.
+    비중(Y)은 항상 양수라 위쪽 영역에 데이터가 찍히고, 아래는 시각적 미러
+    (Y 눈금 라벨도 양쪽 다 양수). 점 크기/모양은 SIZE_TABLE/MARKER_TABLE
+    (10% tier). 범례는 T1~T5 전부 표시.
     """
     if not rows or total_eval <= 0:
         return ""
@@ -78,23 +80,25 @@ def _build_quadrants_svg(
             "color": sector_colors.get(r["sector"], "#9ca3af"),
         })
 
-    # SVG 영역
-    W, H = 780, 480
-    pad_l, pad_r, pad_t, pad_b = 50, 20, 30, 50
+    # SVG 영역 — 정사각형 plot 으로 4분면 크기 동일성 보장
+    W, H = 560, 560
+    pad_l, pad_r, pad_t, pad_b = 60, 30, 30, 50
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
-    # 축 범위 — 원점(0,0)이 항상 plot 안에 들어오도록 좌측에 작은 음수 영역 확보
-    max_w = max(p["weight"] for p in points)
-    x_min = -3.0
-    x_max = max(max_w * 1.15, 20.0)
-
+    # X축: 수익률(%). 0이 가운데 오도록 ±x_abs 로 대칭.
     rets = [p["return"] for p in points]
-    max_r = max(rets)
-    min_r = min(rets)
-    margin = max(abs(max_r), abs(min_r), 10.0) * 0.2
-    y_max = max(max_r + margin, 10.0)
-    y_min = min(min_r - margin, -10.0)
+    x_abs_raw = max(max(abs(r) for r in rets), 10.0)
+    # 10% 단위로 올림해서 눈금이 가장자리와 깔끔하게 맞도록.
+    x_abs = math.ceil(x_abs_raw * 1.15 / 10.0) * 10.0
+
+    # Y축: 비중(%). 위로도 +, 아래로도 + 대칭.
+    max_w = max(p["weight"] for p in points)
+    y_abs_raw = max(max_w, 10.0)
+    y_abs = math.ceil(y_abs_raw * 1.15 / 10.0) * 10.0
+
+    x_min, x_max = -x_abs, x_abs
+    y_min, y_max = -y_abs, y_abs
 
     def sx(x: float) -> float:
         return pad_l + (x - x_min) / (x_max - x_min) * plot_w
@@ -102,39 +106,37 @@ def _build_quadrants_svg(
     def sy(y: float) -> float:
         return pad_t + (y_max - y) / (y_max - y_min) * plot_h
 
-    ox, oy = sx(0), sy(0)
+    ox, oy = sx(0), sy(0)  # 정확히 plot 중심
     x_left, x_right = pad_l, pad_l + plot_w
     y_top, y_bottom = pad_t, pad_t + plot_h
 
     parts: list[str] = []
     parts.append(
         f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
-        f'style="background:#0f0f14;width:100%;max-width:780px;height:auto;display:block;margin:0 auto;">'
+        f'style="background:#0f0f14;width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
     )
 
-    # 사분면 배경 살짝 틴팅
+    # 사분면 배경 살짝 틴팅 — 4분면 모두 같은 크기
     parts.append(
         f'<rect x="{ox}" y="{y_top}" width="{x_right - ox}" height="{oy - y_top}" '
         f'fill="#22c55e" fill-opacity="0.05"/>'
-    )  # Q1
+    )  # Q1 top-right
     parts.append(
         f'<rect x="{x_left}" y="{y_top}" width="{ox - x_left}" height="{oy - y_top}" '
-        f'fill="#fbbf24" fill-opacity="0.05"/>'
-    )  # Q2
+        f'fill="#ef4444" fill-opacity="0.05"/>'
+    )  # Q2 top-left
     parts.append(
         f'<rect x="{x_left}" y="{oy}" width="{ox - x_left}" height="{y_bottom - oy}" '
         f'fill="#9ca3af" fill-opacity="0.05"/>'
-    )  # Q3
+    )  # Q3 bottom-left
     parts.append(
         f'<rect x="{ox}" y="{oy}" width="{x_right - ox}" height="{y_bottom - oy}" '
-        f'fill="#ef4444" fill-opacity="0.05"/>'
-    )  # Q4
+        f'fill="#fbbf24" fill-opacity="0.05"/>'
+    )  # Q4 bottom-right
 
     # 격자 (10% 단위)
-    ticks_x = list(range(0, int(x_max) + 1, 10))
-    y_lo = int(math.floor(y_min / 10) * 10)
-    y_hi = int(math.ceil(y_max / 10) * 10)
-    ticks_y = list(range(y_lo, y_hi + 1, 10))
+    ticks_x = list(range(-int(x_abs), int(x_abs) + 1, 10))
+    ticks_y = list(range(-int(y_abs), int(y_abs) + 1, 10))
     for tx in ticks_x:
         px = sx(tx)
         parts.append(
@@ -148,14 +150,14 @@ def _build_quadrants_svg(
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
 
-    # 사분면 구분선 (원점 0,0)
+    # 사분면 구분선 (원점 0,0) — 정확히 plot 중심
     parts.append(
         f'<line x1="{ox:.2f}" y1="{y_top}" x2="{ox:.2f}" y2="{y_bottom}" '
-        f'stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,4"/>'
+        f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
     parts.append(
         f'<line x1="{x_left}" y1="{oy:.2f}" x2="{x_right}" y2="{oy:.2f}" '
-        f'stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,4"/>'
+        f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
 
     # 외곽 프레임
@@ -164,50 +166,57 @@ def _build_quadrants_svg(
         f'fill="none" stroke="#2a2a3a" stroke-width="1"/>'
     )
 
-    # 눈금 텍스트
+    # X 눈금 텍스트 — 수익률은 부호 있는 표준 표기
     for tx in ticks_x:
+        if tx == 0:
+            label = "0%"
+        elif tx > 0:
+            label = f"+{tx}%"
+        else:
+            label = f"{tx}%"
         parts.append(
             f'<text x="{sx(tx):.2f}" y="{y_bottom + 14}" font-size="10" '
-            f'fill="#888" text-anchor="middle">{tx}%</text>'
+            f'fill="#888" text-anchor="middle">{label}</text>'
         )
+    # Y 눈금 텍스트 — 비중은 양쪽 다 양수(미러)
     for ty in ticks_y:
         parts.append(
             f'<text x="{x_left - 6}" y="{sy(ty) + 3:.2f}" font-size="10" '
-            f'fill="#888" text-anchor="end">{ty}%</text>'
+            f'fill="#888" text-anchor="end">{abs(ty)}%</text>'
         )
 
     # 축 제목
     parts.append(
         f'<text x="{x_left + plot_w / 2:.2f}" y="{H - 8}" font-size="11" '
-        f'fill="#aaa" text-anchor="middle">비중 (%)</text>'
+        f'fill="#aaa" text-anchor="middle">수익률 (%)</text>'
     )
     mid_y = pad_t + plot_h / 2
     parts.append(
-        f'<text x="14" y="{mid_y:.2f}" font-size="11" fill="#aaa" text-anchor="middle" '
-        f'transform="rotate(-90 14 {mid_y:.2f})">수익률 (%)</text>'
+        f'<text x="16" y="{mid_y:.2f}" font-size="11" fill="#aaa" text-anchor="middle" '
+        f'transform="rotate(-90 16 {mid_y:.2f})">비중 (%)</text>'
     )
 
-    # 사분면 라벨 4개
+    # 사분면 라벨 4개 — 데이터는 위쪽 절반(Y>0)에만 찍힘
     parts.append(
         f'<text x="{x_right - 8}" y="{y_top + 16}" font-size="11" fill="#22c55e" '
-        f'text-anchor="end" font-weight="700">🔴 잘하는 것</text>'
+        f'text-anchor="end" font-weight="700">🔴 잘하는 것 (高비중·수익)</text>'
     )
     parts.append(
-        f'<text x="{x_left + 8}" y="{y_top + 16}" font-size="11" fill="#fbbf24" '
-        f'text-anchor="start" font-weight="700">🟡 비중 부족</text>'
+        f'<text x="{x_left + 8}" y="{y_top + 16}" font-size="11" fill="#ef4444" '
+        f'text-anchor="start" font-weight="700">🚨 큰 위험 (高비중·손실)</text>'
     )
     parts.append(
         f'<text x="{x_left + 8}" y="{y_bottom - 8}" font-size="11" fill="#9ca3af" '
-        f'text-anchor="start" font-weight="700">🟢 다행</text>'
+        f'text-anchor="start" font-weight="700">🟢 다행 (低비중·손실)</text>'
     )
     parts.append(
-        f'<text x="{x_right - 8}" y="{y_bottom - 8}" font-size="11" fill="#ef4444" '
-        f'text-anchor="end" font-weight="700">🚨 큰 위험</text>'
+        f'<text x="{x_right - 8}" y="{y_bottom - 8}" font-size="11" fill="#fbbf24" '
+        f'text-anchor="end" font-weight="700">🟡 비중 부족 (低비중·수익)</text>'
     )
 
     # 데이터 점 — 큰 마커가 먼저 그려져서 작은 마커가 위에 오도록 tier desc 정렬
     for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
-        cx, cy = sx(p["weight"]), sy(p["return"])
+        cx, cy = sx(p["return"]), sy(p["weight"])
         parts.append(_tier_marker_svg(cx, cy, p["tier"], p["color"]))
         label_x = cx + SVG_RADIUS[p["tier"]] + 4
         parts.append(
