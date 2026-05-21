@@ -185,11 +185,12 @@ def build_html_report(
         pct = (val / sector_total * 100) if sector_total else 0
         bar_width = (val / max_row_val * 100) if max_row_val else 0
         bar_class = "sector-bar futures-stripe" if is_futures else "sector-bar"
+        # background-color 명시 — `background:` 단축형은 background-image(빗금)를 초기화해 버림
         sector_bars_html += f"""
         <div class="sector-row">
           <div class="sector-label">{label}</div>
           <div class="sector-bar-wrap">
-            <div class="{bar_class}" style="width:{bar_width}%;background:{color}"></div>
+            <div class="{bar_class}" style="width:{bar_width}%;background-color:{color}"></div>
           </div>
           <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(int(val))}원</span></div>
         </div>"""
