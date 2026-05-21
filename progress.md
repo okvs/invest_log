@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 잔고 HTML에 비중×수익률 4사분면 산점도 추가 (2026-05-22) — `bot/html_report.py`에 `_build_quadrants_svg()` 신설. 인라인 SVG로 원점(0,0) 기준 4사분면 격자, 10% 단위 tier 마커(T1=작은원/T2=중간원/T3=큰원/T4=육각형/T5=별, SIZE_TABLE/MARKER_TABLE invset_mind 룰 그대로), 종목명 우측 라벨, 사분면 4개 라벨(🔴 잘하는 것/🚨 큰 위험/🟡 비중 부족/🟢 다행), T1~T5 항상 표시되는 범례, "점 크기 = 비중 tier (10% 단위)" 캡션. 데이터는 이미 계산된 rows(eval, pnl_pct) 그대로 재사용. 122 passed.
 - [x] KIS Open Trading API 개별주식선물 실시간 시세 연동 (2026-05-21) — `stocks_battle/broker/kis.py`에 `futures_current_price` 추가 (TR_ID `FHMIF10000000`, FID_COND_MRKT_DIV_CODE `JF`). `invest_log/bot/kis_futures.py` 신설: KIS 선물 마스터(`fo_stk_code_mts.mst`)를 받아 (기초자산 종목코드 + YYYYMM) → KIS 단축코드 매핑 + 5분 가격 캐시. `bot/futures_quote.py` 우선순위 재배치: 수동 시세 → KIS → 기초자산 yfinance 폴백. 키는 stocks_battle/.env 절대경로로 로드(default 실전). HTML 선물 표 현재가 셀에 오늘 등락률(%) 표시, KIS로 다 채워지면 "추정치" 안내 제거. 실전 키 라이브 확인: 삼성전자 6월물 30만/+7.53%, 현대모비스 6월물 67.2만/+23.99%. 122 passed.
 - [x] '잔고' = '현황' alias + 현재가 옆 오늘 등락률 표시 (2026-05-21) — `main.py` 한국어 키워드 `잔고` 바인딩, 모든 ConversationHandler abort 정규식(11개)에 잔고 추가. `bot/formatters.py` `fetch_current_quotes()`로 yfinance previous_close 기반 일간 변동률 함께 반환. 121 passed.
 - [x] 선물 현황 리포트에 섹터 컬럼 추가 + 진입 플로우에 섹터 단계 (2026-05-21) — `bot/futures_report.py` 표 맨 앞에 `섹터` 컬럼 추가. `futures_buy.py`/`broker.py` 양쪽 플로우에 증거금 다음 단계로 섹터 입력을 끼움(같은 종목의 기존 선물/현물 섹터를 자동 제안, `.` 입력 시 그대로 사용). 시드 데이터 갱신: 삼성전자 6/7월물 → 반도체 / "에이전트 토큰 롱", 현대모비스 6월물 → 로봇 / "피지컬ai". 121 passed.

@@ -2,11 +2,258 @@
 from __future__ import annotations
 
 import io
+import math
 from collections import defaultdict
 from datetime import datetime
 
 from bot.formatters import fetch_current_quotes, format_number, _resolve_tickers
 from bot.futures_report import build_futures_section
+
+
+SIZE_TABLE = {1: 40, 2: 120, 3: 280, 4: 280, 5: 280}
+MARKER_TABLE = {1: "o", 2: "o", 3: "o", 4: "h", 5: "*"}
+SVG_RADIUS = {1: 5, 2: 9, 3: 13, 4: 13, 5: 14}
+
+
+def _tier_for_weight(weight_pct: float) -> int:
+    """비중(%)로부터 tier(1~5)를 계산. T6+ 는 T5로 묶는다."""
+    return min(int(weight_pct // 10) + 1, 5)
+
+
+def _hexagon_points(cx: float, cy: float, r: float) -> str:
+    pts = []
+    for i in range(6):
+        angle = math.pi / 3 * i + math.pi / 6
+        x = cx + r * math.cos(angle)
+        y = cy + r * math.sin(angle)
+        pts.append(f"{x:.2f},{y:.2f}")
+    return " ".join(pts)
+
+
+def _star_points(cx: float, cy: float, r_out: float, r_in: float) -> str:
+    pts = []
+    for i in range(10):
+        angle = -math.pi / 2 + math.pi / 5 * i
+        r = r_out if i % 2 == 0 else r_in
+        x = cx + r * math.cos(angle)
+        y = cy + r * math.sin(angle)
+        pts.append(f"{x:.2f},{y:.2f}")
+    return " ".join(pts)
+
+
+def _tier_marker_svg(cx: float, cy: float, tier: int, color: str) -> str:
+    marker = MARKER_TABLE[tier]
+    r = SVG_RADIUS[tier]
+    common = f'fill="{color}" stroke="#0f0f14" stroke-width="1" fill-opacity="0.88"'
+    if marker == "o":
+        return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {common}/>'
+    if marker == "h":
+        return f'<polygon points="{_hexagon_points(cx, cy, r)}" {common}/>'
+    if marker == "*":
+        return f'<polygon points="{_star_points(cx, cy, r, r * 0.45)}" {common}/>'
+    return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {common}/>'
+
+
+def _build_quadrants_svg(
+    rows: list[dict], sector_colors: dict[str, str], total_eval: float
+) -> str:
+    """비중(X) × 수익률(Y) 4사분면 산점도를 inline SVG 로 그린다.
+
+    원점(0,0) 기준 4사분면. 점 크기/모양은 SIZE_TABLE/MARKER_TABLE (10% tier).
+    범례는 T1~T5 전부 표시.
+    """
+    if not rows or total_eval <= 0:
+        return ""
+
+    points = []
+    for r in rows:
+        weight = r["eval"] / total_eval * 100
+        ret = r["pnl_pct"]
+        tier = _tier_for_weight(weight)
+        points.append({
+            "name": r["name"],
+            "weight": weight,
+            "return": ret,
+            "tier": tier,
+            "color": sector_colors.get(r["sector"], "#9ca3af"),
+        })
+
+    # SVG 영역
+    W, H = 780, 480
+    pad_l, pad_r, pad_t, pad_b = 50, 20, 30, 50
+    plot_w = W - pad_l - pad_r
+    plot_h = H - pad_t - pad_b
+
+    # 축 범위 — 원점(0,0)이 항상 plot 안에 들어오도록 좌측에 작은 음수 영역 확보
+    max_w = max(p["weight"] for p in points)
+    x_min = -3.0
+    x_max = max(max_w * 1.15, 20.0)
+
+    rets = [p["return"] for p in points]
+    max_r = max(rets)
+    min_r = min(rets)
+    margin = max(abs(max_r), abs(min_r), 10.0) * 0.2
+    y_max = max(max_r + margin, 10.0)
+    y_min = min(min_r - margin, -10.0)
+
+    def sx(x: float) -> float:
+        return pad_l + (x - x_min) / (x_max - x_min) * plot_w
+
+    def sy(y: float) -> float:
+        return pad_t + (y_max - y) / (y_max - y_min) * plot_h
+
+    ox, oy = sx(0), sy(0)
+    x_left, x_right = pad_l, pad_l + plot_w
+    y_top, y_bottom = pad_t, pad_t + plot_h
+
+    parts: list[str] = []
+    parts.append(
+        f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
+        f'style="background:#0f0f14;width:100%;max-width:780px;height:auto;display:block;margin:0 auto;">'
+    )
+
+    # 사분면 배경 살짝 틴팅
+    parts.append(
+        f'<rect x="{ox}" y="{y_top}" width="{x_right - ox}" height="{oy - y_top}" '
+        f'fill="#22c55e" fill-opacity="0.05"/>'
+    )  # Q1
+    parts.append(
+        f'<rect x="{x_left}" y="{y_top}" width="{ox - x_left}" height="{oy - y_top}" '
+        f'fill="#fbbf24" fill-opacity="0.05"/>'
+    )  # Q2
+    parts.append(
+        f'<rect x="{x_left}" y="{oy}" width="{ox - x_left}" height="{y_bottom - oy}" '
+        f'fill="#9ca3af" fill-opacity="0.05"/>'
+    )  # Q3
+    parts.append(
+        f'<rect x="{ox}" y="{oy}" width="{x_right - ox}" height="{y_bottom - oy}" '
+        f'fill="#ef4444" fill-opacity="0.05"/>'
+    )  # Q4
+
+    # 격자 (10% 단위)
+    ticks_x = list(range(0, int(x_max) + 1, 10))
+    y_lo = int(math.floor(y_min / 10) * 10)
+    y_hi = int(math.ceil(y_max / 10) * 10)
+    ticks_y = list(range(y_lo, y_hi + 1, 10))
+    for tx in ticks_x:
+        px = sx(tx)
+        parts.append(
+            f'<line x1="{px:.2f}" y1="{y_top}" x2="{px:.2f}" y2="{y_bottom}" '
+            f'stroke="#1a1a24" stroke-width="1"/>'
+        )
+    for ty in ticks_y:
+        py = sy(ty)
+        parts.append(
+            f'<line x1="{x_left}" y1="{py:.2f}" x2="{x_right}" y2="{py:.2f}" '
+            f'stroke="#1a1a24" stroke-width="1"/>'
+        )
+
+    # 사분면 구분선 (원점 0,0)
+    parts.append(
+        f'<line x1="{ox:.2f}" y1="{y_top}" x2="{ox:.2f}" y2="{y_bottom}" '
+        f'stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,4"/>'
+    )
+    parts.append(
+        f'<line x1="{x_left}" y1="{oy:.2f}" x2="{x_right}" y2="{oy:.2f}" '
+        f'stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5,4"/>'
+    )
+
+    # 외곽 프레임
+    parts.append(
+        f'<rect x="{x_left}" y="{y_top}" width="{plot_w}" height="{plot_h}" '
+        f'fill="none" stroke="#2a2a3a" stroke-width="1"/>'
+    )
+
+    # 눈금 텍스트
+    for tx in ticks_x:
+        parts.append(
+            f'<text x="{sx(tx):.2f}" y="{y_bottom + 14}" font-size="10" '
+            f'fill="#888" text-anchor="middle">{tx}%</text>'
+        )
+    for ty in ticks_y:
+        parts.append(
+            f'<text x="{x_left - 6}" y="{sy(ty) + 3:.2f}" font-size="10" '
+            f'fill="#888" text-anchor="end">{ty}%</text>'
+        )
+
+    # 축 제목
+    parts.append(
+        f'<text x="{x_left + plot_w / 2:.2f}" y="{H - 8}" font-size="11" '
+        f'fill="#aaa" text-anchor="middle">비중 (%)</text>'
+    )
+    mid_y = pad_t + plot_h / 2
+    parts.append(
+        f'<text x="14" y="{mid_y:.2f}" font-size="11" fill="#aaa" text-anchor="middle" '
+        f'transform="rotate(-90 14 {mid_y:.2f})">수익률 (%)</text>'
+    )
+
+    # 사분면 라벨 4개
+    parts.append(
+        f'<text x="{x_right - 8}" y="{y_top + 16}" font-size="11" fill="#22c55e" '
+        f'text-anchor="end" font-weight="700">🔴 잘하는 것</text>'
+    )
+    parts.append(
+        f'<text x="{x_left + 8}" y="{y_top + 16}" font-size="11" fill="#fbbf24" '
+        f'text-anchor="start" font-weight="700">🟡 비중 부족</text>'
+    )
+    parts.append(
+        f'<text x="{x_left + 8}" y="{y_bottom - 8}" font-size="11" fill="#9ca3af" '
+        f'text-anchor="start" font-weight="700">🟢 다행</text>'
+    )
+    parts.append(
+        f'<text x="{x_right - 8}" y="{y_bottom - 8}" font-size="11" fill="#ef4444" '
+        f'text-anchor="end" font-weight="700">🚨 큰 위험</text>'
+    )
+
+    # 데이터 점 — 큰 마커가 먼저 그려져서 작은 마커가 위에 오도록 tier desc 정렬
+    for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
+        cx, cy = sx(p["weight"]), sy(p["return"])
+        parts.append(_tier_marker_svg(cx, cy, p["tier"], p["color"]))
+        label_x = cx + SVG_RADIUS[p["tier"]] + 4
+        parts.append(
+            f'<text x="{label_x:.2f}" y="{cy + 3:.2f}" font-size="11" '
+            f'fill="#e0e0e0">{p["name"]}</text>'
+        )
+
+    parts.append("</svg>")
+
+    # 범례 (T1~T5 항상 표시)
+    legend_specs = [
+        (1, "T1 (<10%)"),
+        (2, "T2 (10–20%)"),
+        (3, "T3 (20–30%)"),
+        (4, "T4 (30–40%)"),
+        (5, "T5 (≥40%)"),
+    ]
+    legend_items = []
+    for tier, label in legend_specs:
+        size = 36
+        chip = (
+            f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+            f'style="vertical-align:middle">'
+            + _tier_marker_svg(size / 2, size / 2, tier, "#888")
+            + "</svg>"
+        )
+        legend_items.append(
+            f'<div class="qd-legend-item">{chip}<span>{label}</span></div>'
+        )
+    legend_html = (
+        '<div class="qd-legend">' + "".join(legend_items) + "</div>"
+    )
+
+    caption = (
+        '<div class="qd-caption">점 크기 = 비중 tier (10% 단위) · '
+        "원/원/원/육각형/별 (T1·T2·T3·T4·T5)</div>"
+    )
+
+    return (
+        '<div class="section-title" style="margin-top:32px">비중 × 수익률 4사분면</div>'
+        '<div class="qd-wrap">'
+        + "".join(parts)
+        + legend_html
+        + caption
+        + "</div>"
+    )
 
 
 def _format_man(n: float) -> str:
@@ -312,6 +559,12 @@ def build_html_report(
   .dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; }}
   .thesis {{ color:#888; font-size:12px; min-width:210px; max-width:340px; }}
 
+  /* 4사분면 산점도 */
+  .qd-wrap {{ margin-top:8px; margin-bottom:32px; }}
+  .qd-legend {{ display:flex; flex-wrap:wrap; justify-content:center; gap:18px; margin-top:12px; }}
+  .qd-legend-item {{ display:flex; align-items:center; gap:6px; font-size:12px; color:#bbb; }}
+  .qd-caption {{ text-align:center; font-size:11px; color:#888; margin-top:8px; }}
+
   /* 미등록 알림 */
   .warning {{ margin-top:24px; background:#2a2215; border:1px solid #665520; border-radius:8px; padding:16px; font-size:13px; color:#fbbf24; }}
 </style>
@@ -339,6 +592,8 @@ def build_html_report(
 
   <div class="stack">{stack_segments}</div>
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
+
+  {_build_quadrants_svg(rows, sector_colors, total_eval)}
 
   <div class="section-title">섹터별 비중</div>
   {sector_bars_html}
