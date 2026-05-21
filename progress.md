@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] KB증권 선물옵션 체결 메시지 자동 파싱 + chat_id 자동 캐싱 (2026-05-21) — `parsers/input_parser.py`에 `FuturesBrokerMessage`/`_parse_kb_futures_message`(종목명 `<이름> F YYYYMM ( 승수 )` 패턴). `broker.py`가 isinstance로 선물 분기 → **매수체결/매도체결과 기존 포지션 방향으로 진입(신규/추가) vs 청산을 자동 추론**. 진입은 증거금+사유, 청산은 사유만 묻고 처리. 만기일은 `second_thursday`로 자동 계산. `main.py`에 `TypeHandler` group=-1로 모든 update에서 chat_id 자동 캐싱 — `/start` 없이도 푸시 알림 동작. 단가 가설은 "총 체결대금 / (계약수×승수)" = A안. 117 passed.
 - [x] 선물 Phase 5: 만기 임박 알림 + 만기점검 명령 (2026-05-21) — `bot/futures_alerts.py`(D-3 이하 포지션 collect→render→push, 같은 날 중복 발송 방지), 매일 08:00 KST `JobQueue.run_daily`로 자동 실행. `만기점검` 즉시 명령. `/start` 시 chat_id 자동 캐싱. requirements에 `python-telegram-bot[job-queue]`로 APScheduler 의존성 명시. 105 passed.
 - [x] 선물 Phase 4: 시세 자동조회 + 수동 보정 (2026-05-21) — `bot/futures_quote.py`(수동 시세 우선 → yfinance 기초자산 폴백, 6시간 TTL), `bot/handlers/futures_quote.py` `선물시세` 명령. HTML 리포트에 "기초자산 시세 기준 추정치" 안내. pykrx 개별주식선물은 KRX 로그인 필요라 1차에선 yfinance 근사. 94 passed.
 - [x] 선물 Phase 3: 회고 + 대시보드 선물 섹션 (2026-05-21) — `models/retrospective.py`에 `is_futures` 플래그, `bot/handlers/futures_retro.py`(close/roll_close 미회고 카드), `bot/futures_report.py`(미실현·증거금 잠식률·D-만기 표), `bot/html_report.py`에 선물 섹션 통합. 시세는 `_fetch_futures_prices` stub만 두고 Phase 4에서 연결. 85 passed.

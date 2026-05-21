@@ -26,6 +26,7 @@ from bot.keyboards import (
     APPEND_THESIS,
     EDIT_SECTOR,
     EDIT_THESIS,
+    FUTURES_PINNED_CLOSE_REASONS,
     KEEP_EXISTING,
     MARGIN_PREFIX,
     REASON_PICK_PREFIX,
@@ -34,11 +35,25 @@ from bot.keyboards import (
     margin_ratio_keyboard,
     reason_select_keyboard,
 )
-from parsers.input_parser import BuyInput, parse_broker_message, resolve_name
+from models.futures_position import FuturesPosition
+from models.futures_transaction import FuturesTransaction
+from parsers.expiry import second_thursday
+from parsers.futures_input import _parse_number as _parse_money
+from parsers.input_parser import (
+    BuyInput,
+    FuturesBrokerMessage,
+    parse_broker_message,
+    resolve_name,
+)
 from storage.json_store import (
+    get_recent_futures_reasons,
     get_recent_reasons,
     load_account,
+    load_futures_positions,
+    load_futures_transactions,
     load_nickname_map,
+    save_futures_positions,
+    save_futures_transactions,
 )
 
 # ConversationHandler states (10~부터 시작하여 buy/sell 상태값과 충돌 방지)
@@ -48,6 +63,10 @@ BUY_THESIS = 12
 BROKER_EXISTING_CONFIRM = 13
 BROKER_MARGIN_SELECT = 14
 BUY_THESIS_APPEND = 15
+# 선물 분기
+FUT_MARGIN = 20
+FUT_THESIS = 21
+FUT_CLOSE_REASON = 22
 
 
 def _end_other_conversations(
@@ -80,7 +99,7 @@ def _end_other_conversations(
 
 
 async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """증권사 메시지 파싱 → 매수/매도 분기."""
+    """증권사 메시지 파싱 → 매수/매도(현물) 또는 진입/청산(선물) 분기."""
     _end_other_conversations(context, update, keep="broker")
     text = update.message.text
 
@@ -93,6 +112,10 @@ async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 닉네임 변환 + 공백 제거
     nmap = load_nickname_map()
     msg.name = resolve_name(msg.name, nickname_map=nmap)
+
+    # 선물 분기
+    if isinstance(msg, FuturesBrokerMessage):
+        return await _handle_futures_broker_msg(update, context, msg)
 
     if msg.trade_type == "sell":
         context.user_data["broker_sell"] = msg
@@ -384,10 +407,353 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     for key in (
         "broker_sell", "broker_buy", "broker_sector",
         "buy_input", "_broker_edit", "recent_reasons", "append_base",
+        "fut_msg", "fut_action", "fut_direction", "fut_margin",
+        "fut_add_pos_id", "fut_close_pos_id", "fut_close_contracts",
+        "fut_close_price",
     ):
         context.user_data.pop(key, None)
     await update.message.reply_text("취소되었습니다.")
     return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# 선물 체결 메시지 처리
+# ---------------------------------------------------------------------------
+
+
+def _find_futures_position(
+    name: str, contract_month: str, direction: str,
+) -> dict | None:
+    """같은 기초자산·결제월·방향 포지션을 반환."""
+    name_key = name.replace(" ", "").lower()
+    for p in load_futures_positions():
+        if p.get("contracts", 0) <= 0:
+            continue
+        if (
+            p.get("name", "").replace(" ", "").lower() == name_key
+            and p.get("contract_month") == contract_month
+            and p.get("direction") == direction
+        ):
+            return p
+    return None
+
+
+def _resolve_futures_action(
+    msg: FuturesBrokerMessage,
+) -> tuple[str, str, dict | None]:
+    """체결 메시지로 액션 자동 추론.
+
+    Returns (action, direction, existing_pos):
+      action: "new" | "add" | "close"
+      direction:
+        - new/add: 신규 진입 방향
+        - close: 청산되는 기존 포지션 방향
+    """
+    name = msg.name
+    cm = msg.contract_month
+    if msg.trade_type == "buy":
+        short_pos = _find_futures_position(name, cm, "short")
+        if short_pos:
+            return "close", "short", short_pos
+        long_pos = _find_futures_position(name, cm, "long")
+        if long_pos:
+            return "add", "long", long_pos
+        return "new", "long", None
+    else:
+        long_pos = _find_futures_position(name, cm, "long")
+        if long_pos:
+            return "close", "long", long_pos
+        short_pos = _find_futures_position(name, cm, "short")
+        if short_pos:
+            return "add", "short", short_pos
+        return "new", "short", None
+
+
+def _format_msg_summary(msg: FuturesBrokerMessage) -> str:
+    cm = msg.contract_month
+    cm_label = f"{cm[2:4]}년{cm[4:6]}월물" if len(cm) == 6 else cm
+    side = "매수" if msg.trade_type == "buy" else "매도"
+    pps = msg.price_per_share()
+    return (
+        f"[KB 선물 체결] {msg.name} {cm_label} {side} {msg.quantity}계약\n"
+        f"체결금액 {int(msg.raw_amount):,}원 → 단가 {int(pps):,}원/주 "
+        f"(승수 {msg.multiplier})"
+    )
+
+
+async def _handle_futures_broker_msg(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, msg: FuturesBrokerMessage,
+) -> int:
+    action, direction, existing = _resolve_futures_action(msg)
+    context.user_data["fut_msg"] = msg
+    context.user_data["fut_action"] = action
+    context.user_data["fut_direction"] = direction
+
+    direction_kr = "롱" if direction == "long" else "숏"
+    summary = _format_msg_summary(msg)
+
+    if action == "close":
+        context.user_data["fut_close_pos_id"] = existing["id"]
+        context.user_data["fut_close_contracts"] = msg.quantity
+        context.user_data["fut_close_price"] = msg.price_per_share()
+        reasons = get_recent_futures_reasons(
+            "close", pinned=FUTURES_PINNED_CLOSE_REASONS
+        )
+        context.user_data["recent_reasons"] = reasons
+        await update.message.reply_text(
+            f"{summary}\n\n"
+            f"기존 {direction_kr} 포지션 청산으로 처리합니다.\n"
+            "청산 사유를 입력해주세요.\n\n"
+            "최근 사유를 선택하거나 직접 입력하세요.",
+            reply_markup=reason_select_keyboard(reasons),
+        )
+        return FUT_CLOSE_REASON
+
+    if action == "add":
+        context.user_data["fut_add_pos_id"] = existing["id"]
+        await update.message.reply_text(
+            f"{summary}\n\n"
+            f"기존 {direction_kr} 포지션에 추가 진입으로 처리합니다.\n"
+            "추가 위탁증거금(원)을 입력해주세요."
+        )
+        return FUT_MARGIN
+
+    # new
+    await update.message.reply_text(
+        f"{summary}\n\n"
+        f"신규 {direction_kr} 진입으로 처리합니다.\n"
+        "위탁증거금(원)을 입력해주세요."
+    )
+    return FUT_MARGIN
+
+
+async def _fut_margin_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    text = update.message.text
+    try:
+        margin = _parse_money(text)
+    except ValueError as e:
+        await update.message.reply_text(f"입력 오류: {e}")
+        return FUT_MARGIN
+    if margin <= 0:
+        await update.message.reply_text("증거금은 0보다 커야 합니다.")
+        return FUT_MARGIN
+    context.user_data["fut_margin"] = margin
+
+    reasons = get_recent_futures_reasons("open")
+    context.user_data["recent_reasons"] = reasons
+    msg = "진입 사유를 입력해주세요."
+    if reasons:
+        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+    await update.message.reply_text(
+        msg, reply_markup=reason_select_keyboard(reasons) if reasons else None,
+    )
+    return FUT_THESIS
+
+
+async def _fut_thesis_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    thesis = update.message.text.strip()
+    context.user_data.pop("recent_reasons", None)
+    return await _do_open_save(update, context, thesis, is_callback=False)
+
+
+async def _fut_thesis_pick(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    try:
+        idx = int(query.data.removeprefix(REASON_PICK_PREFIX))
+    except ValueError:
+        idx = -1
+    reasons = context.user_data.get("recent_reasons", [])
+    context.user_data.pop("recent_reasons", None)
+    if idx < 0 or idx >= len(reasons):
+        await query.edit_message_text("세션이 만료되었습니다.")
+        return ConversationHandler.END
+    return await _do_open_save(query, context, reasons[idx], is_callback=True)
+
+
+async def _do_open_save(
+    update_or_query, context: ContextTypes.DEFAULT_TYPE, thesis: str,
+    *, is_callback: bool,
+) -> int:
+    msg: FuturesBrokerMessage = context.user_data.pop("fut_msg")
+    direction = context.user_data.pop("fut_direction")
+    margin = float(context.user_data.pop("fut_margin"))
+    action = context.user_data.pop("fut_action")
+    add_pos_id = context.user_data.pop("fut_add_pos_id", None)
+
+    price = msg.price_per_share()
+    contracts = msg.quantity
+    year = int(msg.contract_month[:4])
+    month = int(msg.contract_month[4:6])
+    expiry_date = second_thursday(year, month).isoformat()
+
+    tx = FuturesTransaction(
+        type="open",
+        name=msg.name,
+        symbol="",
+        contract_code="",
+        contract_month=msg.contract_month,
+        expiry_date=expiry_date,
+        direction=direction,
+        contracts=contracts,
+        price=price,
+        multiplier=msg.multiplier,
+        margin=margin,
+        thesis=thesis,
+    )
+
+    positions = load_futures_positions()
+    if action == "add" and add_pos_id:
+        idx = next((i for i, p in enumerate(positions) if p["id"] == add_pos_id), None)
+        if idx is None:
+            await _reply(update_or_query, "기존 포지션을 찾지 못해 신규 진입으로 처리합니다.", is_callback)
+            action = "new"
+        else:
+            pos = FuturesPosition.from_dict(positions[idx])
+            pos.add_entry(price=price, contracts=contracts, margin=margin, transaction_id=tx.id)
+            if thesis:
+                pos.thesis = thesis
+            positions[idx] = pos.to_dict()
+            tx.position_id = pos.id
+
+    if action == "new":
+        pos = FuturesPosition(
+            name=msg.name,
+            symbol="",
+            contract_code="",
+            contract_month=msg.contract_month,
+            expiry_date=expiry_date,
+            direction=direction,
+            contracts=contracts,
+            avg_entry_price=price,
+            initial_margin=margin,
+            multiplier=msg.multiplier,
+            thesis=thesis,
+            transaction_ids=[tx.id],
+        )
+        tx.position_id = pos.id
+        positions.append(pos.to_dict())
+
+    save_futures_positions(positions)
+    txs = load_futures_transactions()
+    txs.append(tx.to_dict())
+    save_futures_transactions(txs)
+
+    direction_kr = "롱" if direction == "long" else "숏"
+    label = "신규" if action == "new" else "추가"
+    cm_label = f"{msg.contract_month[2:4]}년 {msg.contract_month[4:6]}월물"
+    result = (
+        f"선물 {label} 진입 완료!\n"
+        f"{msg.name} {direction_kr} {contracts}계약 ({cm_label})\n"
+        f"단가: {int(price):,}원  |  증거금: {int(margin):,}원\n"
+        f'사유: "{thesis}"'
+    )
+    await _reply(update_or_query, result, is_callback)
+    return ConversationHandler.END
+
+
+async def _fut_close_reason_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    reason = update.message.text.strip()
+    context.user_data.pop("recent_reasons", None)
+    return await _do_close_save(update, context, reason, is_callback=False)
+
+
+async def _fut_close_reason_pick(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    try:
+        idx = int(query.data.removeprefix(REASON_PICK_PREFIX))
+    except ValueError:
+        idx = -1
+    reasons = context.user_data.get("recent_reasons", [])
+    context.user_data.pop("recent_reasons", None)
+    if idx < 0 or idx >= len(reasons):
+        await query.edit_message_text("세션이 만료되었습니다.")
+        return ConversationHandler.END
+    return await _do_close_save(query, context, reasons[idx], is_callback=True)
+
+
+async def _do_close_save(
+    update_or_query, context: ContextTypes.DEFAULT_TYPE, reason: str,
+    *, is_callback: bool,
+) -> int:
+    msg = context.user_data.pop("fut_msg")
+    pid = context.user_data.pop("fut_close_pos_id")
+    contracts = int(context.user_data.pop("fut_close_contracts"))
+    price = float(context.user_data.pop("fut_close_price"))
+    context.user_data.pop("fut_action", None)
+    context.user_data.pop("fut_direction", None)
+
+    positions = load_futures_positions()
+    pos_idx = next((i for i, p in enumerate(positions) if p["id"] == pid), None)
+    if pos_idx is None:
+        await _reply(update_or_query, "포지션을 찾을 수 없습니다.", is_callback)
+        return ConversationHandler.END
+
+    pos = FuturesPosition.from_dict(positions[pos_idx])
+    actual = min(contracts, pos.contracts)
+    notional = price * actual * pos.multiplier
+    pnl, margin_release, _ = pos.close(price=price, contracts=actual)
+    pnl_pct = (pnl / notional * 100) if notional else 0.0
+
+    tx = FuturesTransaction(
+        type="close",
+        name=pos.name,
+        symbol=pos.symbol,
+        contract_code=pos.contract_code,
+        contract_month=pos.contract_month,
+        expiry_date=pos.expiry_date,
+        direction=pos.direction,
+        contracts=actual,
+        price=price,
+        multiplier=pos.multiplier,
+        margin=margin_release,
+        sector=pos.sector,
+        reason=reason,
+        position_id=pos.id,
+        pnl=pnl,
+        pnl_pct=round(pnl_pct, 2),
+        buy_thesis=pos.thesis,
+    )
+
+    if pos.contracts <= 0:
+        positions.pop(pos_idx)
+    else:
+        positions[pos_idx] = pos.to_dict()
+    save_futures_positions(positions)
+
+    txs = load_futures_transactions()
+    txs.append(tx.to_dict())
+    save_futures_transactions(txs)
+
+    direction_kr = "롱" if pos.direction == "long" else "숏"
+    sign = "+" if pnl >= 0 else ""
+    result = (
+        f"선물 청산 완료!\n"
+        f"{pos.name} {direction_kr} {actual}계약 x {int(price):,}원\n"
+        f"손익: {sign}{int(pnl):,}원 ({sign}{pnl_pct:.2f}%)\n"
+        f"환급 증거금: {int(margin_release):,}원\n\n"
+        "회고하려면 '선물회고' 를 입력해주세요."
+    )
+    await _reply(update_or_query, result, is_callback)
+    return ConversationHandler.END
+
+
+async def _reply(update_or_query, text: str, is_callback: bool) -> None:
+    if is_callback:
+        await update_or_query.edit_message_text(text)
+    else:
+        await update_or_query.message.reply_text(text)
 
 
 def _other_command_filter() -> filters.BaseFilter:
@@ -441,6 +807,20 @@ def broker_conversation() -> ConversationHandler:
                 CallbackQueryHandler(_broker_margin_selected, pattern=f"^{MARGIN_PREFIX}"),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
+            ],
+            FUT_MARGIN: [
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_margin_input),
+            ],
+            FUT_THESIS: [
+                CallbackQueryHandler(_fut_thesis_pick, pattern=f"^{REASON_PICK_PREFIX}"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_thesis_input),
+            ],
+            FUT_CLOSE_REASON: [
+                CallbackQueryHandler(_fut_close_reason_pick, pattern=f"^{REASON_PICK_PREFIX}"),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_close_reason_input),
             ],
         },
         fallbacks=[

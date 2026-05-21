@@ -9,6 +9,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -58,13 +59,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def start(update: Update, context) -> None:
-    # 만기 알림 등 푸시용으로 chat_id 캐싱
-    try:
-        save_chat_id(update.effective_chat.id)
-    except Exception:
-        logger.warning("chat_id 저장 실패", exc_info=True)
+async def _cache_chat_id(update: Update, context) -> None:
+    """모든 update에서 chat_id를 자동 캐싱 (만기 알림 등 푸시 발송용).
 
+    group=-1로 등록되어 다른 핸들러보다 먼저 실행되지만,
+    ApplicationHandlerStop를 던지지 않아 후속 핸들러도 정상 동작.
+    """
+    chat = update.effective_chat if update else None
+    if chat is None:
+        return
+    try:
+        save_chat_id(chat.id)
+    except Exception:
+        logger.warning("chat_id 자동 캐싱 실패", exc_info=True)
+
+
+async def start(update: Update, context) -> None:
     await update.message.reply_text(
         "안녕하세요! 투자 로그 봇입니다.\n"
         "사용 가능한 명령어:\n"
@@ -92,10 +102,6 @@ def _korean_command(keyword: str) -> filters.BaseFilter:
 
 async def expiry_check_handler(update: Update, context) -> None:
     """만기점검 즉시 명령. JobQueue 알림과 같은 메시지를 호출 즉시 표시."""
-    try:
-        save_chat_id(update.effective_chat.id)
-    except Exception:
-        pass
     alerts = collect_expiry_alerts(load_futures_positions())
     if not alerts:
         await update.message.reply_text("만기 임박 선물 포지션이 없습니다.")
@@ -109,6 +115,9 @@ def main() -> None:
         raise RuntimeError("BOT_TOKEN 환경변수를 설정해주세요. (.env 파일 참고)")
 
     app = Application.builder().token(token).build()
+
+    # 모든 메시지에서 chat_id 자동 캐싱 (다른 핸들러 동작은 그대로)
+    app.add_handler(TypeHandler(Update, _cache_chat_id), group=-1)
 
     # 기본 명령어
     app.add_handler(CommandHandler("start", start))

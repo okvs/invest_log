@@ -201,6 +201,33 @@ class BrokerMessage:
     broker: str  # "KB" or "신한"
 
 
+@dataclass
+class FuturesBrokerMessage:
+    """KB증권 등에서 받은 선물 체결 메시지.
+
+    체결금액 해석 가설 — KB증권 개별주식선물 메시지의 `체결금액`은
+    `계약수 × multiplier × 주당가`인 총 체결대금으로 가정한다.
+    즉 `price_per_share()`로 단가를 산출한다. 사용자가 다른 의미로
+    온다고 알리면 이 함수를 다른 가설로 교체한다.
+    """
+    name: str
+    contract_month: str          # YYYYMM
+    multiplier: int
+    quantity: int                # 계약수
+    raw_amount: float            # 메시지의 체결금액 (해석은 price_per_share)
+    trade_type: str              # "buy" | "sell"
+    broker: str                  # "KB"
+
+    def price_per_share(self) -> float:
+        denom = self.quantity * self.multiplier
+        if denom <= 0:
+            return 0.0
+        return self.raw_amount / denom
+
+    def total_amount(self) -> float:
+        return self.raw_amount
+
+
 def _parse_kb_message(text: str) -> BrokerMessage:
     """KB증권 체결 알림 메시지 파싱. 체결금액은 주당 가격."""
     name_match = re.search(r"■\s*종목명:\s*(.+)", text)
@@ -257,11 +284,70 @@ def _parse_shinhan_message(text: str) -> BrokerMessage:
     )
 
 
-def parse_broker_message(text: str) -> BrokerMessage:
-    """증권사 체결 메시지를 자동 감지하여 파싱."""
-    if text.strip().startswith("[KB증권]"):
+def _is_kb_futures(text: str) -> bool:
+    """KB증권 선물옵션 메시지인지 헤더와 종목명 패턴으로 판단."""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    if "선물옵션" in first_line:
+        return True
+    if re.search(r"■\s*종목명\s*:.+\sF\s+\d{6}", text):
+        return True
+    return False
+
+
+_KB_FUTURES_NAME_RE = re.compile(
+    r"■\s*종목명\s*:\s*(.+?)\s+F\s+(\d{6})\s*\(\s*(\d{1,3})\s*\)"
+)
+
+
+def _parse_kb_futures_message(text: str) -> FuturesBrokerMessage:
+    """KB증권 선물옵션 체결 메시지 파싱.
+
+    종목명 형식: `<기초자산명> F <YYYYMM> ( <multiplier> )`
+    예: `현대모비스 F 202606 (  10)` → name=현대모비스, month=202606, mult=10
+    """
+    name_match = _KB_FUTURES_NAME_RE.search(text)
+    qty_match = re.search(r"■\s*주문수량\s*:\s*([\d,]+)\s*계약", text)
+    amount_match = re.search(r"■\s*체결금액\s*:\s*([\d,]+)\s*원", text)
+    type_match = re.search(r"■\s*내용\s*:\s*(매수|매도)체결", text)
+
+    if not all([name_match, qty_match, amount_match, type_match]):
+        raise ValueError("KB증권 선물옵션 메시지 형식을 인식할 수 없습니다.")
+
+    name = name_match.group(1).strip()
+    contract_month = name_match.group(2)
+    multiplier = int(name_match.group(3))
+    quantity = int(qty_match.group(1).replace(",", ""))
+    raw_amount = float(amount_match.group(1).replace(",", ""))
+    trade_type = "buy" if type_match.group(1) == "매수" else "sell"
+
+    if quantity <= 0:
+        raise ValueError("계약수가 0 이하입니다.")
+    if multiplier <= 0:
+        raise ValueError("승수가 0 이하입니다.")
+
+    return FuturesBrokerMessage(
+        name=name,
+        contract_month=contract_month,
+        multiplier=multiplier,
+        quantity=quantity,
+        raw_amount=raw_amount,
+        trade_type=trade_type,
+        broker="KB",
+    )
+
+
+def parse_broker_message(text: str) -> BrokerMessage | FuturesBrokerMessage:
+    """증권사 체결 메시지를 자동 감지하여 파싱.
+
+    KB증권 선물옵션이면 FuturesBrokerMessage,
+    KB/신한 현물이면 BrokerMessage 반환.
+    """
+    stripped = text.strip()
+    if stripped.startswith("[KB증권]"):
+        if _is_kb_futures(text):
+            return _parse_kb_futures_message(text)
         return _parse_kb_message(text)
-    if text.strip().startswith("계좌명"):
+    if stripped.startswith("계좌명"):
         return _parse_shinhan_message(text)
     raise ValueError("지원하는 증권사 메시지 형식이 아닙니다.")
 
