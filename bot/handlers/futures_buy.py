@@ -52,7 +52,7 @@ from storage.json_store import (
 logger = logging.getLogger(__name__)
 
 # ConversationHandler states
-NAME, PICK_STOCK, DIRECTION, MONTH, BODY, REASON = range(6)
+NAME, PICK_STOCK, DIRECTION, MONTH, BODY, SECTOR, REASON = range(7)
 
 
 def _strip_name(name: str) -> str:
@@ -209,9 +209,50 @@ async def _receive_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     state["price"] = body.price
     state["margin"] = body.margin
 
-    # 사유가 본문에 함께 들어왔으면 바로 저장
+    # 사유가 본문에 함께 들어왔으면 섹터만 더 받고 저장
     if body.reason:
         state["reason"] = body.reason
+
+    # 같은 종목의 기존 포지션이 있으면 그 섹터를 기본값으로 제안
+    suggested_sector = _suggest_sector(state.get("symbol", ""), state.get("name", ""))
+    state["suggested_sector"] = suggested_sector
+
+    prompt = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
+    if suggested_sector:
+        prompt += f"\n(기존 섹터: {suggested_sector} — 그대로 쓰려면 '.' 입력)"
+    await update.message.reply_text(prompt)
+    return SECTOR
+
+
+def _suggest_sector(symbol: str, name: str) -> str:
+    """기존 선물 포지션 또는 현물 보유 종목의 섹터를 기본값으로 제안."""
+    from storage.json_store import load_holdings
+    for p in load_futures_positions():
+        if symbol and p.get("symbol") == symbol and p.get("sector"):
+            return p["sector"]
+        if not symbol and p.get("name", "").lower() == name.lower() and p.get("sector"):
+            return p["sector"]
+    for h in load_holdings():
+        if h.get("name", "").lower() == name.lower() and h.get("sector"):
+            return h["sector"]
+    return ""
+
+
+async def _receive_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    state = context.user_data.get("fut_entry") or {}
+    if not state.get("contract_month"):
+        await update.message.reply_text("세션이 만료되었습니다. 다시 시작해주세요.")
+        _cleanup(context)
+        return ConversationHandler.END
+
+    raw = update.message.text.strip()
+    if raw == "." and state.get("suggested_sector"):
+        state["sector"] = state["suggested_sector"]
+    else:
+        state["sector"] = raw
+
+    # 본문에 이미 사유가 들어 있었으면 그대로 저장
+    if state.get("reason"):
         return await _do_save(update, context, is_callback=False)
 
     reasons = get_recent_futures_reasons("open")
@@ -219,8 +260,10 @@ async def _receive_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     name = state.get("name", "")
     direction_kr = "롱" if state.get("direction") == "long" else "숏"
+    contracts = state.get("contracts", 0)
+    price = state.get("price", 0)
     msg = (
-        f"[{name} {direction_kr} {body.contracts}계약 / {int(body.price):,}원]\n\n"
+        f"[{name} {direction_kr} {contracts}계약 / {int(price):,}원]\n\n"
         "진입 사유를 입력해주세요."
     )
     if reasons:
@@ -270,6 +313,7 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
     price = float(state.get("price", 0.0))
     margin = float(state.get("margin", 0.0))
     reason = state.get("reason", "")
+    sector = state.get("sector", "")
 
     # 기존 포지션 추가 진입 vs 신규 진입
     positions = load_futures_positions()
@@ -293,9 +337,11 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
     if existing is not None:
         pos = FuturesPosition.from_dict(existing)
         pos.add_entry(price=price, contracts=contracts, margin=margin, transaction_id=tx.id)
-        # 사유는 가장 최근 것으로 갱신
+        # 사유/섹터는 가장 최근 입력으로 갱신
         if reason:
             pos.thesis = reason
+        if sector:
+            pos.sector = sector
         for i, p in enumerate(positions):
             if p["id"] == pos.id:
                 positions[i] = pos.to_dict()
@@ -312,6 +358,7 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
             contracts=contracts,
             avg_entry_price=price,
             initial_margin=margin,
+            sector=sector,
             thesis=reason,
             transaction_ids=[tx.id],
         )
@@ -337,6 +384,7 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
         f"선물 진입 완료!\n"
         f"{name} {direction_kr} {contracts}계약 ({cm_label})\n"
         f"진입가: {int(price):,}원  |  증거금: {int(margin):,}원\n"
+        f'섹터: {sector or "(미입력)"}\n'
         f'사유: "{reason}"'
     )
     if is_callback:
@@ -349,7 +397,7 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
 
 
 def _cleanup(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for k in ("fut_entry", "fut_months", "recent_reasons"):
+    for k in ("fut_entry", "fut_months", "recent_reasons", "suggested_sector"):
         context.user_data.pop(k, None)
 
 
@@ -393,6 +441,10 @@ def futures_entry_conversation() -> ConversationHandler:
             BODY: [
                 MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_body),
+            ],
+            SECTOR: [
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _receive_sector),
             ],
             REASON: [
                 CallbackQueryHandler(_reason_pick, pattern=f"^{REASON_PICK_PREFIX}"),

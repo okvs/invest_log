@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 선물 현황 리포트에 섹터 컬럼 추가 + 진입 플로우에 섹터 단계 (2026-05-21) — `bot/futures_report.py` 표 맨 앞에 `섹터` 컬럼 추가. `futures_buy.py`/`broker.py` 양쪽 플로우에 증거금 다음 단계로 섹터 입력을 끼움(같은 종목의 기존 선물/현물 섹터를 자동 제안, `.` 입력 시 그대로 사용). 시드 데이터 갱신: 삼성전자 6/7월물 → 반도체 / "에이전트 토큰 롱", 현대모비스 6월물 → 로봇 / "피지컬ai". 121 passed.
 - [x] 잔고 백로딩 + 증거금률 카드 + 근월물 허용 (2026-05-21) — `data/futures_positions.json`에 보유 3건 시드(삼성전자 6/7월물, 현대모비스 6월물). `parsers/expiry.py`에 `upcoming_months`(분기물 외 근월물 포함) 추가, `parse_contract_month` 분기물 제한 해제(1~12월 허용). `keyboards.futures_margin_rate_keyboard`(18/30/32.85/36/40/50% + 원화 직접입력 + 종목별 최근 rate 학습). `broker.py`가 진입 단계에서 카드 노출 → 클릭 시 단가×계약×승수×rate 자동 계산. `storage/json_store.py`에 `save_futures_margin_rate`. 121 passed.
 - [x] KB증권 선물옵션 체결 메시지 자동 파싱 + chat_id 자동 캐싱 (2026-05-21) — `parsers/input_parser.py`에 `FuturesBrokerMessage`/`_parse_kb_futures_message`(종목명 `<이름> F YYYYMM ( 승수 )` 패턴). `broker.py`가 isinstance로 선물 분기 → **매수체결/매도체결과 기존 포지션 방향으로 진입(신규/추가) vs 청산을 자동 추론**. 진입은 증거금+사유, 청산은 사유만 묻고 처리. 만기일은 `second_thursday`로 자동 계산. `main.py`에 `TypeHandler` group=-1로 모든 update에서 chat_id 자동 캐싱 — `/start` 없이도 푸시 알림 동작. 단가 가설은 "총 체결대금 / (계약수×승수)" = A안. 117 passed.
 - [x] 선물 Phase 5: 만기 임박 알림 + 만기점검 명령 (2026-05-21) — `bot/futures_alerts.py`(D-3 이하 포지션 collect→render→push, 같은 날 중복 발송 방지), 매일 08:00 KST `JobQueue.run_daily`로 자동 실행. `만기점검` 즉시 명령. `/start` 시 chat_id 자동 캐싱. requirements에 `python-telegram-bot[job-queue]`로 APScheduler 의존성 명시. 105 passed.

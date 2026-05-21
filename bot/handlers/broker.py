@@ -72,6 +72,7 @@ BUY_THESIS_APPEND = 15
 FUT_MARGIN = 20
 FUT_THESIS = 21
 FUT_CLOSE_REASON = 22
+FUT_SECTOR = 23
 
 
 def _end_other_conversations(
@@ -415,6 +416,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "fut_msg", "fut_action", "fut_direction", "fut_margin",
         "fut_margin_rate", "fut_add_pos_id", "fut_close_pos_id",
         "fut_close_contracts", "fut_close_price",
+        "fut_sector", "fut_suggested_sector",
     ):
         context.user_data.pop(key, None)
     await update.message.reply_text("취소되었습니다.")
@@ -551,7 +553,7 @@ async def _fut_margin_input(
         await update.message.reply_text("증거금은 0보다 커야 합니다.")
         return FUT_MARGIN
     context.user_data["fut_margin"] = margin
-    return await _ask_open_thesis(update, context, is_callback=False)
+    return await _ask_open_sector(update, context, is_callback=False)
 
 
 async def _fut_margin_rate_pick(
@@ -582,7 +584,50 @@ async def _fut_margin_rate_pick(
     context.user_data["fut_margin"] = margin
     context.user_data["fut_margin_rate"] = rate
     save_futures_margin_rate(msg.name, rate)
-    return await _ask_open_thesis(query, context, is_callback=True)
+    return await _ask_open_sector(query, context, is_callback=True)
+
+
+def _suggest_futures_sector(msg: FuturesBrokerMessage) -> str:
+    """기존 선물 포지션 또는 현물 보유 종목의 섹터를 기본값으로 제안."""
+    from storage.json_store import load_holdings
+    for p in load_futures_positions():
+        if p.get("name", "").lower() == msg.name.lower() and p.get("sector"):
+            return p["sector"]
+    for h in load_holdings():
+        if h.get("name", "").lower() == msg.name.lower() and h.get("sector"):
+            return h["sector"]
+    return ""
+
+
+async def _ask_open_sector(
+    update_or_query, context: ContextTypes.DEFAULT_TYPE, *, is_callback: bool,
+) -> int:
+    """증거금 확정 후 섹터 입력 단계."""
+    msg: FuturesBrokerMessage = context.user_data["fut_msg"]
+    suggested = _suggest_futures_sector(msg)
+    context.user_data["fut_suggested_sector"] = suggested
+
+    text = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
+    if suggested:
+        text += f"\n(기존 섹터: {suggested} — 그대로 쓰려면 '.' 입력)"
+
+    if is_callback:
+        await update_or_query.edit_message_text(text)
+    else:
+        await update_or_query.message.reply_text(text)
+    return FUT_SECTOR
+
+
+async def _fut_sector_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    raw = update.message.text.strip()
+    suggested = context.user_data.pop("fut_suggested_sector", "")
+    if raw == "." and suggested:
+        context.user_data["fut_sector"] = suggested
+    else:
+        context.user_data["fut_sector"] = raw
+    return await _ask_open_thesis(update, context, is_callback=False)
 
 
 async def _ask_open_thesis(
@@ -646,7 +691,9 @@ async def _do_open_save(
     margin = float(context.user_data.pop("fut_margin"))
     action = context.user_data.pop("fut_action")
     add_pos_id = context.user_data.pop("fut_add_pos_id", None)
+    sector = context.user_data.pop("fut_sector", "")
     context.user_data.pop("fut_margin_rate", None)
+    context.user_data.pop("fut_suggested_sector", None)
 
     price = msg.price_per_share()
     contracts = msg.quantity
@@ -680,6 +727,8 @@ async def _do_open_save(
             pos.add_entry(price=price, contracts=contracts, margin=margin, transaction_id=tx.id)
             if thesis:
                 pos.thesis = thesis
+            if sector:
+                pos.sector = sector
             positions[idx] = pos.to_dict()
             tx.position_id = pos.id
 
@@ -695,6 +744,7 @@ async def _do_open_save(
             avg_entry_price=price,
             initial_margin=margin,
             multiplier=msg.multiplier,
+            sector=sector,
             thesis=thesis,
             transaction_ids=[tx.id],
         )
@@ -713,6 +763,7 @@ async def _do_open_save(
         f"선물 {label} 진입 완료!\n"
         f"{msg.name} {direction_kr} {contracts}계약 ({cm_label})\n"
         f"단가: {int(price):,}원  |  증거금: {int(margin):,}원\n"
+        f'섹터: {sector or "(미입력)"}\n'
         f'사유: "{thesis}"'
     )
     await _reply(update_or_query, result, is_callback)
@@ -875,6 +926,10 @@ def broker_conversation() -> ConversationHandler:
                 ),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_margin_input),
+            ],
+            FUT_SECTOR: [
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_sector_input),
             ],
             FUT_THESIS: [
                 CallbackQueryHandler(_fut_thesis_pick, pattern=f"^{REASON_PICK_PREFIX}"),

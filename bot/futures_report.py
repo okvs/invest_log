@@ -79,8 +79,10 @@ def build_futures_section(
 
         pnl_class = "profit" if unrealized >= 0 else "loss"
         pnl_sign = "+" if unrealized >= 0 else ""
+        sector = p.get("sector", "") or "기타"
         rows_html += f"""
         <tr>
+          <td>{sector}</td>
           <td>{name}</td>
           <td>{direction_kr}</td>
           <td class="num">{contracts}계약</td>
@@ -132,7 +134,7 @@ def build_futures_section(
     <table>
       <thead>
         <tr>
-          <th>종목</th><th>방향</th><th>계약수</th><th>결제월</th><th>만기</th>
+          <th>섹터</th><th>종목</th><th>방향</th><th>계약수</th><th>결제월</th><th>만기</th>
           <th>평균진입</th><th>현재가</th><th>미실현</th><th>증거금</th><th>사유</th>
         </tr>
       </thead>

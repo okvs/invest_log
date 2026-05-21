@@ -9,10 +9,12 @@ from telegram.ext import ConversationHandler
 from bot.handlers.broker import (
     FUT_CLOSE_REASON,
     FUT_MARGIN,
+    FUT_SECTOR,
     FUT_THESIS,
     _fut_close_reason_input,
     _fut_margin_input,
     _fut_margin_rate_pick,
+    _fut_sector_input,
     _fut_thesis_input,
     _receive_broker_msg,
 )
@@ -132,9 +134,14 @@ async def test_full_new_entry_flow():
     update, ctx = _make_update(SAMPLE)
     await _receive_broker_msg(update, ctx)
 
-    # 증거금 입력
+    # 증거금 입력 → 섹터 단계
     m_update = _make_update("2520000")[0]
     result = await _fut_margin_input(m_update, ctx)
+    assert result == FUT_SECTOR
+
+    # 섹터 입력
+    s_update = _make_update("자동차")[0]
+    result = await _fut_sector_input(s_update, ctx)
     assert result == FUT_THESIS
 
     # 사유 입력
@@ -154,6 +161,7 @@ async def test_full_new_entry_flow():
     assert p["multiplier"] == 10
     assert p["initial_margin"] == 2520000.0
     assert p["thesis"] == "HBM 수요"
+    assert p["sector"] == "자동차"
 
     txs = load_futures_transactions()
     assert any(t["type"] == "open" and t["thesis"] == "HBM 수요" for t in txs)
@@ -188,8 +196,9 @@ async def test_buy_with_existing_long_is_add():
     assert ctx.user_data["fut_action"] == "add"
     assert ctx.user_data["fut_direction"] == "long"
 
-    # 증거금 → 사유 → 저장 (추가 진입)
+    # 증거금 → 섹터 → 사유 → 저장 (추가 진입)
     await _fut_margin_input(_make_update("2520000")[0], ctx)
+    await _fut_sector_input(_make_update(".")[0], ctx)
     await _fut_thesis_input(_make_update("추가 매수")[0], ctx)
 
     positions = load_futures_positions()
@@ -267,7 +276,7 @@ async def test_margin_rate_card_computes_margin_and_advances():
     cb_update.callback_query.answer = AsyncMock()
     cb_update.callback_query.edit_message_text = AsyncMock()
     result = await _fut_margin_rate_pick(cb_update, ctx)
-    assert result == FUT_THESIS
+    assert result == FUT_SECTOR
     # 676,000 × 2 × 10 × 0.3285 = 4,441,320
     assert ctx.user_data["fut_margin"] == 4_441_320
 
@@ -291,10 +300,10 @@ async def test_margin_rate_custom_keeps_state_for_text_input():
     result = await _fut_margin_rate_pick(cb_update, ctx)
     assert result == FUT_MARGIN
 
-    # 텍스트로 직접 입력하면 사유 단계로
+    # 텍스트로 직접 입력하면 섹터 단계로
     m_update = _make_update("2520000")[0]
     result = await _fut_margin_input(m_update, ctx)
-    assert result == FUT_THESIS
+    assert result == FUT_SECTOR
     assert ctx.user_data["fut_margin"] == 2520000.0
 
 
@@ -310,6 +319,7 @@ async def test_sell_with_no_position_new_short_entry():
     assert ctx.user_data["fut_direction"] == "short"
 
     await _fut_margin_input(_make_update("2520000")[0], ctx)
+    await _fut_sector_input(_make_update("반도체")[0], ctx)
     await _fut_thesis_input(_make_update("숏 진입")[0], ctx)
 
     positions = load_futures_positions()

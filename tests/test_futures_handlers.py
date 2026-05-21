@@ -9,6 +9,7 @@ from telegram.ext import ConversationHandler
 
 from bot.handlers.futures_buy import (
     BODY as ENTRY_BODY,
+    SECTOR as ENTRY_SECTOR,
     DIRECTION as ENTRY_DIRECTION,
     MONTH as ENTRY_MONTH,
     NAME as ENTRY_NAME,
@@ -17,6 +18,7 @@ from bot.handlers.futures_buy import (
     _pick_month,
     _receive_body as _entry_receive_body,
     _receive_name,
+    _receive_sector as _entry_receive_sector,
     _reason_pick as _entry_reason_pick,
     _reason_text as _entry_reason_text,
     _start as _entry_start,
@@ -148,13 +150,18 @@ async def test_entry_pick_month_then_body():
 
 
 @pytest.mark.asyncio
-async def test_entry_body_with_reason_saves_immediately():
+async def test_entry_body_with_reason_saves_after_sector():
     update, ctx = _make_update("2\n70000\n2520000\nHBM 수요")
     ctx.user_data["fut_entry"] = {
         "name": "삼성전자", "symbol": "005930", "direction": "long",
         "contract_month": "202606", "expiry_date": "2026-06-11",
     }
     result = await _entry_receive_body(update, ctx)
+    # 본문에 사유가 있어도 섹터 단계는 거친다
+    assert result == ENTRY_SECTOR
+
+    s_update, _ = _make_update("반도체")
+    result = await _entry_receive_sector(s_update, ctx)
     assert result == ConversationHandler.END
 
     positions = load_futures_positions()
@@ -163,6 +170,7 @@ async def test_entry_body_with_reason_saves_immediately():
     assert positions[0]["avg_entry_price"] == 70000.0
     assert positions[0]["direction"] == "long"
     assert positions[0]["thesis"] == "HBM 수요"
+    assert positions[0]["sector"] == "반도체"
 
     txs = load_futures_transactions()
     assert len(txs) == 1
@@ -171,13 +179,17 @@ async def test_entry_body_with_reason_saves_immediately():
 
 
 @pytest.mark.asyncio
-async def test_entry_body_without_reason_goes_to_reason_state():
+async def test_entry_body_without_reason_goes_through_sector_then_reason():
     update, ctx = _make_update("2\n70000\n2520000")
     ctx.user_data["fut_entry"] = {
         "name": "삼성전자", "symbol": "005930", "direction": "long",
         "contract_month": "202606", "expiry_date": "2026-06-11",
     }
     result = await _entry_receive_body(update, ctx)
+    assert result == ENTRY_SECTOR
+
+    s_update, _ = _make_update("반도체")
+    result = await _entry_receive_sector(s_update, ctx)
     assert result == ENTRY_REASON
 
 
@@ -191,7 +203,9 @@ async def test_entry_additional_entry_recomputes_average():
         "name": "삼성전자", "symbol": "005930", "direction": "long",
         "contract_month": "202606", "expiry_date": "2026-06-11",
     }
-    result = await _entry_receive_body(update, ctx)
+    await _entry_receive_body(update, ctx)
+    s_update, _ = _make_update(".")  # 기존 섹터 유지
+    result = await _entry_receive_sector(s_update, ctx)
     assert result == ConversationHandler.END
 
     positions = load_futures_positions()
@@ -208,6 +222,8 @@ async def test_entry_short_direction_saves():
         "contract_month": "202606", "expiry_date": "2026-06-11",
     }
     await _entry_receive_body(update, ctx)
+    s_update, _ = _make_update("반도체")
+    await _entry_receive_sector(s_update, ctx)
     positions = load_futures_positions()
     assert positions[0]["direction"] == "short"
 
