@@ -179,10 +179,20 @@ def build_html_report(
         # 가장 큰 섹터를 100%로 했을 때 현재 섹터가 차지하는 너비(%)
         spot_in_wrap = bar_width * (spot_val / val) if val else 0
         fut_in_wrap = bar_width * (fut_val / val) if val else 0
+        # 전체 포트폴리오 대비 각각의 비중(%)
+        spot_pct_total = (spot_val / sector_total * 100) if sector_total else 0
+        fut_pct_total = (fut_val / sector_total * 100) if sector_total else 0
+
         if fut_val > 0:
             bar_inner = (
                 f'<div class="sector-bar" style="width:{spot_in_wrap}%;background:{color}"></div>'
                 f'<div class="sector-bar futures-stripe" style="width:{fut_in_wrap}%;background-color:{color}"></div>'
+            )
+            breakdown_html = (
+                f'<div class="sector-breakdown">'
+                f'현물 {spot_pct_total:.1f}% · '
+                f'<span class="futures-tag-strong">선물 {fut_pct_total:.1f}%</span>'
+                f'</div>'
             )
             amt_html = (
                 f'{format_number(int(val))}원'
@@ -190,6 +200,7 @@ def build_html_report(
             )
         else:
             bar_inner = f'<div class="sector-bar" style="width:{bar_width}%;background:{color}"></div>'
+            breakdown_html = ""
             amt_html = f'{format_number(int(val))}원'
 
         sector_bars_html += f"""
@@ -198,7 +209,10 @@ def build_html_report(
           <div class="sector-bar-wrap">
             <div style="display:flex;height:100%">{bar_inner}</div>
           </div>
-          <div class="sector-val">{pct:.1f}% <span class="sector-amt">{amt_html}</span></div>
+          <div class="sector-val">
+            <div>{pct:.1f}% <span class="sector-amt">{amt_html}</span></div>
+            {breakdown_html}
+          </div>
         </div>"""
 
     # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리
@@ -289,6 +303,8 @@ def build_html_report(
   .sector-val {{ font-size:13px; font-weight:600; white-space:nowrap; }}
   .sector-amt {{ color:#888; font-weight:400; margin-left:6px; }}
   .futures-tag {{ color:#aaa; font-size:11px; }}
+  .futures-tag-strong {{ color:#ddd; font-weight:600; }}
+  .sector-breakdown {{ font-size:11px; color:#888; margin-top:2px; font-weight:400; }}
   /* 선물 영역 빗금 오버레이 — 섹터 색은 그대로 유지하고 그 위에 줄무늬 */
   .futures-stripe {{
     background-image: repeating-linear-gradient(
