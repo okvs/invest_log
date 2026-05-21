@@ -86,28 +86,46 @@ def test_expired_manual_quote_removed():
 async def test_fetch_uses_manual_quote_first():
     pos = _seed_position()
     fq.set_manual_quote("005930", 71800.0)
-    with patch("bot.futures_quote.fetch_current_prices") as mock_fetch:
-        # yfinance가 호출되지 않아도 되도록 (수동 시세 있으면 우회)
-        mock_fetch.return_value = {"005930.KS": 99999.0}
+    with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
+        mock_fetch.return_value = {"005930.KS": {"price": 99999.0, "change_pct": 0.0}}
         result = await fq.fetch_futures_prices([pos.to_dict()])
-    assert result["005930"] == 71800.0  # yfinance 결과 무시
+    assert result["005930|202606"] == 71800.0  # KIS·yfinance 결과 무시
 
 
 @pytest.mark.asyncio
 async def test_fetch_falls_back_to_yfinance():
     pos = _seed_position()
     save_ticker_map({"삼성전자": "005930.KS"})
-    with patch("bot.futures_quote.fetch_current_prices") as mock_fetch:
-        mock_fetch.return_value = {"005930.KS": 72000.0}
+    with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
+        mock_fetch.return_value = {"005930.KS": {"price": 72000.0, "change_pct": 1.23}}
         result = await fq.fetch_futures_prices([pos.to_dict()])
-    assert result["005930"] == 72000.0
+    assert result["005930|202606"] == 72000.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_kis_when_available():
+    pos = _seed_position()
+    save_ticker_map({"삼성전자": "005930.KS"})
+    with patch("bot.futures_quote._kis_quote") as mock_kis, \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_y:
+        mock_kis.return_value = {"price": 300500.0, "change_pct": 7.5}
+        # yfinance는 호출되지 않아야 함
+        result = await fq.fetch_futures_quotes([pos.to_dict()])
+    mock_y.assert_not_called()
+    entry = result["005930|202606"]
+    assert entry["price"] == 300500.0
+    assert entry["change_pct"] == 7.5
+    assert entry["source"] == "kis"
 
 
 @pytest.mark.asyncio
 async def test_fetch_returns_empty_when_yfinance_fails():
     pos = _seed_position()
-    with patch("bot.futures_quote.fetch_current_prices") as mock_fetch:
-        mock_fetch.return_value = {}  # yfinance가 빈 응답
+    with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
+        mock_fetch.return_value = {}  # KIS·yfinance 모두 실패
         result = await fq.fetch_futures_prices([pos.to_dict()])
     assert result == {}
 

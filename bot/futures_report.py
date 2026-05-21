@@ -25,14 +25,15 @@ def _days_to_expiry(expiry_iso: str) -> int | None:
 
 def build_futures_section(
     positions: list[dict],
-    current_prices: dict[str, float] | None = None,
+    current_prices: dict | None = None,
 ) -> str:
     """선물 포지션을 HTML 조각으로 반환. 빈 리스트면 빈 문자열.
 
     Args:
       positions: futures_positions.json 의 dict 리스트
-      current_prices: 기초자산 종목코드(예: "005930") → 현재가(또는 선물가)
-                      매핑. 비어 있으면 미실현 0으로 표시.
+      current_prices: 두 가지 포맷 지원 (호환):
+        - {"005930|202606": {"price": ..., "change_pct": ..., "source": ...}, ...}
+        - {"005930": <price>, ...}  (구버전 — change_pct 없음)
     """
     active = [p for p in positions if p.get("contracts", 0) > 0]
     if not active:
@@ -42,6 +43,7 @@ def build_futures_section(
     rows_html = ""
     total_unrealized = 0.0
     total_margin = 0.0
+    sources_seen: set[str] = set()
 
     for p in active:
         name = p.get("name", "")
@@ -54,13 +56,35 @@ def build_futures_section(
         cm = p.get("contract_month", "")
         cm_label = f"{cm[2:4]}-{cm[4:6]}" if len(cm) == 6 else cm
 
-        cur = current_prices.get(p.get("symbol", ""))
+        sym = p.get("symbol", "")
+        key = f"{sym}|{cm}"
+        entry = current_prices.get(key)
+        if entry is None:
+            entry = current_prices.get(sym)
+        if isinstance(entry, dict):
+            cur = entry.get("price")
+            change_pct = entry.get("change_pct")
+            source = entry.get("source")
+            if source:
+                sources_seen.add(source)
+        else:
+            cur = entry
+            change_pct = None
+            source = None
+
         if cur is None:
             cur_display = "-"
             unrealized = 0.0
             unrealized_pct = 0.0
         else:
             cur_display = f"{format_number(int(cur))}원"
+            if change_pct is not None:
+                cp_class = "profit" if change_pct >= 0 else "loss"
+                cp_sign = "+" if change_pct >= 0 else ""
+                cur_display += (
+                    f'<br><small class="{cp_class}">'
+                    f'({cp_sign}{change_pct:.2f}%)</small>'
+                )
             sign = 1 if direction == "long" else -1
             unrealized = (cur - avg) * contracts * mult * sign
             notional = avg * contracts * mult
@@ -106,11 +130,21 @@ def build_futures_section(
     total_class = "profit" if total_unrealized >= 0 else "loss"
     total_sign = "+" if total_unrealized >= 0 else ""
 
-    quote_note = (
-        '<div style="font-size:11px;color:#888;margin-top:4px">'
-        '시세는 기초자산 현재가 기준 추정치. 정확한 선물가는 텔레그램에서 \'선물시세\' 입력.'
-        '</div>'
-    )
+    # 시세 출처 안내 — KIS 실시간이 잡혔으면 추정치 문구 생략
+    if sources_seen == {"kis"} or sources_seen == {"kis", "manual"} or sources_seen == {"manual"}:
+        quote_note = ""
+    elif "kis" in sources_seen and "underlying" in sources_seen:
+        quote_note = (
+            '<div style="font-size:11px;color:#888;margin-top:4px">'
+            '일부 종목은 기초자산 현재가 기준 추정치 (KIS 시세 조회 실패).'
+            '</div>'
+        )
+    else:
+        quote_note = (
+            '<div style="font-size:11px;color:#888;margin-top:4px">'
+            '시세는 기초자산 현재가 기준 추정치. 정확한 선물가는 텔레그램에서 \'선물시세\' 입력.'
+            '</div>'
+        )
 
     return f"""
   <div class="section-title" style="margin-top:40px">선물 포지션</div>

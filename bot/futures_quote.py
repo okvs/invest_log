@@ -1,12 +1,12 @@
 """선물 시세 조회.
 
-전략:
-  1. data/futures_quotes.json 에 저장된 최근 수동 시세 우선 (만료 안 됨)
-  2. 기초자산 ticker_map → yfinance 로 기초자산 현재가 조회 (선물가 근사치)
-  3. 위 둘 다 실패하면 해당 symbol 누락
+전략 (우선순위):
+  1. data/futures_quotes.json 에 저장된 최근 수동 시세 (TTL 안 지났을 때)
+  2. KIS Open Trading API 개별주식선물 실시간가 (stocks_battle KisClient 재사용)
+  3. 기초자산 ticker_map → yfinance 로 기초자산 현재가 (선물가 근사치)
+  4. 모두 실패하면 해당 symbol 누락
 
-개별주식선물 시세는 pykrx도 KRX 로그인을 요구하기 때문에,
-정확한 선물가는 사용자가 '선물시세' 명령으로 직접 입력해 보정한다.
+수동 시세는 '선물시세' 명령으로 사용자가 직접 입력해 보정 가능.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import logging
 import time
 from pathlib import Path
 
-from bot.formatters import fetch_current_prices
+from bot.formatters import fetch_current_quotes
 from storage.json_store import (
     DATA_DIR,
     load_ticker_map,
@@ -68,56 +68,86 @@ def _read_fresh_manual_quotes() -> dict[str, float]:
 
 
 async def fetch_futures_prices(positions: list[dict]) -> dict[str, float]:
-    """선물 포지션 리스트에 대해 {symbol: price} 매핑 반환.
+    """뒤로호환: {symbol: price} 형태만 필요할 때 thin wrapper."""
+    quotes = await fetch_futures_quotes(positions)
+    return {sym: q["price"] for sym, q in quotes.items()}
 
-    수동 시세 우선, 없으면 yfinance 기초자산 현재가로 근사.
+
+async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
+    """선물 포지션 리스트 → {position_key: {price, change_pct, source}} 매핑.
+
+    position_key: 같은 symbol 의 다른 결제월을 구분하기 위해 "symbol|contract_month" 사용.
+    source: "manual" | "kis" | "underlying".
     """
     if not positions:
         return {}
 
-    symbols = {p.get("symbol", "") for p in positions if p.get("symbol")}
-    if not symbols:
-        return {}
+    result: dict[str, dict] = {}
 
+    # 1. 수동 시세 (symbol 단위)
     manual = _read_fresh_manual_quotes()
-    result = {s: manual[s] for s in symbols if s in manual}
 
-    missing = [s for s in symbols if s not in result]
-    if not missing:
-        return result
-
-    # 기초자산 ticker_map (예: "005930" 자체 또는 "005930.KS")
+    # 2. KIS 선물 시세 (symbol+월 단위)
+    # 3. 기초자산 폴백을 위한 ticker_map 준비
     ticker_map = load_ticker_map()
-    name_to_ticker = {}
-    # 포지션의 symbol → ticker (suffix 포함) 매핑 추정
-    symbol_to_ticker: dict[str, str] = {}
+
     for p in positions:
         sym = p.get("symbol", "")
-        if not sym or sym in result:
+        cm = p.get("contract_month", "")
+        if not sym:
             continue
+        key = f"{sym}|{cm}"
+
+        if sym in manual:
+            result[key] = {
+                "price": manual[sym],
+                "change_pct": None,
+                "source": "manual",
+            }
+            continue
+
+        # KIS 실시간 선물가 시도 (실패해도 폴백)
+        try:
+            kis_quote = await asyncio.to_thread(_kis_quote, sym, cm)
+        except Exception:
+            kis_quote = None
+        if kis_quote:
+            result[key] = {
+                "price": kis_quote["price"],
+                "change_pct": kis_quote.get("change_pct"),
+                "source": "kis",
+            }
+            continue
+
+        # 기초자산 yfinance 폴백
         name = p.get("name", "")
-        # 우선 ticker_map에서 name으로 찾기
         ticker = ticker_map.get(name, "") or next(
             (v for k, v in ticker_map.items() if k.lower() == name.lower()),
             "",
         )
         if not ticker:
-            # 폴백: 모르겠으면 .KS suffix 가정 (코스피)
             ticker = f"{sym}.KS"
-        symbol_to_ticker[sym] = ticker
-
-    if not symbol_to_ticker:
-        return result
-
-    tickers = list(set(symbol_to_ticker.values()))
-    try:
-        prices = await asyncio.to_thread(fetch_current_prices, tickers)
-    except Exception:
-        logger.warning("선물 기초자산 시세 조회 실패", exc_info=True)
-        prices = {}
-
-    for symbol, ticker in symbol_to_ticker.items():
-        if ticker in prices:
-            result[symbol] = prices[ticker]
+        try:
+            quotes = await asyncio.to_thread(fetch_current_quotes, [ticker])
+        except Exception:
+            logger.warning("선물 기초자산 시세 조회 실패", exc_info=True)
+            quotes = {}
+        q = quotes.get(ticker)
+        if q:
+            result[key] = {
+                "price": q["price"],
+                "change_pct": q.get("change_pct"),
+                "source": "underlying",
+            }
 
     return result
+
+
+def _kis_quote(symbol: str, contract_month: str):
+    """KIS 선물 시세 호출 wrapper (sync) — asyncio.to_thread 용."""
+    try:
+        from bot.kis_futures import fetch_kis_futures_quote
+    except Exception:
+        logger.warning("KIS 선물 모듈 로드 실패", exc_info=True)
+        return None
+    return fetch_kis_futures_quote(symbol, contract_month)

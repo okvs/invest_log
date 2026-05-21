@@ -278,15 +278,15 @@ def _load_claude_account(data_dir: Path = CLAUDE_DATA_DIR) -> tuple[float, float
         return None
 
 
-async def _fetch_futures_prices(positions: list[dict]) -> dict[str, float]:
-    """선물 포지션의 기초자산 현재가 (symbol → price) 매핑.
+async def _fetch_futures_prices(positions: list[dict]) -> dict[str, dict]:
+    """선물 포지션 시세 매핑.
 
-    Phase 4에서 pykrx/KIS로 실제 시세 자동 조회로 교체됨.
-    현재는 시세 미연동 — 빈 dict 반환.
+    반환: {"<symbol>|<contract_month>": {"price": ..., "change_pct": ..., "source": ...}}
+    우선순위: 수동 시세 → KIS 실시간 선물가 → 기초자산 yfinance 폴백.
     """
     try:
-        from bot.futures_quote import fetch_futures_prices
-        return await fetch_futures_prices(positions)
+        from bot.futures_quote import fetch_futures_quotes
+        return await fetch_futures_quotes(positions)
     except ImportError:
         return {}
     except Exception as e:
