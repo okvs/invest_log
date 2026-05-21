@@ -82,7 +82,8 @@ async def start(update: Update, context) -> None:
         "매도 - 매도 기록\n"
         "회고 - 매도 회고 작성\n"
         "수정 - 보유 종목 수정\n"
-        "현황 - 투자 현황\n"
+        "현황 - 투자 현황 (잔고와 동일)\n"
+        "잔고 - 투자 현황 (현황과 동일)\n"
         "예수금 - 초기자본/예수금 설정\n"
         "닉네임 - 종목 닉네임 관리\n"
         "선물진입 - 개별주식선물 진입\n"
@@ -128,6 +129,7 @@ def main() -> None:
     # 한국어 키워드 핸들러
     app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
+    app.add_handler(MessageHandler(_korean_command("잔고"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 

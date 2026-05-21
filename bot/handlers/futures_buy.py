@@ -403,7 +403,7 @@ def _cleanup(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _other_command_filter() -> filters.BaseFilter:
     return filters.Regex(
-        r"^(매도|매수|현황|도움말|수정|회고|선물진입|선물청산|선물롤오버|선물회고)$"
+        r"^(매도|매수|현황|잔고|도움말|수정|회고|선물진입|선물청산|선물롤오버|선물회고)$"
     ) | filters.COMMAND
 
 

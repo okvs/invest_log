@@ -5,7 +5,7 @@ import io
 from collections import defaultdict
 from datetime import datetime
 
-from bot.formatters import fetch_current_prices, format_number, _resolve_tickers
+from bot.formatters import fetch_current_quotes, format_number, _resolve_tickers
 from bot.futures_report import build_futures_section
 
 
@@ -35,10 +35,10 @@ def build_html_report(
     """
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
-    # 현재가 조회
+    # 현재가 조회 (오늘 등락률 포함)
     name_to_ticker, missing = _resolve_tickers(active)
     tickers = list(set(name_to_ticker.values()))
-    prices = fetch_current_prices(tickers) if tickers else {}
+    quotes = fetch_current_quotes(tickers) if tickers else {}
 
     # 종목별 데이터 계산
     rows = []
@@ -48,14 +48,15 @@ def build_html_report(
         avg = h["avg_price"]
         invested = h["total_invested"]
         ticker = name_to_ticker.get(name, "")
-        cur_price = prices.get(ticker)
+        q = quotes.get(ticker) or {}
+        cur_price = q.get("price")
+        change_pct = q.get("change_pct")
 
         if cur_price is not None:
             eval_amt = cur_price * qty
             pnl = eval_amt - invested
             pnl_pct = (pnl / invested * 100) if invested else 0
         else:
-            cur_price = None
             eval_amt = invested
             pnl = 0
             pnl_pct = 0
@@ -67,6 +68,7 @@ def build_html_report(
             "avg": avg,
             "invested": invested,
             "cur_price": cur_price,
+            "change_pct": change_pct,
             "eval": eval_amt,
             "pnl": pnl,
             "pnl_pct": pnl_pct,
@@ -118,7 +120,15 @@ def build_html_report(
         pnl_sign = "+" if r["pnl"] >= 0 else ""
         dot_color = sector_colors.get(r["sector"], "#999")
 
-        cur_display = f'{format_number(int(r["cur_price"]))}원' if r["cur_price"] is not None else "-"
+        if r["cur_price"] is not None:
+            cur_display = f'{format_number(int(r["cur_price"]))}원'
+            cp = r.get("change_pct")
+            if cp is not None:
+                chg_class = "profit" if cp >= 0 else "loss"
+                chg_sign = "+" if cp >= 0 else ""
+                cur_display += f'<br><small class="{chg_class}">({chg_sign}{cp:.2f}%)</small>'
+        else:
+            cur_display = "-"
 
         cur_raw = r["cur_price"] if r["cur_price"] is not None else 0
         stock_rows_html += f"""

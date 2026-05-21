@@ -20,15 +20,40 @@ def format_number(n: float) -> str:
 
 def fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     """yfinance fast_info로 종목별 현재가 조회 (장중 체결가/마감 후 종가)."""
-    prices = {}
+    return {t: q["price"] for t, q in fetch_current_quotes(tickers).items()}
+
+
+def fetch_current_quotes(tickers: list[str]) -> dict[str, dict]:
+    """yfinance fast_info로 종목별 현재가 + 전일 종가 + 등락률(%) 조회.
+
+    반환 dict 값 형태:
+      {"price": <float>, "prev_close": <float|None>, "change_pct": <float|None>}
+    """
+    quotes: dict[str, dict] = {}
     for t in tickers:
         try:
-            price = yf.Ticker(t).fast_info.last_price
-            if price is not None and price == price:
-                prices[t] = float(price)
+            fi = yf.Ticker(t).fast_info
+            price = fi.last_price
+            if price is None or price != price:
+                continue
+            try:
+                prev = fi.previous_close
+            except Exception:
+                prev = None
+            if prev is None or prev != prev or prev == 0:
+                change_pct = None
+                prev_val = None
+            else:
+                prev_val = float(prev)
+                change_pct = (float(price) - prev_val) / prev_val * 100
+            quotes[t] = {
+                "price": float(price),
+                "prev_close": prev_val,
+                "change_pct": change_pct,
+            }
         except Exception as e:
             logger.warning(f"{t} 현재가 조회 실패: {e}")
-    return prices
+    return quotes
 
 
 def _resolve_tickers(holdings: list[dict]) -> tuple[dict[str, str], list[str]]:
