@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from bot.formatters import fetch_current_prices, format_number, _resolve_tickers
+from bot.futures_report import build_futures_section
 
 
 def _format_man(n: float) -> str:
@@ -20,6 +21,8 @@ def build_html_report(
     initial_capital: float | None = None,
     show_cash: bool = False,
     cash_override: float | None = None,
+    futures_positions: list[dict] | None = None,
+    futures_prices: dict[str, float] | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -285,6 +288,8 @@ def build_html_report(
   </div>
 
   {"<div class='warning'>⚠ 종목코드 미등록: " + ", ".join(missing) + "</div>" if missing else ""}
+
+  {build_futures_section(futures_positions or [], futures_prices or {})}
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{

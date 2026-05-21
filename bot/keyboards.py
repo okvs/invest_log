@@ -279,6 +279,41 @@ def futures_positions_keyboard(positions: list[dict]) -> InlineKeyboardMarkup:
 FUTURES_PINNED_CLOSE_REASONS = ["자동손절", "롤오버"]
 
 
+# --- 선물 회고: 청산 거래 카드 ---
+FUTURES_RETRO_PREFIX = "fut_retro:"
+
+
+def futures_retro_select_keyboard(transactions: list[dict]) -> InlineKeyboardMarkup:
+    """회고할 선물 청산 거래 카드.
+
+    각 카드: 종목명 | 방향 | 계약수 | 손익(±%) | 결제월 | 날짜
+    callback_data: fut_retro:<transaction_id>
+    """
+    buttons = []
+    for tx in transactions:
+        name = tx.get("name", "")
+        contracts = tx.get("contracts", 0)
+        direction = "롱" if tx.get("direction") == "long" else "숏"
+        pnl = tx.get("pnl", 0.0)
+        pnl_pct = tx.get("pnl_pct", 0.0)
+        cm = tx.get("contract_month", "")
+        cm_label = f"{cm[4:6]}월물" if len(cm) == 6 else cm
+        sign = "+" if pnl >= 0 else ""
+        date = tx.get("date", "")[:10]
+        kind = "롤" if tx.get("type") == "roll_close" else "청산"
+        label = (
+            f"{name} {direction} {contracts}계약 | "
+            f"{sign}{int(pnl):,}원({sign}{pnl_pct:.1f}%) | "
+            f"{cm_label} {kind} | {date}"
+        )
+        buttons.append([
+            InlineKeyboardButton(
+                label, callback_data=f"{FUTURES_RETRO_PREFIX}{tx['id']}"
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"

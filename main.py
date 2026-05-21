@@ -18,6 +18,7 @@ from bot.handlers.cash import cash_conversation
 from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.edit import edit_conversation
 from bot.handlers.futures_buy import futures_entry_conversation
+from bot.handlers.futures_retro import futures_retro_conversation
 from bot.handlers.futures_roll import futures_roll_conversation
 from bot.handlers.futures_sell import futures_close_conversation
 from bot.handlers.help import help_handler
@@ -64,6 +65,7 @@ async def start(update: Update, context) -> None:
         "선물진입 - 개별주식선물 진입\n"
         "선물청산 - 선물 포지션 청산\n"
         "선물롤오버 - 차월물로 롤오버\n"
+        "선물회고 - 선물 청산 회고\n"
         "도움말 - 사용법"
     )
 
@@ -101,6 +103,7 @@ def main() -> None:
     app.add_handler(futures_entry_conversation())
     app.add_handler(futures_close_conversation())
     app.add_handler(futures_roll_conversation())
+    app.add_handler(futures_retro_conversation())
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

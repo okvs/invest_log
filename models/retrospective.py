@@ -16,6 +16,7 @@ class Retrospective:
     regrets: str = ""
     avoidable: str = ""  # "피할 수 있었다" / "통제 불가" / "모르겠다"
     lessons: str = ""
+    is_futures: bool = False
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
@@ -31,9 +32,13 @@ class Retrospective:
             "regrets": self.regrets,
             "avoidable": self.avoidable,
             "lessons": self.lessons,
+            "is_futures": self.is_futures,
             "created_at": self.created_at,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> Retrospective:
+        # 하위호환: is_futures가 없는 기존 데이터
+        if "is_futures" not in data:
+            data = {**data, "is_futures": False}
         return cls(**data)

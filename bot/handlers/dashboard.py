@@ -18,7 +18,14 @@ from telegram.ext import ContextTypes
 from bot.formatters import format_dashboard, fetch_current_prices, format_number, _resolve_tickers
 from bot.html_report import build_html_report
 from parsers.input_parser import search_stocks
-from storage.json_store import load_account, load_holdings, save_holdings, load_ticker_map, save_ticker_map
+from storage.json_store import (
+    load_account,
+    load_futures_positions,
+    load_holdings,
+    load_ticker_map,
+    save_holdings,
+    save_ticker_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +278,22 @@ def _load_claude_account(data_dir: Path = CLAUDE_DATA_DIR) -> tuple[float, float
         return None
 
 
+async def _fetch_futures_prices(positions: list[dict]) -> dict[str, float]:
+    """선물 포지션의 기초자산 현재가 (symbol → price) 매핑.
+
+    Phase 4에서 pykrx/KIS로 실제 시세 자동 조회로 교체됨.
+    현재는 시세 미연동 — 빈 dict 반환.
+    """
+    try:
+        from bot.futures_quote import fetch_futures_prices
+        return await fetch_futures_prices(positions)
+    except ImportError:
+        return {}
+    except Exception as e:
+        logger.warning("선물 시세 조회 실패: %s", e, exc_info=True)
+        return {}
+
+
 async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """보유 종목 현황 대시보드를 전송한다."""
     holdings = load_holdings()
@@ -281,9 +304,22 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         save_holdings(holdings)
 
     active = [h for h in holdings if h.get("quantity", 0) > 0]
+    futures_positions = [
+        p for p in load_futures_positions() if p.get("contracts", 0) > 0
+    ]
+    futures_prices = await _fetch_futures_prices(futures_positions)
 
-    if not active:
+    if not active and not futures_positions:
         await update.message.reply_text("보유 종목이 없습니다.")
+    elif not active:
+        # 현물은 없지만 선물 포지션은 있는 경우 — 선물만 표시
+        html_file = build_html_report(
+            holdings=[],
+            futures_positions=futures_positions,
+            futures_prices=futures_prices,
+        )
+        html_file = _save_html_locally(html_file, "my_portfolio")
+        await update.message.reply_document(document=html_file, caption="내 포트폴리오 (선물)")
     else:
         # ticker 없는 종목 자동 보정
         filled = await _backfill_missing_tickers(holdings)
@@ -302,6 +338,8 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             initial_capital=user_capital,
             show_cash=bool(user_capital),
             cash_override=user_cash,
+            futures_positions=futures_positions,
+            futures_prices=futures_prices,
         )
         html_file = _save_html_locally(html_file, "my_portfolio")
         await update.message.reply_document(document=html_file, caption="내 포트폴리오")
