@@ -62,7 +62,12 @@ def _quadrant_badge(
     fg: str,
     side: str,  # "tl" / "tr" / "bl" / "br"
 ) -> str:
-    """사분면 모서리에 붙는 이름표(배지) SVG. anchor_x/y 는 사분면 외곽 모서리 좌표."""
+    """사분면 plot 바깥 모서리에 붙는 이름표 배지.
+
+    anchor_x: badge 의 좌/우 외곽선이 닿을 X 좌표 (tl/bl → 왼쪽 끝, tr/br → 오른쪽 끝).
+    anchor_y: plot 외곽선 쪽 badge 면이 닿을 Y 좌표
+      (tl/tr → badge 아래 면 = plot 위쪽 바깥, bl/br → badge 위쪽 면 = plot 아래쪽 바깥).
+    """
     pad_x = 10
     h = 26
     font_px = 13
@@ -75,10 +80,11 @@ def _quadrant_badge(
         rx = anchor_x
         text_anchor = "start"
         tx = anchor_x + pad_x
+    # plot 바깥 배치: top 사분면은 위로, bottom 사분면은 아래로
     if side in ("tl", "tr"):
-        ry = anchor_y
+        ry = anchor_y - h  # badge 가 anchor 위로 그려져 plot 위 바깥에 위치
     else:
-        ry = anchor_y - h
+        ry = anchor_y      # badge 가 anchor 아래로 그려져 plot 아래 바깥에 위치
     ty = ry + h / 2 + 4  # text baseline 보정
     return (
         f'<rect x="{rx:.2f}" y="{ry:.2f}" width="{w:.2f}" height="{h}" '
@@ -145,9 +151,9 @@ def _build_quadrants_svg(
             "color": sector_colors.get(r["sector"], "#9ca3af"),
         })
 
-    # SVG 영역 — 정사각형 plot
-    W, H = 720, 720
-    pad_l, pad_r, pad_t, pad_b = 70, 36, 40, 60
+    # SVG 영역 — 정사각형 plot. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
+    W, H = 720, 760
+    pad_l, pad_r, pad_t, pad_b = 70, 36, 52, 84
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
@@ -229,7 +235,8 @@ def _build_quadrants_svg(
         f'fill="none" stroke="#2a2a3a" stroke-width="1"/>'
     )
 
-    # X 눈금 텍스트 — 수익률은 부호 있는 표준 표기
+    # X 눈금 텍스트 — 하단 배지 바깥쪽에 배치
+    x_tick_y = y_bottom + 6 + 26 + 14  # badge 아래에서 14px
     for tx in ticks_x:
         if tx == 0:
             label = "0%"
@@ -238,7 +245,7 @@ def _build_quadrants_svg(
         else:
             label = f"{tx}%"
         parts.append(
-            f'<text x="{sx(tx):.2f}" y="{y_bottom + 14}" font-size="10" '
+            f'<text x="{sx(tx):.2f}" y="{x_tick_y:.2f}" font-size="10" '
             f'fill="#888" text-anchor="middle">{label}</text>'
         )
     # Y 눈금 텍스트 — 0% 바닥, 위로만 양수
@@ -259,25 +266,25 @@ def _build_quadrants_svg(
         f'transform="rotate(-90 16 {mid_y:.2f})">비중 (%)</text>'
     )
 
-    # 사분면 이름표(배지)
-    badge_inset = 4
+    # 사분면 이름표(배지) — plot 바깥(위/아래)에 배치
+    badge_gap = 6
     parts.append(_quadrant_badge(
-        anchor_x=x_right - badge_inset, anchor_y=y_top + badge_inset,
+        anchor_x=x_right, anchor_y=y_top - badge_gap,
         text="잘하는 것 (비중↑·수익)",
         bg="#ef4444", fg="#ffffff", side="tr",
     ))
     parts.append(_quadrant_badge(
-        anchor_x=x_left + badge_inset, anchor_y=y_top + badge_inset,
+        anchor_x=x_left, anchor_y=y_top - badge_gap,
         text="큰 위험 (비중↑·손실)",
         bg="#6366f1", fg="#ffffff", side="tl",
     ))
     parts.append(_quadrant_badge(
-        anchor_x=x_left + badge_inset, anchor_y=y_bottom - badge_inset,
+        anchor_x=x_left, anchor_y=y_bottom + badge_gap,
         text="다행 (비중↓·손실)",
         bg="#22c55e", fg="#0f0f14", side="bl",
     ))
     parts.append(_quadrant_badge(
-        anchor_x=x_right - badge_inset, anchor_y=y_bottom - badge_inset,
+        anchor_x=x_right, anchor_y=y_bottom + badge_gap,
         text="비중 부족 (비중↓·수익)",
         bg="#fbbf24", fg="#0f0f14", side="br",
     ))
