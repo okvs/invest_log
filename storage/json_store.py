@@ -57,6 +57,8 @@ def save(filename: str, data: dict[str, Any]) -> None:
 PORTFOLIO_FILE = "portfolio.json"
 TRANSACTIONS_FILE = "transactions.json"
 RETROSPECTIVES_FILE = "retrospectives.json"
+FUTURES_POSITIONS_FILE = "futures_positions.json"
+FUTURES_TRANSACTIONS_FILE = "futures_transactions.json"
 
 
 def load_holdings() -> list[dict]:
@@ -116,6 +118,66 @@ def load_retrospectives() -> list[dict]:
 
 def save_retrospectives(retrospectives: list[dict]) -> None:
     save(RETROSPECTIVES_FILE, {"retrospectives": retrospectives})
+
+
+# --- 선물 ---
+
+def load_futures_positions() -> list[dict]:
+    return load(FUTURES_POSITIONS_FILE).get("positions", [])
+
+
+def save_futures_positions(positions: list[dict]) -> None:
+    save(FUTURES_POSITIONS_FILE, {"positions": positions})
+
+
+def load_futures_transactions() -> list[dict]:
+    return load(FUTURES_TRANSACTIONS_FILE).get("transactions", [])
+
+
+def save_futures_transactions(transactions: list[dict]) -> None:
+    save(FUTURES_TRANSACTIONS_FILE, {"transactions": transactions})
+
+
+def get_recent_futures_reasons(
+    tx_type: str,
+    limit: int = 5,
+    pinned: list[str] | None = None,
+) -> list[str]:
+    """선물 거래 중 해당 타입의 최근 사유를 최신순으로 반환.
+
+    tx_type:
+      "open"  → open + roll_open의 thesis 필드
+      "close" → close + roll_close의 reason 필드
+    """
+    if tx_type == "open":
+        target_types = {"open", "roll_open"}
+        field = "thesis"
+    else:
+        target_types = {"close", "roll_close"}
+        field = "reason"
+
+    matching = [
+        t for t in load_futures_transactions() if t.get("type") in target_types
+    ]
+    matching.sort(key=lambda t: t.get("date", ""), reverse=True)
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for p in pinned or []:
+        norm = _normalize_reason(p)
+        if norm and norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    pinned_count = len(result)
+    for t in matching:
+        norm = _normalize_reason(t.get(field) or "")
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        result.append(norm)
+        if len(result) >= pinned_count + limit:
+            break
+    return result
 
 
 ACCOUNT_FILE = "account.json"
