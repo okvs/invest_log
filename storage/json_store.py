@@ -184,13 +184,28 @@ ACCOUNT_FILE = "account.json"
 
 
 def load_account() -> dict:
-    """계좌 정보 로드. {initial_capital, cash}"""
+    """계좌 정보 로드. {initial_capital, cash, chat_id, last_expiry_alert}"""
     return load(ACCOUNT_FILE)
 
 
 def save_account(data: dict) -> None:
     """계좌 정보 저장."""
     save(ACCOUNT_FILE, data)
+
+
+def save_chat_id(chat_id: int) -> None:
+    """알림 발송용 텔레그램 chat_id 저장. 이후 JobQueue가 사용."""
+    account = load_account()
+    if account.get("chat_id") == chat_id:
+        return
+    account["chat_id"] = chat_id
+    save_account(account)
+
+
+def load_chat_id() -> int | None:
+    """저장된 chat_id 반환. 없으면 None."""
+    cid = load_account().get("chat_id")
+    return int(cid) if cid is not None else None
 
 
 NICKNAME_MAP_FILE = "nickname_map.json"

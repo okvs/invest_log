@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 선물 Phase 5: 만기 임박 알림 + 만기점검 명령 (2026-05-21) — `bot/futures_alerts.py`(D-3 이하 포지션 collect→render→push, 같은 날 중복 발송 방지), 매일 08:00 KST `JobQueue.run_daily`로 자동 실행. `만기점검` 즉시 명령. `/start` 시 chat_id 자동 캐싱. requirements에 `python-telegram-bot[job-queue]`로 APScheduler 의존성 명시. 105 passed.
 - [x] 선물 Phase 4: 시세 자동조회 + 수동 보정 (2026-05-21) — `bot/futures_quote.py`(수동 시세 우선 → yfinance 기초자산 폴백, 6시간 TTL), `bot/handlers/futures_quote.py` `선물시세` 명령. HTML 리포트에 "기초자산 시세 기준 추정치" 안내. pykrx 개별주식선물은 KRX 로그인 필요라 1차에선 yfinance 근사. 94 passed.
 - [x] 선물 Phase 3: 회고 + 대시보드 선물 섹션 (2026-05-21) — `models/retrospective.py`에 `is_futures` 플래그, `bot/handlers/futures_retro.py`(close/roll_close 미회고 카드), `bot/futures_report.py`(미실현·증거금 잠식률·D-만기 표), `bot/html_report.py`에 선물 섹션 통합. 시세는 `_fetch_futures_prices` stub만 두고 Phase 4에서 연결. 85 passed.
 - [x] 선물 Phase 2: 핸들러 — 선물진입/청산/롤오버 (2026-05-21) — `bot/handlers/futures_buy.py|sell|roll`, 키보드(`futures_direction_keyboard`, `futures_month_keyboard`, `futures_positions_keyboard`), 파서(`parsers/futures_input.py`), `main.py`에 라우터 등록. 기존 핸들러의 `other_command_filter`도 선물 명령 인지하도록 업데이트. 핸들러 14개 + 모델 15개 = 77 passed.
@@ -13,7 +14,7 @@
 - [x] 현황 조회 현재가 yfinance로 정상 동작 (2026-04-20) — `fast_info.last_price`로 교체
 
 ## 진행중
-- [ ] 선물 Phase 5: 만기 임박 D-3 알림 (JobQueue)
+- (없음)
 
 ## 다음 할 것
 - (없음)

@@ -12,6 +12,11 @@ from telegram.ext import (
     filters,
 )
 
+from bot.futures_alerts import (
+    build_alert_message,
+    collect_expiry_alerts,
+    schedule_daily_expiry_check,
+)
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
@@ -26,6 +31,7 @@ from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
 from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
+from storage.json_store import load_futures_positions, save_chat_id
 
 load_dotenv()
 
@@ -53,6 +59,12 @@ logger = logging.getLogger(__name__)
 
 
 async def start(update: Update, context) -> None:
+    # 만기 알림 등 푸시용으로 chat_id 캐싱
+    try:
+        save_chat_id(update.effective_chat.id)
+    except Exception:
+        logger.warning("chat_id 저장 실패", exc_info=True)
+
     await update.message.reply_text(
         "안녕하세요! 투자 로그 봇입니다.\n"
         "사용 가능한 명령어:\n"
@@ -68,6 +80,7 @@ async def start(update: Update, context) -> None:
         "선물롤오버 - 차월물로 롤오버\n"
         "선물회고 - 선물 청산 회고\n"
         "선물시세 - 정확한 선물가 수동 입력 (6시간 유효)\n"
+        "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
         "도움말 - 사용법"
     )
 
@@ -75,6 +88,19 @@ async def start(update: Update, context) -> None:
 def _korean_command(keyword: str) -> filters.BaseFilter:
     """한국어 키워드로 시작하는 메시지를 필터링."""
     return filters.Regex(rf"^{keyword}$")
+
+
+async def expiry_check_handler(update: Update, context) -> None:
+    """만기점검 즉시 명령. JobQueue 알림과 같은 메시지를 호출 즉시 표시."""
+    try:
+        save_chat_id(update.effective_chat.id)
+    except Exception:
+        pass
+    alerts = collect_expiry_alerts(load_futures_positions())
+    if not alerts:
+        await update.message.reply_text("만기 임박 선물 포지션이 없습니다.")
+        return
+    await update.message.reply_text(build_alert_message(alerts))
 
 
 def main() -> None:
@@ -93,6 +119,7 @@ def main() -> None:
     # 한국어 키워드 핸들러
     app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
+    app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 
     # ConversationHandler — 증권사 메시지가 먼저 매칭되도록 순서 중요
@@ -107,6 +134,8 @@ def main() -> None:
     app.add_handler(futures_roll_conversation())
     app.add_handler(futures_retro_conversation())
     app.add_handler(futures_quote_conversation())
+
+    schedule_daily_expiry_check(app)
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
