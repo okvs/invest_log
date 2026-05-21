@@ -140,9 +140,9 @@ def _build_quadrants_svg(
     x_abs = math.ceil(x_abs_raw * 1.15 / 10.0) * 10.0
 
     # Y축: 비중(%). 위로도 +, 아래로도 + 대칭.
+    # 기본 50% 까지, 50% 넘는 종목이 있을 때만 60% 까지 확장.
     max_w = max(p["weight"] for p in points)
-    y_abs_raw = max(max_w, 10.0)
-    y_abs = math.ceil(y_abs_raw * 1.15 / 10.0) * 10.0
+    y_abs = 60.0 if max_w > 50.0 else 50.0
 
     x_min, x_max = -x_abs, x_abs
     y_min, y_max = -y_abs, y_abs
