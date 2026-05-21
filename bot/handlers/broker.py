@@ -392,7 +392,9 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _other_command_filter() -> filters.BaseFilter:
     """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
-    return filters.Regex(r"^(매도|매수|현황|도움말|수정|회고)$") | filters.COMMAND
+    return filters.Regex(
+        r"^(매도|매수|현황|도움말|수정|회고|선물진입|선물청산|선물롤오버|선물회고)$"
+    ) | filters.COMMAND
 
 
 def broker_conversation() -> ConversationHandler:

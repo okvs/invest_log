@@ -221,6 +221,64 @@ def edit_select_keyboard(holdings: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+# --- 선물: 방향 (롱/숏) ---
+FUTURES_DIR_PREFIX = "fut_dir:"
+FUTURES_LONG = "fut_dir:long"
+FUTURES_SHORT = "fut_dir:short"
+
+
+def futures_direction_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("롱 (매수)", callback_data=FUTURES_LONG),
+            InlineKeyboardButton("숏 (매도)", callback_data=FUTURES_SHORT),
+        ]
+    ])
+
+
+# --- 선물: 결제월 선택 ---
+FUTURES_MONTH_PREFIX = "fut_month:"
+
+
+def futures_month_keyboard(months) -> InlineKeyboardMarkup:
+    """결제월 선택 키보드. months: list of parsers.expiry.FuturesMonth."""
+    buttons = []
+    for m in months:
+        buttons.append([
+            InlineKeyboardButton(
+                m.label(),
+                callback_data=f"{FUTURES_MONTH_PREFIX}{m.contract_month}",
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
+
+
+# --- 선물: 포지션 선택 (청산/롤오버 공용) ---
+FUTURES_POS_PREFIX = "fut_pos:"
+
+
+def futures_positions_keyboard(positions: list[dict]) -> InlineKeyboardMarkup:
+    """선물 포지션 카드 키보드. callback_data: fut_pos:<position_id>."""
+    buttons = []
+    for p in positions:
+        name = p.get("name", "")
+        direction = "롱" if p.get("direction") == "long" else "숏"
+        contracts = p.get("contracts", 0)
+        month = p.get("contract_month", "")
+        month_label = f"{month[2:4]}년{month[4:6]}월물" if len(month) == 6 else month
+        label = f"{name} {direction} {contracts}계약 ({month_label})"
+        buttons.append([
+            InlineKeyboardButton(
+                label, callback_data=f"{FUTURES_POS_PREFIX}{p['id']}"
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
+
+
+# --- 선물 사유 고정값 ---
+FUTURES_PINNED_CLOSE_REASONS = ["자동손절", "롤오버"]
+
+
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"
