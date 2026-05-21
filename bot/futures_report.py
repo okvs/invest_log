@@ -104,8 +104,15 @@ def build_futures_section(
     total_class = "profit" if total_unrealized >= 0 else "loss"
     total_sign = "+" if total_unrealized >= 0 else ""
 
+    quote_note = (
+        '<div style="font-size:11px;color:#888;margin-top:4px">'
+        '시세는 기초자산 현재가 기준 추정치. 정확한 선물가는 텔레그램에서 \'선물시세\' 입력.'
+        '</div>'
+    )
+
     return f"""
   <div class="section-title" style="margin-top:40px">선물 포지션</div>
+  {quote_note}
   <div class="cards" style="grid-template-columns:repeat(3,1fr);max-width:600px">
     <div class="card">
       <div class="label">포지션 수</div>
