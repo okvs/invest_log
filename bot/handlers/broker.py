@@ -26,12 +26,15 @@ from bot.keyboards import (
     APPEND_THESIS,
     EDIT_SECTOR,
     EDIT_THESIS,
+    FUT_MARGIN_CUSTOM,
+    FUT_MARGIN_RATE_PREFIX,
     FUTURES_PINNED_CLOSE_REASONS,
     KEEP_EXISTING,
     MARGIN_PREFIX,
     REASON_PICK_PREFIX,
     SELL_PINNED_REASONS,
     existing_info_keyboard,
+    futures_margin_rate_keyboard,
     margin_ratio_keyboard,
     reason_select_keyboard,
 )
@@ -49,9 +52,11 @@ from storage.json_store import (
     get_recent_futures_reasons,
     get_recent_reasons,
     load_account,
+    load_futures_margin_rates,
     load_futures_positions,
     load_futures_transactions,
     load_nickname_map,
+    save_futures_margin_rate,
     save_futures_positions,
     save_futures_transactions,
 )
@@ -408,8 +413,8 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "broker_sell", "broker_buy", "broker_sector",
         "buy_input", "_broker_edit", "recent_reasons", "append_base",
         "fut_msg", "fut_action", "fut_direction", "fut_margin",
-        "fut_add_pos_id", "fut_close_pos_id", "fut_close_contracts",
-        "fut_close_price",
+        "fut_margin_rate", "fut_add_pos_id", "fut_close_pos_id",
+        "fut_close_contracts", "fut_close_price",
     ):
         context.user_data.pop(key, None)
     await update.message.reply_text("취소되었습니다.")
@@ -510,12 +515,16 @@ async def _handle_futures_broker_msg(
         )
         return FUT_CLOSE_REASON
 
+    recent_rates = load_futures_margin_rates().get(msg.name, [])
+    rate_kb = futures_margin_rate_keyboard(recent=recent_rates)
+
     if action == "add":
         context.user_data["fut_add_pos_id"] = existing["id"]
         await update.message.reply_text(
             f"{summary}\n\n"
             f"기존 {direction_kr} 포지션에 추가 진입으로 처리합니다.\n"
-            "추가 위탁증거금(원)을 입력해주세요."
+            "증거금률을 선택하거나 '원화 직접 입력'을 누르세요.",
+            reply_markup=rate_kb,
         )
         return FUT_MARGIN
 
@@ -523,7 +532,8 @@ async def _handle_futures_broker_msg(
     await update.message.reply_text(
         f"{summary}\n\n"
         f"신규 {direction_kr} 진입으로 처리합니다.\n"
-        "위탁증거금(원)을 입력해주세요."
+        "증거금률을 선택하거나 '원화 직접 입력'을 누르세요.",
+        reply_markup=rate_kb,
     )
     return FUT_MARGIN
 
@@ -541,15 +551,64 @@ async def _fut_margin_input(
         await update.message.reply_text("증거금은 0보다 커야 합니다.")
         return FUT_MARGIN
     context.user_data["fut_margin"] = margin
+    return await _ask_open_thesis(update, context, is_callback=False)
+
+
+async def _fut_margin_rate_pick(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """증거금률 카드 클릭 → 자동 계산 또는 직접입력 안내."""
+    query = update.callback_query
+    await query.answer()
+    msg: FuturesBrokerMessage | None = context.user_data.get("fut_msg")
+    if msg is None:
+        await query.edit_message_text("세션이 만료되었습니다.")
+        return ConversationHandler.END
+
+    if query.data == FUT_MARGIN_CUSTOM:
+        await query.edit_message_text(
+            "위탁증거금(원)을 직접 입력해주세요."
+        )
+        return FUT_MARGIN
+
+    try:
+        rate = float(query.data.removeprefix(FUT_MARGIN_RATE_PREFIX))
+    except ValueError:
+        await query.edit_message_text("증거금률을 다시 선택해주세요.")
+        return FUT_MARGIN
+
+    notional = msg.price_per_share() * msg.quantity * msg.multiplier
+    margin = round(notional * rate)
+    context.user_data["fut_margin"] = margin
+    context.user_data["fut_margin_rate"] = rate
+    save_futures_margin_rate(msg.name, rate)
+    return await _ask_open_thesis(query, context, is_callback=True)
+
+
+async def _ask_open_thesis(
+    update_or_query, context: ContextTypes.DEFAULT_TYPE, *, is_callback: bool,
+) -> int:
+    """증거금이 확정된 뒤 진입 사유 입력 단계."""
+    msg: FuturesBrokerMessage = context.user_data["fut_msg"]
+    margin = int(context.user_data["fut_margin"])
+    rate = context.user_data.get("fut_margin_rate")
+    notional = msg.price_per_share() * msg.quantity * msg.multiplier
+
+    header = f"증거금 {margin:,}원"
+    if rate is not None:
+        header += f" ({rate * 100:g}% × 명목 {int(notional):,}원)"
 
     reasons = get_recent_futures_reasons("open")
     context.user_data["recent_reasons"] = reasons
-    msg = "진입 사유를 입력해주세요."
+    text = header + "\n\n진입 사유를 입력해주세요."
     if reasons:
-        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
-    await update.message.reply_text(
-        msg, reply_markup=reason_select_keyboard(reasons) if reasons else None,
-    )
+        text += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+
+    kb = reason_select_keyboard(reasons) if reasons else None
+    if is_callback:
+        await update_or_query.edit_message_text(text, reply_markup=kb)
+    else:
+        await update_or_query.message.reply_text(text, reply_markup=kb)
     return FUT_THESIS
 
 
@@ -587,6 +646,7 @@ async def _do_open_save(
     margin = float(context.user_data.pop("fut_margin"))
     action = context.user_data.pop("fut_action")
     add_pos_id = context.user_data.pop("fut_add_pos_id", None)
+    context.user_data.pop("fut_margin_rate", None)
 
     price = msg.price_per_share()
     contracts = msg.quantity
@@ -810,6 +870,9 @@ def broker_conversation() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
             ],
             FUT_MARGIN: [
+                CallbackQueryHandler(
+                    _fut_margin_rate_pick, pattern=f"^{FUT_MARGIN_RATE_PREFIX}"
+                ),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_margin_input),
             ],

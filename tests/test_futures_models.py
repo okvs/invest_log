@@ -10,6 +10,7 @@ from models.futures_transaction import FuturesTransaction
 from parsers.expiry import (
     parse_contract_month,
     second_thursday,
+    upcoming_months,
     upcoming_quarterly_months,
 )
 from storage.json_store import (
@@ -52,9 +53,24 @@ def test_parse_contract_month_accepts_separators():
     assert fm.expiry_date == date(2026, 6, 11)
 
 
-def test_parse_contract_month_rejects_non_quarterly():
+def test_parse_contract_month_accepts_any_month():
+    """KRX 개별주식선물은 분기물 외 근월물도 거래되므로 1~12월 모두 허용."""
+    fm = parse_contract_month("202607")  # 7월물
+    assert fm.contract_month == "202607"
+    assert fm.expiry_date == date(2026, 7, 9)
+
+
+def test_parse_contract_month_rejects_invalid_month():
     with pytest.raises(ValueError):
-        parse_contract_month("202605")  # 5월은 분기물 아님
+        parse_contract_month("202613")  # 13월
+
+
+def test_upcoming_months_includes_near_months():
+    """upcoming_months는 분기물 + 근월물 모두 가까운 순으로."""
+    today = date(2026, 5, 21)
+    months = upcoming_months(today=today, count=6)
+    cms = [m.contract_month for m in months]
+    assert cms == ["202606", "202607", "202608", "202609", "202610", "202611"]
 
 
 # ── FuturesPosition 동작 ─────────────────────────────────────────────────

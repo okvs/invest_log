@@ -279,6 +279,57 @@ def futures_positions_keyboard(positions: list[dict]) -> InlineKeyboardMarkup:
 FUTURES_PINNED_CLOSE_REASONS = ["자동손절", "롤오버"]
 
 
+# --- 선물 증거금률 카드 (단가 × 계약수 × 승수 × rate = 증거금) ---
+FUT_MARGIN_RATE_PREFIX = "fut_margin_rate:"
+FUT_MARGIN_CUSTOM = "fut_margin_rate:custom"
+
+# 자주 쓰이는 위탁증거금률 기본값 (KRX 종목별로 다름, 매번 갱신될 수 있음)
+DEFAULT_FUT_MARGIN_RATES = [0.18, 0.30, 0.3285, 0.36, 0.40, 0.50]
+
+
+def _format_rate_label(rate: float) -> str:
+    pct = rate * 100
+    if abs(pct - round(pct)) < 1e-9:
+        return f"{int(round(pct))}%"
+    return f"{pct:.2f}".rstrip("0").rstrip(".") + "%"
+
+
+def futures_margin_rate_keyboard(
+    recent: list[float] | None = None,
+) -> InlineKeyboardMarkup:
+    """위탁증거금률 선택 카드 + '원화 직접 입력'.
+
+    recent: 같은 종목에서 최근 사용한 rate 리스트. 있으면 카드 맨 앞에 노출.
+    """
+    seen: set[float] = set()
+    ordered: list[float] = []
+    for r in (recent or []) + DEFAULT_FUT_MARGIN_RATES:
+        key = round(r, 4)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(r)
+
+    buttons = []
+    row = []
+    for r in ordered:
+        row.append(
+            InlineKeyboardButton(
+                _format_rate_label(r),
+                callback_data=f"{FUT_MARGIN_RATE_PREFIX}{r}",
+            )
+        )
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([
+        InlineKeyboardButton("원화 직접 입력", callback_data=FUT_MARGIN_CUSTOM)
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- 선물 회고: 청산 거래 카드 ---
 FUTURES_RETRO_PREFIX = "fut_retro:"
 

@@ -35,7 +35,7 @@ from bot.keyboards import (
 )
 from models.futures_position import FuturesPosition, DEFAULT_MULTIPLIER
 from models.futures_transaction import FuturesTransaction
-from parsers.expiry import upcoming_quarterly_months
+from parsers.expiry import upcoming_months
 from parsers.futures_input import parse_futures_entry
 from parsers.input_parser import resolve_name, search_stocks
 from storage.json_store import (
@@ -158,7 +158,7 @@ async def _pick_direction(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     state = context.user_data.setdefault("fut_entry", {})
     state["direction"] = "long" if query.data == FUTURES_LONG else "short"
 
-    months = upcoming_quarterly_months(count=4)
+    months = upcoming_months(count=6)
     context.user_data["fut_months"] = {m.contract_month: m for m in months}
     await query.edit_message_text(
         "결제월을 선택해주세요:",

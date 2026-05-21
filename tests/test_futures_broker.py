@@ -12,9 +12,12 @@ from bot.handlers.broker import (
     FUT_THESIS,
     _fut_close_reason_input,
     _fut_margin_input,
+    _fut_margin_rate_pick,
     _fut_thesis_input,
     _receive_broker_msg,
 )
+from bot.keyboards import FUT_MARGIN_CUSTOM, FUT_MARGIN_RATE_PREFIX
+from storage.json_store import load_futures_margin_rates
 from models.futures_position import FuturesPosition
 from parsers.input_parser import (
     FuturesBrokerMessage,
@@ -242,6 +245,57 @@ async def test_buy_with_existing_short_is_close():
     closes = [t for t in txs if t["type"] == "close"]
     # 숏 (676000-670000)*2*10*-1 = -120,000 (가격이 오른 시점에 청산 = 손실)
     assert closes[0]["pnl"] == -120000.0
+
+
+# ── 증거금률 카드 ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_margin_rate_card_computes_margin_and_advances():
+    """카드 클릭 → 단가×계약×승수×rate로 자동 계산 후 사유 단계."""
+    save_futures_positions([])
+    update, ctx = _make_update(SAMPLE)
+    await _receive_broker_msg(update, ctx)
+    # 사용자에게 키보드가 노출되어야 함
+    kwargs = update.message.reply_text.call_args.kwargs
+    assert kwargs.get("reply_markup") is not None
+
+    # 32.85% 카드 클릭
+    cb_update = MagicMock()
+    cb_update.callback_query = MagicMock()
+    cb_update.callback_query.data = f"{FUT_MARGIN_RATE_PREFIX}0.3285"
+    cb_update.callback_query.answer = AsyncMock()
+    cb_update.callback_query.edit_message_text = AsyncMock()
+    result = await _fut_margin_rate_pick(cb_update, ctx)
+    assert result == FUT_THESIS
+    # 676,000 × 2 × 10 × 0.3285 = 4,441,320
+    assert ctx.user_data["fut_margin"] == 4_441_320
+
+    # 같은 종목 rate가 저장됐는지
+    rates = load_futures_margin_rates()
+    assert 0.3285 in rates.get("현대모비스", [])
+
+
+@pytest.mark.asyncio
+async def test_margin_rate_custom_keeps_state_for_text_input():
+    """'원화 직접 입력' 카드 → FUT_MARGIN 유지, 다음 텍스트로 직접 입력 가능."""
+    save_futures_positions([])
+    update, ctx = _make_update(SAMPLE)
+    await _receive_broker_msg(update, ctx)
+
+    cb_update = MagicMock()
+    cb_update.callback_query = MagicMock()
+    cb_update.callback_query.data = FUT_MARGIN_CUSTOM
+    cb_update.callback_query.answer = AsyncMock()
+    cb_update.callback_query.edit_message_text = AsyncMock()
+    result = await _fut_margin_rate_pick(cb_update, ctx)
+    assert result == FUT_MARGIN
+
+    # 텍스트로 직접 입력하면 사유 단계로
+    m_update = _make_update("2520000")[0]
+    result = await _fut_margin_input(m_update, ctx)
+    assert result == FUT_THESIS
+    assert ctx.user_data["fut_margin"] == 2520000.0
 
 
 @pytest.mark.asyncio

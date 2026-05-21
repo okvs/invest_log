@@ -138,6 +138,24 @@ def save_futures_transactions(transactions: list[dict]) -> None:
     save(FUTURES_TRANSACTIONS_FILE, {"transactions": transactions})
 
 
+FUTURES_MARGIN_RATES_FILE = "futures_margin_rates.json"
+
+
+def load_futures_margin_rates() -> dict[str, list[float]]:
+    """종목별 최근 사용한 위탁증거금률(소수, 예 0.36) 리스트."""
+    return load(FUTURES_MARGIN_RATES_FILE).get("rates", {})
+
+
+def save_futures_margin_rate(name: str, rate: float, *, keep: int = 3) -> None:
+    """종목 진입 시 사용한 rate를 최근값으로 저장. 같은 rate는 중복 없이 맨 앞."""
+    data = load(FUTURES_MARGIN_RATES_FILE)
+    rates = data.get("rates", {})
+    cur = rates.get(name, [])
+    cur = [rate] + [r for r in cur if abs(r - rate) > 1e-6]
+    rates[name] = cur[:keep]
+    save(FUTURES_MARGIN_RATES_FILE, {"rates": rates})
+
+
 def get_recent_futures_reasons(
     tx_type: str,
     limit: int = 5,

@@ -32,7 +32,7 @@ from bot.keyboards import (
 )
 from models.futures_position import FuturesPosition
 from models.futures_transaction import FuturesTransaction
-from parsers.expiry import upcoming_quarterly_months
+from parsers.expiry import upcoming_months
 from parsers.futures_input import parse_futures_roll
 from storage.json_store import (
     get_recent_futures_reasons,
@@ -79,7 +79,7 @@ async def _select_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # 차월물 후보 — 현재 결제월 제외
     current_cm = pos.get("contract_month", "")
-    months = [m for m in upcoming_quarterly_months(count=5) if m.contract_month != current_cm][:4]
+    months = [m for m in upcoming_months(count=8) if m.contract_month != current_cm][:6]
     context.user_data["fut_roll_months"] = {m.contract_month: m for m in months}
 
     direction_kr = "롱" if pos.get("direction") == "long" else "숏"
