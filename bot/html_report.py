@@ -181,20 +181,30 @@ def _isoprofit_paths(
 
 
 def _wave_glyph(cx: float, cy: float, color: str = "#fbbf24") -> str:
-    """수평 사인 물결(∿) 글리프 — cubic Bezier 4 반파, 폭 18px, 진폭 ~4.5px, 좌우대칭."""
+    """≋ 스타일 — 수평 두 줄, 각 줄 2 humps (덜 구부러짐). 폭 18px, 진폭 ~2px."""
+    top = (
+        f"M {cx - 9:.2f},{cy - 3:.2f} c 3,-2 6,-2 9,0 s 6,2 9,0"
+    )
+    bot = (
+        f"M {cx - 9:.2f},{cy + 3:.2f} c 3,-2 6,-2 9,0 s 6,2 9,0"
+    )
     return (
-        f'<path d="M {cx - 9:.2f},{cy:.2f} '
-        f'c 1.5,-6 3,-6 4.5,0 s 3,6 4.5,0 s 3,-6 4.5,0 s 3,6 4.5,0" '
-        f'stroke="{color}" stroke-width="1.8" fill="none" stroke-linecap="round"/>'
+        f'<path d="{top} {bot}" stroke="{color}" stroke-width="1.6" '
+        f'fill="none" stroke-linecap="round"/>'
     )
 
 
 def _wave_glyph_v(cx: float, cy: float, color: str = "#fbbf24") -> str:
-    """수직 사인 물결 글리프 — 위→아래 cubic Bezier 4 반파, 높이 18px, 진폭 ~4.5px."""
+    """≋ 스타일 — 수직 두 줄, 각 줄 2 humps (덜 구부러짐). 높이 18px, 진폭 ~2px."""
+    left = (
+        f"M {cx - 3:.2f},{cy - 9:.2f} c -2,3 -2,6 0,9 s 2,6 0,9"
+    )
+    right = (
+        f"M {cx + 3:.2f},{cy - 9:.2f} c -2,3 -2,6 0,9 s 2,6 0,9"
+    )
     return (
-        f'<path d="M {cx:.2f},{cy - 9:.2f} '
-        f'c -6,1.5 -6,3 0,4.5 s 6,3 0,4.5 s -6,3 0,4.5 s 6,3 0,4.5" '
-        f'stroke="{color}" stroke-width="1.8" fill="none" stroke-linecap="round"/>'
+        f'<path d="{left} {right}" stroke="{color}" stroke-width="1.6" '
+        f'fill="none" stroke-linecap="round"/>'
     )
 
 
