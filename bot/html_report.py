@@ -95,23 +95,28 @@ def _quadrant_badge(
 
 
 def _isoprofit_paths(
-    sx_fn, sy_fn, y_max: float, x_abs: float = 50.0
+    sx_fn, sy_fn, y_max: float, total_eval: float, x_abs: float = 50.0
 ) -> list[str]:
-    """수익금 등고선 (w[%] × r[%] = ±k).
+    """수익금 등고선 (포지션 KRW 임팩트 = const).
 
-    k = w × r 단위는 %·% — 그대로 100 으로 나누면 포트폴리오 임팩트 %.
-    예) k=300 → 3% impact (10% 비중 × 30% 수익, 20% × 15%, …).
-    Q1(수익) 쪽 초록 3단, Q2(손실) 쪽 빨강 3단으로 dashed 곡선 그림.
+    포지션 KRW profit ≈ total_eval × w × r / 10000 이므로,
+    동일 KRW 임팩트 곡선은 w[%] × r[%] = 10000 · KRW / total_eval.
+    예) total_eval=1억5천 + 500만 임팩트 → k = 333.
     """
-    levels = [
-        # (k, color, opacity, label)
-        (25,   "#86efac", 0.45, "+소"),
-        (100,  "#22c55e", 0.65, "+중"),
-        (300,  "#15803d", 0.95, "+대"),
-        (-25,  "#fca5a5", 0.45, "-소"),
-        (-100, "#ef4444", 0.65, "-중"),
-        (-300, "#991b1b", 0.95, "-대"),
+    if total_eval <= 0:
+        return []
+
+    krw_targets = [
+        (5_000_000,   "500만",   "#86efac", "#fca5a5", 0.50),
+        (10_000_000,  "천만",    "#22c55e", "#ef4444", 0.70),
+        (30_000_000,  "3천만",   "#15803d", "#991b1b", 0.95),
     ]
+    levels: list[tuple[float, str, float, str]] = []
+    for krw, label, c_pos, c_neg, opacity in krw_targets:
+        k = 10000.0 * krw / total_eval
+        levels.append(( k, c_pos, opacity, f"+{label}"))
+        levels.append((-k, c_neg, opacity, f"-{label}"))
+
     paths: list[str] = []
     for k, color, opacity, label in levels:
         # r 샘플링 — 부호 따라 r>0 또는 r<0
@@ -218,10 +223,9 @@ def _build_quadrants_svg(
     # X축: 수익률(%). ±50% 고정, 그 너머는 클립 + 세로 물결 표시.
     x_abs = 50.0
 
-    # Y축: 비중(%). 0 ~ ceil((max_w+10)/10)*10 (최소 20). 비대칭.
+    # Y축: 비중(%). 35% 고정 max, 그 너머는 클립 + 가로 물결.
     Y_THRESH = 10.0  # 비중부족/과체중 분리선
-    max_w = max(p["weight"] for p in points)
-    y_max = max(math.ceil((max_w + 10.0) / 10.0) * 10.0, 20.0)
+    y_max = 35.0
     y_min = 0.0
 
     x_min, x_max = -x_abs, x_abs
@@ -277,8 +281,8 @@ def _build_quadrants_svg(
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
 
-    # 수익금 iso-profit 등고선 (w × r = ±k) — 데이터 점 아래, 분리선 위에 깔림
-    parts.extend(_isoprofit_paths(sx, sy, y_max, x_abs))
+    # 수익금 iso-profit 등고선 — 데이터 점 아래, 분리선 위에 깔림
+    parts.extend(_isoprofit_paths(sx, sy, y_max, total_eval, x_abs))
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
@@ -354,37 +358,57 @@ def _build_quadrants_svg(
     WAVE_COLOR = "#fbbf24"
     for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
         r = SVG_RADIUS[p["tier"]]
-        clipped = abs(p["return"]) > 50.0
-        cy = sy(p["weight"])
-        if clipped:
-            direction = 1 if p["return"] > 0 else -1
-            # 마커를 plot 좌/우 끝에 바짝 붙임 (프레임과 r+2 간격).
-            cx = (x_right - r - 2) if direction > 0 else (x_left + r + 2)
+        clipped_x = abs(p["return"]) > 50.0
+        clipped_y = p["weight"] > 35.0  # 위쪽으로 잘림 (비중은 항상 양수)
+
+        # 마커 좌표 — 클립된 축은 plot 가장자리로 밀어붙임
+        if clipped_x:
+            dir_x = 1 if p["return"] > 0 else -1
+            cx = (x_right - r - 2) if dir_x > 0 else (x_left + r + 2)
         else:
             cx = sx(p["return"])
+        if clipped_y:
+            cy = y_top + r + 2
+        else:
+            cy = sy(p["weight"])
         parts.append(_tier_marker_svg(cx, cy, p["tier"], p["color"]))
 
-        if clipped:
-            direction = 1 if p["return"] > 0 else -1
-            # 세로 물결 — 마커 안쪽에 세로 방향으로
-            parts.append(
-                _wave_glyph_v(cx - direction * (r + 8), cy, WAVE_COLOR)
-            )
-            # 라벨 — 물결 너머 안쪽. 실제 수익률 % 함께.
-            label_x = cx - direction * (r + 18)
-            anchor = "end" if direction > 0 else "start"
-            label_html = (
-                f'{p["name"]} <tspan fill="{WAVE_COLOR}" font-weight="700" '
-                f'font-size="10">({p["return"]:+.0f}%)</tspan>'
-            )
+        # 클립 표시 물결 — X 잘림은 세로 물결, Y 잘림은 가로 물결
+        if clipped_x:
+            dir_x = 1 if p["return"] > 0 else -1
+            parts.append(_wave_glyph_v(cx - dir_x * (r + 8), cy, WAVE_COLOR))
+        if clipped_y:
+            parts.append(_wave_glyph(cx, cy + r + 9, WAVE_COLOR))
+
+        # 라벨 — 클립된 축에 따라 위치 / 실측 값 부착
+        extras = []
+        if clipped_x:
+            extras.append(f"{p['return']:+.0f}%")
+        if clipped_y:
+            extras.append(f"비중 {p['weight']:.0f}%")
+        suffix = (
+            f' <tspan fill="{WAVE_COLOR}" font-weight="700" font-size="10">'
+            f'({" · ".join(extras)})</tspan>'
+        ) if extras else ""
+
+        if clipped_x:
+            dir_x = 1 if p["return"] > 0 else -1
+            label_x = cx - dir_x * (r + 20)
+            ly = cy + 3
+            anchor = "end" if dir_x > 0 else "start"
+        elif clipped_y:
+            # 위에 붙은 마커 → 라벨은 아래(물결 너머)에 중앙 정렬
+            label_x = cx
+            ly = cy + r + 22
+            anchor = "middle"
         else:
             label_x = cx + r + 4
+            ly = cy + 3
             anchor = "start"
-            label_html = p["name"]
 
         parts.append(
-            f'<text x="{label_x:.2f}" y="{cy + 3:.2f}" font-size="11" '
-            f'fill="#e0e0e0" text-anchor="{anchor}">{label_html}</text>'
+            f'<text x="{label_x:.2f}" y="{ly:.2f}" font-size="11" '
+            f'fill="#e0e0e0" text-anchor="{anchor}">{p["name"]}{suffix}</text>'
         )
 
     parts.append("</svg>")
@@ -417,8 +441,7 @@ def _build_quadrants_svg(
         '<div class="qd-caption">'
         '점 크기 = 비중 tier (10% 단위) · 원/원/원/육각형/별 (T1·T2·T3·T4·T5) · '
         '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
-        '동일 수익금 등고선 (w × r = ±k; 소·중·대 = 25 / 100 / 300; '
-        '예: 10% 비중 × 30% 수익 = 300)'
+        '동일 수익금 등고선 (500만 / 천만 / 3천만 KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
         "</div>"
     )
 

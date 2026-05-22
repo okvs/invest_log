@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 4사분면 iso-profit 라벨을 KRW 금액(500만/천만/3천만) + Y축 35% 고정 + 초과시 가로 물결 (2026-05-22) — `_isoprofit_paths(total_eval=...)` 로 변경, k = 10000·KRW/total_eval 동적 산출. 라벨도 ±500만/±천만/±3천만. y_max=35.0 고정. weight>35% 인 종목은 plot 상단에 클립 + `_wave_glyph` 가로 물결 + `(비중 NN%)` 실측 라벨. 122 passed.
 - [x] 4사분면에 iso-profit 등고선(Variant B) 통합 (2026-05-22) — `_isoprofit_paths()` 신설. w[%]×r[%] = ±25/100/300 의 하이퍼볼릭 곡선을 Q1(초록 3단)/Q2(빨강 3단) 으로 dashed 그림. 각 곡선 상단에 ±소·중·대 라벨. 캡션도 업데이트(예: 10%×30% = 300 → 3% portfolio impact). 122 passed.
 - [x] 자동손절(-10%) 임박 푸시 + launchd 평일 15:30 KST (2026-05-22) — `scripts/stop_loss_alert.py` (보유 종목 중 손익률 -10%~-5% 구간 추출 → chat_id 778372474 푸시, 25봉 일봉 차트 동봉, matplotlib + AppleSDGothicNeo 한글 폰트, BOT_TOKEN은 .env 로드). 위태 종목 0건이면 무발송. `~/Library/LaunchAgents/com.seung.invest_log.stop_loss_alert.plist` (trackdramprice 패턴 — venv 절대경로 + WorkingDirectory + StdOut/Err 로그 + EnvVars). `launchctl bootstrap gui/$UID` 로 등록 완료. 수동 dry-run 정상(현재 위태 0건).
 - [x] 현금을 현물/선물로 분리 + 평가액 대비 증거금 카드 (2026-05-22) — `account.json` 에 `futures_cash` 필드 추가(현재 54,600,000). `build_html_report(futures_cash=...)` 가 cash를 spot/futures-free 로 나눠 섹터 상세에 `현금` (현물 free) + `현금(선물)` (free, 빗금) 두 줄로 표시. 색은 둘 다 회색, futures 쪽은 `futures-stripe` 클래스. 선물 카드를 "증거금 잠식률" → "평가액 대비 증거금"(`total_margin/total_equity`)으로 변경, 잠식률은 sub-line으로. ≥30% loss class, <10% profit class. `dashboard.py` 가 account.json 의 `futures_cash` 를 읽어 전달. 122 passed.
