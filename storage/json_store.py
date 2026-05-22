@@ -139,21 +139,67 @@ def save_futures_transactions(transactions: list[dict]) -> None:
 
 
 FUTURES_MARGIN_RATES_FILE = "futures_margin_rates.json"
+FUTURES_MARGIN_RATE_POOL_FILE = "futures_margin_rate_pool.json"
+MARGIN_RATE_POOL_SIZE = 7
+DEFAULT_MARGIN_RATE_POOL: list[float] = [
+    0.18, 0.30, 0.3285, 0.36, 0.369, 0.40, 0.50
+]
 
 
 def load_futures_margin_rates() -> dict[str, list[float]]:
-    """종목별 최근 사용한 위탁증거금률(소수, 예 0.36) 리스트."""
+    """[deprecated] 종목별 최근 사용한 위탁증거금률 — 글로벌 LRU 풀로 대체됨."""
     return load(FUTURES_MARGIN_RATES_FILE).get("rates", {})
 
 
 def save_futures_margin_rate(name: str, rate: float, *, keep: int = 3) -> None:
-    """종목 진입 시 사용한 rate를 최근값으로 저장. 같은 rate는 중복 없이 맨 앞."""
+    """[deprecated] 종목 진입 시 사용한 rate 저장. 글로벌 LRU 풀로 대체됨."""
     data = load(FUTURES_MARGIN_RATES_FILE)
     rates = data.get("rates", {})
     cur = rates.get(name, [])
     cur = [rate] + [r for r in cur if abs(r - rate) > 1e-6]
     rates[name] = cur[:keep]
     save(FUTURES_MARGIN_RATES_FILE, {"rates": rates})
+
+
+def load_margin_rate_pool() -> list[float]:
+    """글로벌 증거금률 카드 풀 (LRU 정렬, most recent first).
+
+    파일 없으면 DEFAULT_MARGIN_RATE_POOL 그대로 반환 (seed).
+    """
+    data = load(FUTURES_MARGIN_RATE_POOL_FILE)
+    cards = data.get("cards") if isinstance(data, dict) else None
+    if not cards:
+        return list(DEFAULT_MARGIN_RATE_POOL)
+    cards = sorted(cards, key=lambda c: c.get("last_used") or "", reverse=True)
+    return [float(c["rate"]) for c in cards if "rate" in c]
+
+
+def touch_margin_rate_card(
+    rate: float, *, max_size: int = MARGIN_RATE_POOL_SIZE,
+) -> None:
+    """rate 사용 시각 갱신. 새 rate면 추가 + LRU 초과분 evict.
+
+    오래된 카드 (안 쓴 지 오래된) 가 풀에서 떨어져 나감.
+    """
+    from datetime import datetime
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    data = load(FUTURES_MARGIN_RATE_POOL_FILE) or {}
+    cards = data.get("cards") if isinstance(data, dict) else None
+    if not cards:
+        # seed — DEFAULT 는 last_used 빈 문자열로 깔아두고, 사용된 카드만 위로 올라옴
+        cards = [{"rate": r, "last_used": ""} for r in DEFAULT_MARGIN_RATE_POOL]
+    rate_q = round(float(rate), 4)
+    found = False
+    for c in cards:
+        if abs(float(c.get("rate", 0)) - rate_q) < 1e-6:
+            c["last_used"] = now_iso
+            found = True
+            break
+    if not found:
+        cards.append({"rate": rate_q, "last_used": now_iso})
+    cards.sort(key=lambda c: c.get("last_used") or "", reverse=True)
+    cards = cards[:max_size]
+    save(FUTURES_MARGIN_RATE_POOL_FILE, {"cards": cards})
 
 
 def get_recent_futures_reasons(

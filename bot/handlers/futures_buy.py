@@ -213,13 +213,14 @@ async def _receive_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if body.reason:
         state["reason"] = body.reason
 
-    # 같은 종목의 기존 포지션이 있으면 그 섹터를 기본값으로 제안
+    # 같은 종목의 기존 포지션이 있으면 그 섹터를 기본값으로 제안 — 있으면 묻지 않고 그대로 사용
     suggested_sector = _suggest_sector(state.get("symbol", ""), state.get("name", ""))
-    state["suggested_sector"] = suggested_sector
-
-    prompt = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
     if suggested_sector:
-        prompt += f"\n(기존 섹터: {suggested_sector} — 그대로 쓰려면 '.' 입력)"
+        state["sector"] = suggested_sector
+        return await _proceed_to_reason(update, context, state)
+
+    state["suggested_sector"] = suggested_sector
+    prompt = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
     await update.message.reply_text(prompt)
     return SECTOR
 
@@ -238,20 +239,10 @@ def _suggest_sector(symbol: str, name: str) -> str:
     return ""
 
 
-async def _receive_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    state = context.user_data.get("fut_entry") or {}
-    if not state.get("contract_month"):
-        await update.message.reply_text("세션이 만료되었습니다. 다시 시작해주세요.")
-        _cleanup(context)
-        return ConversationHandler.END
-
-    raw = update.message.text.strip()
-    if raw == "." and state.get("suggested_sector"):
-        state["sector"] = state["suggested_sector"]
-    else:
-        state["sector"] = raw
-
-    # 본문에 이미 사유가 들어 있었으면 그대로 저장
+async def _proceed_to_reason(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, state: dict,
+) -> int:
+    """섹터가 정해진 뒤 사유 단계 (혹은 본문에 이미 사유가 있으면 저장)."""
     if state.get("reason"):
         return await _do_save(update, context, is_callback=False)
 
@@ -273,6 +264,22 @@ async def _receive_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=reason_select_keyboard(reasons) if reasons else None,
     )
     return REASON
+
+
+async def _receive_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    state = context.user_data.get("fut_entry") or {}
+    if not state.get("contract_month"):
+        await update.message.reply_text("세션이 만료되었습니다. 다시 시작해주세요.")
+        _cleanup(context)
+        return ConversationHandler.END
+
+    raw = update.message.text.strip()
+    if raw == "." and state.get("suggested_sector"):
+        state["sector"] = state["suggested_sector"]
+    else:
+        state["sector"] = raw
+
+    return await _proceed_to_reason(update, context, state)
 
 
 async def _reason_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

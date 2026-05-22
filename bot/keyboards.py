@@ -283,8 +283,8 @@ FUTURES_PINNED_CLOSE_REASONS = ["자동손절", "롤오버"]
 FUT_MARGIN_RATE_PREFIX = "fut_margin_rate:"
 FUT_MARGIN_CUSTOM = "fut_margin_rate:custom"
 
-# 자주 쓰이는 위탁증거금률 기본값 (KRX 종목별로 다름, 매번 갱신될 수 있음)
-DEFAULT_FUT_MARGIN_RATES = [0.18, 0.30, 0.3285, 0.36, 0.40, 0.50]
+# 자주 쓰이는 위탁증거금률 기본 시드 (글로벌 LRU 풀에 깔리는 초기값)
+DEFAULT_FUT_MARGIN_RATES = [0.18, 0.30, 0.3285, 0.36, 0.369, 0.40, 0.50]
 
 
 def _format_rate_label(rate: float) -> str:
@@ -295,15 +295,18 @@ def _format_rate_label(rate: float) -> str:
 
 
 def futures_margin_rate_keyboard(
-    recent: list[float] | None = None,
+    rates: list[float] | None = None,
 ) -> InlineKeyboardMarkup:
-    """위탁증거금률 선택 카드 + '원화 직접 입력'.
+    """위탁증거금률 선택 카드 + '증거금률 직접 입력 (%)'.
 
-    recent: 같은 종목에서 최근 사용한 rate 리스트. 있으면 카드 맨 앞에 노출.
+    rates: LRU 정렬된 카드 풀 (most recent first). None 이면 DEFAULT 사용.
+    카드 클릭 / 직접 입력 모두 호출자가 `touch_margin_rate_card` 로 풀 갱신.
     """
+    if not rates:
+        rates = list(DEFAULT_FUT_MARGIN_RATES)
     seen: set[float] = set()
     ordered: list[float] = []
-    for r in (recent or []) + DEFAULT_FUT_MARGIN_RATES:
+    for r in rates:
         key = round(r, 4)
         if key in seen:
             continue
@@ -325,7 +328,9 @@ def futures_margin_rate_keyboard(
     if row:
         buttons.append(row)
     buttons.append([
-        InlineKeyboardButton("원화 직접 입력", callback_data=FUT_MARGIN_CUSTOM)
+        InlineKeyboardButton(
+            "증거금률 직접 입력 (%)", callback_data=FUT_MARGIN_CUSTOM
+        )
     ])
     return InlineKeyboardMarkup(buttons)
 

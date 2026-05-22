@@ -90,15 +90,22 @@ def _find_at_risk_positions() -> list[dict]:
             continue
         cur = float(q["price"])
         avg = float(h["avg_price"])
-        if avg <= 0:
+        qty = int(h.get("quantity", 0))
+        if avg <= 0 or qty <= 0:
             continue
         pnl_pct = (cur - avg) / avg * 100
         if STOP_LOSS_PCT <= pnl_pct <= WARN_THRESHOLD_PCT:
+            eval_amt = cur * qty
+            invested = float(h.get("total_invested", avg * qty))
+            pnl_krw = eval_amt - invested
             at_risk.append({
                 "name": name,
                 "ticker": ticker,
                 "cur": cur,
                 "avg": avg,
+                "qty": qty,
+                "eval": eval_amt,
+                "pnl_krw": pnl_krw,
                 "pnl_pct": pnl_pct,
                 "remaining": pnl_pct - STOP_LOSS_PCT,  # 양수, 작을수록 위태
             })
@@ -170,8 +177,9 @@ async def _send_alerts(bot: Bot, alerts: list[dict]) -> None:
     for a in alerts:
         text = (
             f"<b>{a['name']}</b>\n"
-            f"현재 손익률 : <b>{a['pnl_pct']:+.2f}%</b>\n"
+            f"현재 손익률 : <b>{a['pnl_pct']:+.2f}%</b> ({a['pnl_krw']:+,.0f}원)\n"
             f"손절(-10%)까지 : <b>{a['remaining']:+.2f}%</b> 남음\n"
+            f"평가금 {a['eval']:,.0f}원 ({a['qty']}주)\n"
             f"현재가 {a['cur']:,.0f}원 · 평단 {a['avg']:,.0f}원"
         )
         chart = _build_chart(a["ticker"], a["name"], a["avg"], a["cur"])

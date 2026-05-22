@@ -19,7 +19,7 @@ from bot.handlers.broker import (
     _receive_broker_msg,
 )
 from bot.keyboards import FUT_MARGIN_CUSTOM, FUT_MARGIN_RATE_PREFIX
-from storage.json_store import load_futures_margin_rates
+from storage.json_store import load_margin_rate_pool
 from models.futures_position import FuturesPosition
 from parsers.input_parser import (
     FuturesBrokerMessage,
@@ -134,8 +134,8 @@ async def test_full_new_entry_flow():
     update, ctx = _make_update(SAMPLE)
     await _receive_broker_msg(update, ctx)
 
-    # 증거금 입력 → 섹터 단계
-    m_update = _make_update("2520000")[0]
+    # 증거금률 직접 입력 → 섹터 단계 (rate 30% → margin 13,520,000 × 0.3 = 4,056,000)
+    m_update = _make_update("30")[0]
     result = await _fut_margin_input(m_update, ctx)
     assert result == FUT_SECTOR
 
@@ -159,7 +159,7 @@ async def test_full_new_entry_flow():
     assert p["contract_month"] == "202606"
     assert p["expiry_date"] == "2026-06-11"  # 두 번째 목요일
     assert p["multiplier"] == 10
-    assert p["initial_margin"] == 2520000.0
+    assert p["initial_margin"] == 4_056_000.0
     assert p["thesis"] == "HBM 수요"
     assert p["sector"] == "자동차"
 
@@ -189,16 +189,21 @@ def _seed(name="현대모비스", direction="long", contracts=2, cm="202606"):
 
 @pytest.mark.asyncio
 async def test_buy_with_existing_long_is_add():
+    # 시드 포지션이 sector="자동차" 라 새 진입은 섹터를 묻지 않고 자동 매칭
     _seed(direction="long", contracts=1)
+    # 시드 sector 설정
+    positions = load_futures_positions()
+    positions[0]["sector"] = "자동차"
+    save_futures_positions(positions)
+
     update, ctx = _make_update(SAMPLE)
     result = await _receive_broker_msg(update, ctx)
     assert result == FUT_MARGIN
     assert ctx.user_data["fut_action"] == "add"
-    assert ctx.user_data["fut_direction"] == "long"
 
-    # 증거금 → 섹터 → 사유 → 저장 (추가 진입)
-    await _fut_margin_input(_make_update("2520000")[0], ctx)
-    await _fut_sector_input(_make_update(".")[0], ctx)
+    # 증거금률 30% → 섹터 자동 스킵 → 사유 → 저장
+    result = await _fut_margin_input(_make_update("30")[0], ctx)
+    assert result == FUT_THESIS  # 섹터 건너뛰고 바로 thesis
     await _fut_thesis_input(_make_update("추가 매수")[0], ctx)
 
     positions = load_futures_positions()
@@ -207,7 +212,9 @@ async def test_buy_with_existing_long_is_add():
     # (670000*1 + 676000*2) / 3 = 674000
     assert p["contracts"] == 3
     assert round(p["avg_entry_price"], 2) == round((670000.0 + 676000.0 * 2) / 3, 2)
-    assert p["initial_margin"] == 2400000.0 + 2520000.0
+    # 추가 margin = 13,520,000 × 0.3 = 4,056,000
+    assert p["initial_margin"] == 2400000.0 + 4_056_000.0
+    assert p["sector"] == "자동차"
 
 
 # ── 자동 분기: 청산 ─────────────────────────────────────────────────────
@@ -280,14 +287,14 @@ async def test_margin_rate_card_computes_margin_and_advances():
     # 676,000 × 2 × 10 × 0.3285 = 4,441,320
     assert ctx.user_data["fut_margin"] == 4_441_320
 
-    # 같은 종목 rate가 저장됐는지
-    rates = load_futures_margin_rates()
-    assert 0.3285 in rates.get("현대모비스", [])
+    # LRU 풀의 맨 앞에 0.3285 가 올라옴 (가장 최근 사용)
+    pool = load_margin_rate_pool()
+    assert abs(pool[0] - 0.3285) < 1e-6
 
 
 @pytest.mark.asyncio
 async def test_margin_rate_custom_keeps_state_for_text_input():
-    """'원화 직접 입력' 카드 → FUT_MARGIN 유지, 다음 텍스트로 직접 입력 가능."""
+    """'증거금률 직접 입력 (%)' 카드 → FUT_MARGIN 유지, 다음 텍스트로 %를 입력."""
     save_futures_positions([])
     update, ctx = _make_update(SAMPLE)
     await _receive_broker_msg(update, ctx)
@@ -300,11 +307,15 @@ async def test_margin_rate_custom_keeps_state_for_text_input():
     result = await _fut_margin_rate_pick(cb_update, ctx)
     assert result == FUT_MARGIN
 
-    # 텍스트로 직접 입력하면 섹터 단계로
-    m_update = _make_update("2520000")[0]
+    # rate "36.9" → 0.369 → margin = 13,520,000 × 0.369 = 4,988,880
+    m_update = _make_update("36.9")[0]
     result = await _fut_margin_input(m_update, ctx)
     assert result == FUT_SECTOR
-    assert ctx.user_data["fut_margin"] == 2520000.0
+    assert ctx.user_data["fut_margin"] == 4_988_880
+    assert abs(ctx.user_data["fut_margin_rate"] - 0.369) < 1e-6
+    # LRU 풀에 36.9% 가 올라오고 맨 앞에 위치
+    pool = load_margin_rate_pool()
+    assert abs(pool[0] - 0.369) < 1e-6
 
 
 @pytest.mark.asyncio
@@ -318,7 +329,7 @@ async def test_sell_with_no_position_new_short_entry():
     assert ctx.user_data["fut_action"] == "new"
     assert ctx.user_data["fut_direction"] == "short"
 
-    await _fut_margin_input(_make_update("2520000")[0], ctx)
+    await _fut_margin_input(_make_update("30")[0], ctx)
     await _fut_sector_input(_make_update("반도체")[0], ctx)
     await _fut_thesis_input(_make_update("숏 진입")[0], ctx)
 

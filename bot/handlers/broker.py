@@ -52,13 +52,13 @@ from storage.json_store import (
     get_recent_futures_reasons,
     get_recent_reasons,
     load_account,
-    load_futures_margin_rates,
     load_futures_positions,
     load_futures_transactions,
+    load_margin_rate_pool,
     load_nickname_map,
-    save_futures_margin_rate,
     save_futures_positions,
     save_futures_transactions,
+    touch_margin_rate_card,
 )
 
 # ConversationHandler states (10~부터 시작하여 buy/sell 상태값과 충돌 방지)
@@ -517,15 +517,14 @@ async def _handle_futures_broker_msg(
         )
         return FUT_CLOSE_REASON
 
-    recent_rates = load_futures_margin_rates().get(msg.name, [])
-    rate_kb = futures_margin_rate_keyboard(recent=recent_rates)
+    rate_kb = futures_margin_rate_keyboard(rates=load_margin_rate_pool())
 
     if action == "add":
         context.user_data["fut_add_pos_id"] = existing["id"]
         await update.message.reply_text(
             f"{summary}\n\n"
             f"기존 {direction_kr} 포지션에 추가 진입으로 처리합니다.\n"
-            "증거금률을 선택하거나 '원화 직접 입력'을 누르세요.",
+            "증거금률을 선택하거나 직접 입력하세요.",
             reply_markup=rate_kb,
         )
         return FUT_MARGIN
@@ -534,25 +533,43 @@ async def _handle_futures_broker_msg(
     await update.message.reply_text(
         f"{summary}\n\n"
         f"신규 {direction_kr} 진입으로 처리합니다.\n"
-        "증거금률을 선택하거나 '원화 직접 입력'을 누르세요.",
+        "증거금률을 선택하거나 직접 입력하세요.",
         reply_markup=rate_kb,
     )
     return FUT_MARGIN
 
 
+def _parse_margin_rate(text: str) -> float:
+    """'36.9' / '36.9%' / '0.369' 모두 0.369 로 정규화. 0 < rate ≤ 1 검증."""
+    raw = text.strip().replace("%", "").replace(" ", "")
+    if not raw:
+        raise ValueError("값이 비어 있습니다.")
+    val = float(raw)
+    if val > 1.0:
+        val = val / 100.0
+    if val <= 0 or val > 1.0:
+        raise ValueError("증거금률은 0% 초과 100% 이하만 가능합니다.")
+    return val
+
+
 async def _fut_margin_input(
     update: Update, context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
-    text = update.message.text
+    """증거금률(%) 직접 입력. 자동으로 notional × rate = margin 계산."""
+    msg: FuturesBrokerMessage | None = context.user_data.get("fut_msg")
+    if msg is None:
+        await update.message.reply_text("세션이 만료되었습니다.")
+        return ConversationHandler.END
     try:
-        margin = _parse_money(text)
+        rate = _parse_margin_rate(update.message.text)
     except ValueError as e:
         await update.message.reply_text(f"입력 오류: {e}")
         return FUT_MARGIN
-    if margin <= 0:
-        await update.message.reply_text("증거금은 0보다 커야 합니다.")
-        return FUT_MARGIN
+    notional = msg.price_per_share() * msg.quantity * msg.multiplier
+    margin = round(notional * rate)
     context.user_data["fut_margin"] = margin
+    context.user_data["fut_margin_rate"] = rate
+    touch_margin_rate_card(rate)
     return await _ask_open_sector(update, context, is_callback=False)
 
 
@@ -569,7 +586,7 @@ async def _fut_margin_rate_pick(
 
     if query.data == FUT_MARGIN_CUSTOM:
         await query.edit_message_text(
-            "위탁증거금(원)을 직접 입력해주세요."
+            "증거금률(%)을 직접 입력해주세요. (예: 36.9 또는 36.9% 또는 0.369)"
         )
         return FUT_MARGIN
 
@@ -583,7 +600,7 @@ async def _fut_margin_rate_pick(
     margin = round(notional * rate)
     context.user_data["fut_margin"] = margin
     context.user_data["fut_margin_rate"] = rate
-    save_futures_margin_rate(msg.name, rate)
+    touch_margin_rate_card(rate)
     return await _ask_open_sector(query, context, is_callback=True)
 
 
@@ -602,15 +619,20 @@ def _suggest_futures_sector(msg: FuturesBrokerMessage) -> str:
 async def _ask_open_sector(
     update_or_query, context: ContextTypes.DEFAULT_TYPE, *, is_callback: bool,
 ) -> int:
-    """증거금 확정 후 섹터 입력 단계."""
+    """증거금 확정 후 섹터 입력 단계.
+
+    같은 종목의 기존 선물/현물 섹터가 있으면 묻지 않고 그대로 사용한다.
+    """
     msg: FuturesBrokerMessage = context.user_data["fut_msg"]
     suggested = _suggest_futures_sector(msg)
-    context.user_data["fut_suggested_sector"] = suggested
 
-    text = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
     if suggested:
-        text += f"\n(기존 섹터: {suggested} — 그대로 쓰려면 '.' 입력)"
+        # 같은 종목 = 같은 섹터. 묻지 않고 바로 사유 단계로.
+        context.user_data["fut_sector"] = suggested
+        return await _ask_open_thesis(update_or_query, context, is_callback=is_callback)
 
+    context.user_data["fut_suggested_sector"] = suggested
+    text = "섹터를 입력해주세요. (예: 반도체, 로봇, IT)"
     if is_callback:
         await update_or_query.edit_message_text(text)
     else:
