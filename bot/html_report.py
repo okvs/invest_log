@@ -700,7 +700,7 @@ def build_html_report(
         # 라벨 — 둘 다 있으면 "총%(현%+선%)" 분해, 아니면 합계만.
         if spot_pct > 0 and fut_pct > 0:
             label_body = (
-                f"{sector}<br>{pct:.0f}%({spot_pct:.0f}%+{fut_pct:.0f}%)"
+                f"{sector}<br>{pct:.0f}%({spot_pct:.0f}+{fut_pct:.0f})"
             )
             min_pct_for_breakdown = 8
         else:
