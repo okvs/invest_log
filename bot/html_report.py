@@ -11,8 +11,10 @@ from bot.futures_report import build_futures_section
 
 
 SIZE_TABLE = {1: 40, 2: 120, 3: 280, 4: 280, 5: 280}
-MARKER_TABLE = {1: "o", 2: "o", 3: "o", 4: "h", 5: "*"}
-SVG_RADIUS = {1: 5, 2: 9, 3: 13, 4: 13, 5: 14}
+MARKER_TABLE = {1: "tri", 2: "sq", 3: "o", 4: "h", 5: "*"}
+# T1 < T2 < (T3 ≈ T4 ≈ T5). 작은 마커일수록 가벼운 비중, T2 보다 T3-5 가 크지만
+# 이전(원/원/원/육각/별 시절)보단 살짝 축소.
+SVG_RADIUS = {1: 7, 2: 8, 3: 11, 4: 11, 5: 12}
 
 
 def _tier_for_weight(weight_pct: float) -> int:
@@ -39,6 +41,27 @@ def _star_points(cx: float, cy: float, r_out: float, r_in: float) -> str:
         y = cy + r * math.sin(angle)
         pts.append(f"{x:.2f},{y:.2f}")
     return " ".join(pts)
+
+
+def _triangle_points(cx: float, cy: float, r: float) -> str:
+    """위 꼭짓점이 위로 향하는 정삼각형 (외접원 반지름 r)."""
+    pts = []
+    for i in range(3):
+        angle = -math.pi / 2 + 2 * math.pi / 3 * i
+        x = cx + r * math.cos(angle)
+        y = cy + r * math.sin(angle)
+        pts.append(f"{x:.2f},{y:.2f}")
+    return " ".join(pts)
+
+
+def _square_points(cx: float, cy: float, r: float) -> str:
+    """축에 평행한 정사각형 (한 변의 절반 = r)."""
+    return (
+        f"{cx - r:.2f},{cy - r:.2f} "
+        f"{cx + r:.2f},{cy - r:.2f} "
+        f"{cx + r:.2f},{cy + r:.2f} "
+        f"{cx - r:.2f},{cy + r:.2f}"
+    )
 
 
 def _text_width_est(text: str, font_px: int = 13) -> float:
@@ -185,6 +208,10 @@ def _tier_marker_svg(cx: float, cy: float, tier: int, color: str) -> str:
         return f'<polygon points="{_hexagon_points(cx, cy, r)}" {common}/>'
     if marker == "*":
         return f'<polygon points="{_star_points(cx, cy, r, r * 0.45)}" {common}/>'
+    if marker == "tri":
+        return f'<polygon points="{_triangle_points(cx, cy, r)}" {common}/>'
+    if marker == "sq":
+        return f'<polygon points="{_square_points(cx, cy, r)}" {common}/>'
     return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {common}/>'
 
 
@@ -439,7 +466,7 @@ def _build_quadrants_svg(
 
     caption = (
         '<div class="qd-caption">'
-        '점 크기 = 비중 tier (10% 단위) · 원/원/원/육각형/별 (T1·T2·T3·T4·T5) · '
+        '점 크기 = 비중 tier (10% 단위) · 세모/네모/원/육각형/별 (T1·T2·T3·T4·T5) · '
         '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
         '동일 수익금 등고선 (500만 / 천만 / 3천만 KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
         "</div>"
