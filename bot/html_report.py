@@ -683,7 +683,8 @@ def build_html_report(
           <div class="sector-val">{pct:.1f}% <span class="sector-amt">{format_number(int(val))}원</span></div>
         </div>"""
 
-    # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리
+    # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리.
+    # 라벨은 두 조각을 묶은 group 의 정중앙에 위치 (현물 segment 기준 X).
     stack_segments = ""
     for sector, val in sector_sorted:
         pct = (val / sector_total * 100) if sector_total else 0
@@ -693,25 +694,42 @@ def build_html_report(
         spot_pct = (spot_val / sector_total * 100) if sector_total else 0
         fut_pct = (fut_val / sector_total * 100) if sector_total else 0
 
-        # 레이블은 면적이 큰 쪽에 표시 (보통 둘을 합쳐 한 섹터로 인식하게)
-        label_seg = "spot" if spot_pct >= fut_pct else "futures"
+        if pct < 0.001:
+            continue
+
+        # 라벨 — 둘 다 있으면 "총%(현%+선%)" 분해, 아니면 합계만.
+        if spot_pct > 0 and fut_pct > 0:
+            label_body = (
+                f"{sector}<br>{pct:.0f}%({spot_pct:.0f}%+{fut_pct:.0f}%)"
+            )
+            min_pct_for_breakdown = 8
+        else:
+            label_body = f"{sector}<br>{pct:.0f}%"
+            min_pct_for_breakdown = 3
         label_html = (
-            f'<span>{sector}<br>{pct:.0f}%</span>' if pct >= 3 else ''
+            f'<span class="seg-label">{label_body}</span>'
+            if pct >= min_pct_for_breakdown else ""
         )
 
+        # group 내부 spot/fut 비중 (group width 100% 기준)
+        group_inner = ""
         if spot_pct > 0:
-            seg_label = label_html if label_seg == "spot" else ""
-            stack_segments += (
-                f'<div class="stack-seg" style="width:{spot_pct}%;background:{color}" '
-                f'title="{sector} 현물 {spot_pct:.1f}%">{seg_label}</div>'
+            spot_in = spot_pct / pct * 100
+            group_inner += (
+                f'<div class="stack-seg" style="width:{spot_in}%;background:{color}" '
+                f'title="{sector} 현물 {spot_pct:.1f}%"></div>'
             )
         if fut_pct > 0:
-            seg_label = label_html if label_seg == "futures" else ""
-            stack_segments += (
+            fut_in = fut_pct / pct * 100
+            group_inner += (
                 f'<div class="stack-seg futures-stripe" '
-                f'style="width:{fut_pct}%;background-color:{color}" '
-                f'title="{sector} 선물 {fut_pct:.1f}%">{seg_label}</div>'
+                f'style="width:{fut_in}%;background-color:{color}" '
+                f'title="{sector} 선물 {fut_pct:.1f}%"></div>'
             )
+        stack_segments += (
+            f'<div class="stack-group" style="width:{pct}%">'
+            + group_inner + label_html + '</div>'
+        )
 
     pnl_class = "profit" if total_pnl >= 0 else "loss"
     pnl_sign = "+" if total_pnl >= 0 else ""
@@ -757,9 +775,12 @@ def build_html_report(
 
   /* 스택바 */
   .stack {{ display:flex; height:36px; border-radius:8px; overflow:hidden; margin-bottom:32px; }}
-  .stack-seg {{ display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px;
-                font-weight:600; text-align:center; line-height:1.2; min-width:0; overflow:hidden; }}
-  .stack-seg span {{ white-space:nowrap; }}
+  .stack-group {{ position:relative; display:flex; height:100%; min-width:0; }}
+  .stack-seg {{ height:100%; min-width:0; }}
+  .seg-label {{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+               color:#fff; font-size:10px; font-weight:600; text-align:center; line-height:1.2;
+               white-space:nowrap; pointer-events:none;
+               text-shadow:0 0 3px rgba(0,0,0,0.55); }}
 
   /* 섹터 상세 */
   .section-title {{ font-size:15px; font-weight:700; color:#fff; margin-bottom:16px;
