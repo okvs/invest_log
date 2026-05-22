@@ -292,9 +292,9 @@ def _build_quadrants_svg(
         f'fill="#fbbf24" fill-opacity="0.11"/>'
     )  # Q4 bottom-right · 비중 부족 · 연노랑
 
-    # 격자 (10% 단위)
+    # 격자 — X 10% 단위, Y 5% 단위 (5/15/25 도 확인 가능하게)
     ticks_x = list(range(-int(x_abs), int(x_abs) + 1, 10))
-    ticks_y = list(range(0, int(y_max) + 1, 10))
+    ticks_y = list(range(0, int(y_max) + 1, 5))
     for tx in ticks_x:
         px = sx(tx)
         parts.append(
