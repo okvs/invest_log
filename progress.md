@@ -1,6 +1,8 @@
 # Progress
 
 ## 완료
+- [x] 4사분면에 iso-profit 등고선(Variant B) 통합 (2026-05-22) — `_isoprofit_paths()` 신설. w[%]×r[%] = ±25/100/300 의 하이퍼볼릭 곡선을 Q1(초록 3단)/Q2(빨강 3단) 으로 dashed 그림. 각 곡선 상단에 ±소·중·대 라벨. 캡션도 업데이트(예: 10%×30% = 300 → 3% portfolio impact). 122 passed.
+- [x] 자동손절(-10%) 임박 푸시 + launchd 평일 15:30 KST (2026-05-22) — `scripts/stop_loss_alert.py` (보유 종목 중 손익률 -10%~-5% 구간 추출 → chat_id 778372474 푸시, 25봉 일봉 차트 동봉, matplotlib + AppleSDGothicNeo 한글 폰트, BOT_TOKEN은 .env 로드). 위태 종목 0건이면 무발송. `~/Library/LaunchAgents/com.seung.invest_log.stop_loss_alert.plist` (trackdramprice 패턴 — venv 절대경로 + WorkingDirectory + StdOut/Err 로그 + EnvVars). `launchctl bootstrap gui/$UID` 로 등록 완료. 수동 dry-run 정상(현재 위태 0건).
 - [x] 현금을 현물/선물로 분리 + 평가액 대비 증거금 카드 (2026-05-22) — `account.json` 에 `futures_cash` 필드 추가(현재 54,600,000). `build_html_report(futures_cash=...)` 가 cash를 spot/futures-free 로 나눠 섹터 상세에 `현금` (현물 free) + `현금(선물)` (free, 빗금) 두 줄로 표시. 색은 둘 다 회색, futures 쪽은 `futures-stripe` 클래스. 선물 카드를 "증거금 잠식률" → "평가액 대비 증거금"(`total_margin/total_equity`)으로 변경, 잠식률은 sub-line으로. ≥30% loss class, <10% profit class. `dashboard.py` 가 account.json 의 `futures_cash` 를 읽어 전달. 122 passed.
 - [x] 4사분면 배지 plot 바깥 배치 (2026-05-22) — 배지가 사분면 안쪽 모서리에 있어 데이터 점을 가리던 문제 해결. `_quadrant_badge()` 방향 로직 뒤집어 top(tl/tr)은 anchor 위, bottom(bl/br)은 anchor 아래로. SVG H 720→760, pad_t 40→52, pad_b 60→84로 plot 바깥에 26px 배지 + gap 확보. X 눈금 라벨은 배지 아래로 14px 더 내림. 122 passed.
 - [x] 4사분면 Y축 비대칭화 + 비중분리선 10% + 세로 물결 + 배지 한자 제거 (2026-05-22) — Y축 미러 제거(`y_min=0`, `y_max=ceil((max_w+10)/10)*10`), 사분면 분리선이 Y=10%(비중부족 기준)로 이동. `_wave_glyph` 를 cubic Bezier 4반파 좌우대칭 사인파로 재작성(올챙이꼴 해결). `_wave_glyph_v` 신설 — 50% 초과 종목은 plot 좌/우 끝에 마커 + 세로 물결 + `(+NN%)` 라벨. 배지에서 `高비중`/`低비중` 한자 제거 → `비중↑`/`비중↓` 화살표. 122 passed.

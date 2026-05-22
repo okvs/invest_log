@@ -94,6 +94,64 @@ def _quadrant_badge(
     )
 
 
+def _isoprofit_paths(
+    sx_fn, sy_fn, y_max: float, x_abs: float = 50.0
+) -> list[str]:
+    """수익금 등고선 (w[%] × r[%] = ±k).
+
+    k = w × r 단위는 %·% — 그대로 100 으로 나누면 포트폴리오 임팩트 %.
+    예) k=300 → 3% impact (10% 비중 × 30% 수익, 20% × 15%, …).
+    Q1(수익) 쪽 초록 3단, Q2(손실) 쪽 빨강 3단으로 dashed 곡선 그림.
+    """
+    levels = [
+        # (k, color, opacity, label)
+        (25,   "#86efac", 0.45, "+소"),
+        (100,  "#22c55e", 0.65, "+중"),
+        (300,  "#15803d", 0.95, "+대"),
+        (-25,  "#fca5a5", 0.45, "-소"),
+        (-100, "#ef4444", 0.65, "-중"),
+        (-300, "#991b1b", 0.95, "-대"),
+    ]
+    paths: list[str] = []
+    for k, color, opacity, label in levels:
+        # r 샘플링 — 부호 따라 r>0 또는 r<0
+        step = 0.5
+        rs = []
+        if k > 0:
+            r = step
+            while r <= x_abs:
+                rs.append(r); r += step
+        else:
+            r = -step
+            while r >= -x_abs:
+                rs.append(r); r -= step
+        pts = []
+        for r in rs:
+            w = k / r  # w × r = k
+            if 0 < w <= y_max:
+                pts.append((sx_fn(r), sy_fn(w)))
+        if not pts:
+            continue
+        d = "M " + " L ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in pts)
+        paths.append(
+            f'<path d="{d}" stroke="{color}" stroke-width="1.4" fill="none" '
+            f'stroke-dasharray="4,3" opacity="{opacity}"/>'
+        )
+        # 라벨은 곡선 중간 지점에 작게 — 데이터 점과 부딪힐 수 있어 일단 생략
+        # 곡선 끝점(가장 윗쪽) 옆에 작은 텍스트
+        top_pt = max(pts, key=lambda p: -p[1])  # y 가 가장 작은 (위쪽) 점
+        tx, ty = top_pt
+        # 라벨 좌측·우측은 부호로 결정
+        anchor = "start" if k > 0 else "end"
+        dx_off = 4 if k > 0 else -4
+        paths.append(
+            f'<text x="{tx + dx_off:.2f}" y="{ty - 4:.2f}" font-size="9" '
+            f'fill="{color}" text-anchor="{anchor}" font-weight="600" '
+            f'opacity="{opacity}">{label}</text>'
+        )
+    return paths
+
+
 def _wave_glyph(cx: float, cy: float, color: str = "#fbbf24") -> str:
     """수평 사인 물결(∿) 글리프 — cubic Bezier 4 반파, 폭 18px, 진폭 ~4.5px, 좌우대칭."""
     return (
@@ -218,6 +276,9 @@ def _build_quadrants_svg(
             f'<line x1="{x_left}" y1="{py:.2f}" x2="{x_right}" y2="{py:.2f}" '
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
+
+    # 수익금 iso-profit 등고선 (w × r = ±k) — 데이터 점 아래, 분리선 위에 깔림
+    parts.extend(_isoprofit_paths(sx, sy, y_max, x_abs))
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
@@ -353,8 +414,12 @@ def _build_quadrants_svg(
     )
 
     caption = (
-        '<div class="qd-caption">점 크기 = 비중 tier (10% 단위) · '
-        "원/원/원/육각형/별 (T1·T2·T3·T4·T5)</div>"
+        '<div class="qd-caption">'
+        '점 크기 = 비중 tier (10% 단위) · 원/원/원/육각형/별 (T1·T2·T3·T4·T5) · '
+        '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
+        '동일 수익금 등고선 (w × r = ±k; 소·중·대 = 25 / 100 / 300; '
+        '예: 10% 비중 × 30% 수익 = 300)'
+        "</div>"
     )
 
     return (
