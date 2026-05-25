@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 자동손절 알림 차트를 봉차트로 변경 (2026-05-25) — `scripts/stop_loss_alert.py` `_build_chart()` 의 line+음영 차트를 한국식 캔들차트로 교체. mplfinance 없이 matplotlib `Rectangle`(body) + `vlines`(wick) 로 직접 그림. 상승=#ef4444(빨강), 하락=#3b82f6(파랑). x축을 정수 인덱스로 두고 tick만 날짜 라벨(MM-DD) 6개로 균등 배치 — 주말·휴일 빈 갭 제거. 매수선/손절선/현재가 마커는 그대로. 삼성전자 25봉 스모크 테스트 OK.
 - [x] 선물 진입 UX 정리 + 손절알림 평가금 추가 (2026-05-22) — (1) 같은 종목 섹터 자동 스킵: `_ask_open_sector`(broker.py) + `_receive_body`(futures_buy.py) 둘 다 suggested 있으면 묻지 않고 바로 사유 단계. (2) 직접입력 = 증거금률(%): `_parse_margin_rate("36.9"/"36.9%"/"0.369")` 모두 0.369로 정규화, notional × rate = margin 자동계산. 버튼 라벨도 "증거금률 직접 입력 (%)". (3) 글로벌 LRU 카드 풀: `futures_margin_rate_pool.json` + `load_margin_rate_pool`/`touch_margin_rate_card`. 초기 시드는 [18/30/32.85/36/36.9/40/50] (7장). 카드 클릭·직접입력 모두 touch → 안 쓴 지 오래된 카드 evict. 36.9% 새로 추가됨. (4) `stop_loss_alert.py` 메시지에 평가금/주식수/실현예상 KRW 추가. 테스트 5개 새 의미에 맞춰 업데이트. 122 passed.
 - [x] 4사분면 iso-profit 라벨을 KRW 금액(500만/천만/3천만) + Y축 35% 고정 + 초과시 가로 물결 (2026-05-22) — `_isoprofit_paths(total_eval=...)` 로 변경, k = 10000·KRW/total_eval 동적 산출. 라벨도 ±500만/±천만/±3천만. y_max=35.0 고정. weight>35% 인 종목은 plot 상단에 클립 + `_wave_glyph` 가로 물결 + `(비중 NN%)` 실측 라벨. 122 passed.
 - [x] 4사분면에 iso-profit 등고선(Variant B) 통합 (2026-05-22) — `_isoprofit_paths()` 신설. w[%]×r[%] = ±25/100/300 의 하이퍼볼릭 곡선을 Q1(초록 3단)/Q2(빨강 3단) 으로 dashed 그림. 각 곡선 상단에 ±소·중·대 라벨. 캡션도 업데이트(예: 10%×30% = 300 → 3% portfolio impact). 122 passed.

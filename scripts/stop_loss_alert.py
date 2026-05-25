@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""평일 15:30 KST 자동손절(-10%) 임박 푸시.
+"""평일 15:30 KST 자동손절(-10%) 임박 + 추세 이평선 깨짐 푸시.
 
-보유 종목 중 현재 손익률이 -10% ~ -5% 구간 (자동손절 5% 이내) 인 종목을
-chat_id 778372474 로 푸시한다. 메시지에는 종목명·현재 손익률·손절선까지
-남은 % 가 들어가고, 가능하면 25봉 일봉 차트 1장이 동봉된다.
-위태 종목이 0건이면 아무것도 보내지 않는다.
+두 가지 알람을 한 번에 발송:
+1. 자동손절(-10%) 임박: 보유 종목 중 현재 손익률이 -10% ~ -5% 구간
+2. 추세 이평선 깨짐: `data/timeframe_labels.json` 에 라벨된 종목 중 종가가
+   해당 시간프레임 트리거 이평선(short=5일선 / long=50일선) 아래로 마감
+
+chat_id 778372474 로 푸시. 25봉 일봉 차트 1장 동봉.
+대상 0건인 카테고리는 무발송.
 
 launchd LaunchAgent (`com.seung.invest_log.stop_loss_alert.plist`) 에서 호출.
 """
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import sys
@@ -23,10 +27,10 @@ sys.path.insert(0, str(ROOT))
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import yfinance as yf
 from matplotlib import font_manager
+from matplotlib.patches import Rectangle
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -39,6 +43,7 @@ CHAT_ID = 778372474
 STOP_LOSS_PCT = -10.0
 WARN_THRESHOLD_PCT = -5.0  # 손익률이 이 값 이하 + STOP_LOSS_PCT 이상 → 위태
 BARS = 25
+TIMEFRAME_LABELS_PATH = ROOT / "data" / "timeframe_labels.json"
 
 _KO_FONT_CANDIDATES = [
     "/System/Library/Fonts/AppleSDGothicNeo.ttc",
@@ -117,32 +122,67 @@ def _find_at_risk_positions() -> list[dict]:
 def _build_chart(
     ticker: str, name: str, avg: float, cur: float, bars: int = BARS
 ) -> io.BytesIO | None:
-    """25봉 일봉 line + high/low 음영 차트. 매수단가·손절(-10%)선 표시."""
+    """25봉 일봉 캔들차트. 매수단가·손절(-10%)선 표시.
+
+    한국 관례: 상승=빨강(#ef4444), 하락=파랑(#3b82f6).
+    """
     try:
         hist = yf.Ticker(ticker).history(period=f"{bars * 2 + 10}d", interval="1d")
         if hist.empty:
             return None
         hist = hist.tail(bars)
         fig, ax = plt.subplots(figsize=(7.2, 3.6), dpi=120)
-        dates = hist.index
-        close = hist["Close"]
-        high = hist["High"]
-        low = hist["Low"]
-        ax.fill_between(dates, low, high, color="#888", alpha=0.18, linewidth=0)
-        ax.plot(dates, close, color="#e0e0e0", linewidth=1.6)
-        ax.scatter(dates[-1], close.iloc[-1], color="#fbbf24", s=44, zorder=5)
+
+        opens = hist["Open"].to_numpy()
+        highs = hist["High"].to_numpy()
+        lows = hist["Low"].to_numpy()
+        closes = hist["Close"].to_numpy()
+        n = len(hist)
+        body_w = 0.6
+
+        for i in range(n):
+            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            up = c >= o
+            color = "#ef4444" if up else "#3b82f6"
+            ax.vlines(i, l, h, color=color, linewidth=1.0, zorder=2)
+            body_lo = min(o, c)
+            body_hi = max(o, c)
+            body_h = body_hi - body_lo
+            if body_h <= 0:
+                ax.hlines(o, i - body_w / 2, i + body_w / 2,
+                          color=color, linewidth=1.2, zorder=3)
+            else:
+                ax.add_patch(Rectangle(
+                    (i - body_w / 2, body_lo), body_w, body_h,
+                    facecolor=color, edgecolor=color, linewidth=0.6, zorder=3,
+                ))
+
+        last_x = n - 1
+        ax.scatter(last_x, closes[-1], color="#fbbf24", s=44, zorder=5)
 
         ax.axhline(y=avg, color="#22c55e", linewidth=1.2, linestyle="--", alpha=0.85)
-        ax.text(dates[0], avg, f" 매수 {avg:,.0f}", color="#22c55e",
+        ax.text(0, avg, f" 매수 {avg:,.0f}", color="#22c55e",
                 fontsize=8, va="bottom")
 
         sl = avg * (1 + STOP_LOSS_PCT / 100)
         ax.axhline(y=sl, color="#ef4444", linewidth=1.2, linestyle="--", alpha=0.85)
-        ax.text(dates[0], sl, f" 손절 {sl:,.0f} (-10%)", color="#ef4444",
+        ax.text(0, sl, f" 손절 {sl:,.0f} (-10%)", color="#ef4444",
                 fontsize=8, va="top")
 
-        ax.text(dates[-1], cur, f"  {cur:,.0f}", color="#fbbf24",
+        ax.text(last_x, cur, f"  {cur:,.0f}", color="#fbbf24",
                 fontsize=8, va="center")
+
+        ax.set_xlim(-0.8, n - 0.2)
+        y_min = min(float(lows.min()), sl, avg)
+        y_max = max(float(highs.max()), avg, cur)
+        y_pad = (y_max - y_min) * 0.05 or 1.0
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+        tick_count = min(6, n)
+        tick_idx = [int(round(x)) for x in
+                    [i * (n - 1) / (tick_count - 1) for i in range(tick_count)]] if n > 1 else [0]
+        ax.set_xticks(tick_idx)
+        ax.set_xticklabels([hist.index[i].strftime("%m-%d") for i in tick_idx])
 
         ax.set_facecolor("#0f0f14")
         fig.patch.set_facecolor("#0f0f14")
@@ -152,8 +192,6 @@ def _build_chart(
             ax.spines[spine].set_color("#444")
         ax.tick_params(colors="#888", labelsize=8)
         ax.yaxis.label.set_color("#888")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=8))
         ax.set_title(f"{name}  ({ticker})  ·  {bars}봉 일봉",
                      color="#fff", fontsize=11, loc="left", pad=10)
         fig.tight_layout()
@@ -166,6 +204,85 @@ def _build_chart(
     except Exception as e:
         logger.warning("%s 차트 생성 실패: %s", ticker, e)
         return None
+
+
+def _load_timeframe_labels() -> dict[str, dict]:
+    """data/timeframe_labels.json 에서 종목별 시간프레임 라벨 로드.
+
+    스키마: {"labels": {"<name>": {"timeframe": "short|long", "ma": int, "note": str}}}
+    파일/키 누락 시 빈 dict.
+    """
+    if not TIMEFRAME_LABELS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(TIMEFRAME_LABELS_PATH.read_text(encoding="utf-8"))
+        return data.get("labels", {}) or {}
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("timeframe_labels.json 파싱 실패: %s", e)
+        return {}
+
+
+def _find_ma_breakdown_positions(bars: int = 80) -> list[dict]:
+    """라벨된 보유 종목 중 *오늘 종가가 추세 트리거 이평선 아래로 마감* 한 종목.
+
+    timeframe_labels.json 에 명시되지 않은 종목은 스킵 — 사용자가 분류한 종목만
+    알람 대상 ([[user-sector-timeframe-classification]] 분류 적용 원칙).
+    """
+    labels = _load_timeframe_labels()
+    if not labels:
+        return []
+
+    holdings = [h for h in load_holdings() if h.get("quantity", 0) > 0]
+    name_to_ticker, _ = _resolve_tickers(holdings)
+
+    out: list[dict] = []
+    for h in holdings:
+        name = h["name"]
+        lab = labels.get(name)
+        if not lab:
+            continue
+        ticker = name_to_ticker.get(name, "")
+        if not ticker:
+            continue
+        ma_n = int(lab.get("ma") or 0)
+        if ma_n <= 0:
+            continue
+        try:
+            hist = yf.Ticker(ticker).history(period=f"{max(bars, ma_n * 3)}d", interval="1d")
+            if hist.empty or len(hist) < ma_n + 1:
+                continue
+            close = hist["Close"]
+            ma_series = close.rolling(window=ma_n).mean()
+            last_close = float(close.iloc[-1])
+            last_ma = float(ma_series.iloc[-1])
+            if last_close < last_ma:
+                avg = float(h["avg_price"])
+                qty = int(h.get("quantity", 0))
+                eval_amt = last_close * qty
+                invested = float(h.get("total_invested", avg * qty))
+                pnl_krw = eval_amt - invested
+                pnl_pct = (last_close - avg) / avg * 100 if avg > 0 else 0.0
+                deviation = (last_close - last_ma) / last_ma * 100
+                out.append({
+                    "name": name,
+                    "ticker": ticker,
+                    "cur": last_close,
+                    "ma": last_ma,
+                    "ma_n": ma_n,
+                    "timeframe": lab.get("timeframe", "?"),
+                    "note": lab.get("note", ""),
+                    "avg": avg,
+                    "qty": qty,
+                    "eval": eval_amt,
+                    "pnl_krw": pnl_krw,
+                    "pnl_pct": pnl_pct,
+                    "deviation": deviation,  # 음수, 작을수록 깊이 깨짐
+                })
+        except Exception as e:
+            logger.warning("%s MA 체크 실패: %s", name, e)
+            continue
+    out.sort(key=lambda r: r["deviation"])  # 가장 깊이 깨진 순
+    return out
 
 
 async def _send_alerts(bot: Bot, alerts: list[dict]) -> None:
@@ -194,6 +311,33 @@ async def _send_alerts(bot: Bot, alerts: list[dict]) -> None:
             )
 
 
+async def _send_ma_alerts(bot: Bot, alerts: list[dict]) -> None:
+    n = len(alerts)
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=f"📉 추세 이평선 깨짐 종목 {n}건  ·  15:30 점검",
+    )
+    for a in alerts:
+        tf_label = {"short": "단기/테마", "long": "장기/구조"}.get(a["timeframe"], a["timeframe"])
+        text = (
+            f"<b>{a['name']}</b>  ·  {tf_label} ({a['ma_n']}일선)\n"
+            f"종가 {a['cur']:,.0f} &lt; MA{a['ma_n']} {a['ma']:,.0f}  "
+            f"(<b>{a['deviation']:+.2f}%</b> 이탈)\n"
+            f"현재 손익률 : <b>{a['pnl_pct']:+.2f}%</b> ({a['pnl_krw']:+,.0f}원)\n"
+            f"평가금 {a['eval']:,.0f}원 ({a['qty']}주) · 평단 {a['avg']:,.0f}원"
+        )
+        chart = _build_chart(a["ticker"], a["name"], a["avg"], a["cur"])
+        if chart is not None:
+            await bot.send_photo(
+                chat_id=CHAT_ID, photo=chart, caption=text,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await bot.send_message(
+                chat_id=CHAT_ID, text=text, parse_mode=ParseMode.HTML,
+            )
+
+
 async def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -206,16 +350,22 @@ async def main() -> int:
         logger.error("BOT_TOKEN 미발견 — .env 또는 환경변수 확인")
         return 1
 
-    alerts = _find_at_risk_positions()
-    if not alerts:
-        logger.info("위태 종목 없음 — 무발송")
+    stop_loss_alerts = _find_at_risk_positions()
+    ma_alerts = _find_ma_breakdown_positions()
+
+    if not stop_loss_alerts and not ma_alerts:
+        logger.info("위태/이평선깨짐 모두 0건 — 무발송")
         return 0
 
-    logger.info("위태 종목 %d건 발견, 발송 시작", len(alerts))
     bot = Bot(token=token)
     async with bot:
-        await _send_alerts(bot, alerts)
-    logger.info("발송 완료 (%d건)", len(alerts))
+        if stop_loss_alerts:
+            logger.info("자동손절 임박 %d건 발송", len(stop_loss_alerts))
+            await _send_alerts(bot, stop_loss_alerts)
+        if ma_alerts:
+            logger.info("이평선 깨짐 %d건 발송", len(ma_alerts))
+            await _send_ma_alerts(bot, ma_alerts)
+    logger.info("발송 완료 (자동손절 %d / MA깨짐 %d)", len(stop_loss_alerts), len(ma_alerts))
     return 0
 
 
