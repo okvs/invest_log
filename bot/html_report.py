@@ -209,25 +209,37 @@ def _wave_glyph_v(cx: float, cy: float, color: str = "#fbbf24") -> str:
     )
 
 
-def _tier_marker_svg(cx: float, cy: float, tier: int, color: str) -> str:
+def _tier_marker_svg(
+    cx: float, cy: float, tier: int, color: str, *, is_futures: bool = False,
+) -> str:
+    """Tier 마커 SVG. 선물이면 같은 도형을 한 번 더 빗금 패턴으로 오버레이."""
     marker = MARKER_TABLE[tier]
     r = SVG_RADIUS[tier]
     common = f'fill="{color}" stroke="#0f0f14" stroke-width="1" fill-opacity="0.88"'
     if marker == "o":
-        return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {common}/>'
-    if marker == "h":
-        return f'<polygon points="{_hexagon_points(cx, cy, r)}" {common}/>'
-    if marker == "*":
-        return f'<polygon points="{_star_points(cx, cy, r, r * 0.45)}" {common}/>'
-    if marker == "tri":
-        return f'<polygon points="{_triangle_points(cx, cy, r)}" {common}/>'
-    if marker == "sq":
-        return f'<polygon points="{_square_points(cx, cy, r)}" {common}/>'
-    return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {common}/>'
+        shape = f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {{fill}}/>'
+    elif marker == "h":
+        shape = f'<polygon points="{_hexagon_points(cx, cy, r)}" {{fill}}/>'
+    elif marker == "*":
+        shape = f'<polygon points="{_star_points(cx, cy, r, r * 0.45)}" {{fill}}/>'
+    elif marker == "tri":
+        shape = f'<polygon points="{_triangle_points(cx, cy, r)}" {{fill}}/>'
+    elif marker == "sq":
+        shape = f'<polygon points="{_square_points(cx, cy, r)}" {{fill}}/>'
+    else:
+        shape = f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r}" {{fill}}/>'
+
+    base = shape.format(fill=common)
+    if is_futures:
+        overlay = shape.format(fill='fill="url(#fut-hatch)" stroke="none"')
+        return base + overlay
+    return base
 
 
 def _build_quadrants_svg(
-    rows: list[dict], sector_colors: dict[str, str], total_eval: float
+    rows: list[dict], sector_colors: dict[str, str], total_eval: float,
+    futures_positions: list[dict] | None = None,
+    futures_prices: dict | None = None,
 ) -> str:
     """수익률(X) × 비중(Y) 4사분면 산점도를 inline SVG 로 그린다.
 
@@ -235,13 +247,47 @@ def _build_quadrants_svg(
     0~max 비대칭 (바닥이 0%). 50% 초과 종목은 plot 좌우 끝에 마커를 찍고
     세로 물결로 클립 신호 + (±NN%) 실측 라벨. 점 크기/모양은 SIZE_TABLE/
     MARKER_TABLE (10% tier). 범례는 T1~T5 전부 표시.
+
+    선물 포지션은 같은 마커 위에 빗금 패턴 오버레이로 표시.
+    비중 분모는 (현물 평가금 + 선물 notional) 합산.
     """
     if not rows or total_eval <= 0:
         return ""
 
+    # 선물 노출(notional) 합산 → 비중 분모에 포함
+    fut_rows: list[dict] = []
+    futures_prices = futures_prices or {}
+    fut_total = 0.0
+    for fp in futures_positions or []:
+        if fp.get("contracts", 0) <= 0:
+            continue
+        sym = fp.get("symbol", "")
+        cm = fp.get("contract_month", "")
+        q = futures_prices.get(f"{sym}|{cm}") or futures_prices.get(sym) or {}
+        cur = q.get("price") if isinstance(q, dict) else q
+        avg = float(fp.get("avg_entry_price", 0) or 0)
+        contracts = int(fp.get("contracts", 0))
+        mult = int(fp.get("multiplier", 10))
+        if cur is None or avg <= 0:
+            continue
+        sign = 1 if fp.get("direction", "long") == "long" else -1
+        pnl_pct = (float(cur) - avg) / avg * 100 * sign
+        notional = float(cur) * contracts * mult
+        fut_total += notional
+        fut_rows.append({
+            "name": fp.get("name", ""),
+            "sector": fp.get("sector", "") or "기타",
+            "eval": notional,
+            "pnl_pct": pnl_pct,
+            "direction": fp.get("direction", "long"),
+            "contract_month": cm,
+        })
+
+    denom = total_eval + fut_total
+
     points = []
     for r in rows:
-        weight = r["eval"] / total_eval * 100
+        weight = r["eval"] / denom * 100
         ret = r["pnl_pct"]
         tier = _tier_for_weight(weight)
         points.append({
@@ -250,6 +296,21 @@ def _build_quadrants_svg(
             "return": ret,
             "tier": tier,
             "color": sector_colors.get(r["sector"], "#9ca3af"),
+            "is_futures": False,
+        })
+    for r in fut_rows:
+        weight = r["eval"] / denom * 100
+        ret = r["pnl_pct"]
+        tier = _tier_for_weight(weight)
+        dir_mark = "↑" if r["direction"] == "long" else "↓"
+        cm_short = r["contract_month"][2:4] + "/" + r["contract_month"][4:6] if len(r["contract_month"]) == 6 else r["contract_month"]
+        points.append({
+            "name": f"{r['name']}F{dir_mark}{cm_short}",
+            "weight": weight,
+            "return": ret,
+            "tier": tier,
+            "color": sector_colors.get(r["sector"], "#9ca3af"),
+            "is_futures": True,
         })
 
     # SVG 영역 — 정사각형 plot. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
@@ -283,6 +344,17 @@ def _build_quadrants_svg(
     parts.append(
         f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
         f'style="background:#0f0f14;width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
+    )
+
+    # 선물 마커용 빗금 패턴 (대각선 white stripes, 반투명)
+    parts.append(
+        '<defs>'
+        '<pattern id="fut-hatch" patternUnits="userSpaceOnUse" '
+        'width="6" height="6" patternTransform="rotate(45)">'
+        '<rect width="6" height="6" fill="none"/>'
+        '<line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,255,255,0.55)" stroke-width="2"/>'
+        '</pattern>'
+        '</defs>'
     )
 
     # 사분면 배경 — 단색 (SVG 컨테이너 background:#0f0f14 그대로),
@@ -394,7 +466,9 @@ def _build_quadrants_svg(
             cy = y_top + r + 2
         else:
             cy = sy(p["weight"])
-        parts.append(_tier_marker_svg(cx, cy, p["tier"], p["color"]))
+        parts.append(_tier_marker_svg(
+            cx, cy, p["tier"], p["color"], is_futures=p.get("is_futures", False),
+        ))
 
         # 클립 표시 물결 — X 잘림은 세로 물결, Y 잘림은 가로 물결
         if clipped_x:
@@ -455,6 +529,25 @@ def _build_quadrants_svg(
         )
         legend_items.append(
             f'<div class="qd-legend-item">{chip}<span>{label}</span></div>'
+        )
+    # 선물 빗금 범례
+    if fut_rows:
+        size = 36
+        fut_chip = (
+            f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+            f'style="vertical-align:middle">'
+            '<defs><pattern id="fut-hatch-legend" patternUnits="userSpaceOnUse" '
+            'width="6" height="6" patternTransform="rotate(45)">'
+            '<rect width="6" height="6" fill="none"/>'
+            '<line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,255,255,0.55)" stroke-width="2"/>'
+            '</pattern></defs>'
+            f'<circle cx="{size/2}" cy="{size/2}" r="11" fill="#888" '
+            'fill-opacity="0.88" stroke="#0f0f14" stroke-width="1"/>'
+            f'<circle cx="{size/2}" cy="{size/2}" r="11" fill="url(#fut-hatch-legend)" stroke="none"/>'
+            '</svg>'
+        )
+        legend_items.append(
+            f'<div class="qd-legend-item">{fut_chip}<span>선물 (빗금)</span></div>'
         )
     legend_html = (
         '<div class="qd-legend">' + "".join(legend_items) + "</div>"
@@ -875,7 +968,7 @@ def build_html_report(
   <div class="stack">{stack_segments}</div>
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
-  {_build_quadrants_svg(rows, sector_colors, total_eval)}
+  {_build_quadrants_svg(rows, sector_colors, total_eval, futures_positions, futures_prices)}
 
   <div class="section-title">섹터별 비중</div>
   {sector_bars_html}
