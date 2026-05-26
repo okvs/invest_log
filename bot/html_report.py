@@ -349,8 +349,9 @@ def _build_quadrants_svg(
         })
 
     # SVG 영역 — 정사각형 plot. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
-    W, H = 720, 760
-    pad_l, pad_r, pad_t, pad_b = 70, 36, 52, 84
+    # 우측 라벨(금액/비중 토글 시) 잘림 방지를 위해 좌우 여백을 넉넉히.
+    W, H = 820, 760
+    pad_l, pad_r, pad_t, pad_b = 90, 116, 52, 84
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
