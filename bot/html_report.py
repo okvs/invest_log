@@ -129,11 +129,11 @@ def _isoprofit_paths(
     if total_eval <= 0:
         return []
 
-    # 색은 1천만 톤(#22c55e/#ef4444)으로 통일, 강도는 opacity 로 구분
+    # 색·강도 모두 1천만 톤(#22c55e/#ef4444 · opacity 0.70)으로 통일
     krw_targets = [
-        (5_000_000,   "500만",   "#22c55e", "#ef4444", 0.45),
+        (5_000_000,   "500만",   "#22c55e", "#ef4444", 0.70),
         (10_000_000,  "1천만",   "#22c55e", "#ef4444", 0.70),
-        (30_000_000,  "3천만",   "#22c55e", "#ef4444", 0.95),
+        (30_000_000,  "3천만",   "#22c55e", "#ef4444", 0.70),
     ]
     levels: list[tuple[float, str, float, str]] = []
     for krw, label, c_pos, c_neg, opacity in krw_targets:
