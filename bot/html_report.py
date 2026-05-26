@@ -580,8 +580,9 @@ def build_html_report(
     for r in rows:
         sector_data[r["sector"]] += r["eval"]
 
-    # 선물 포지션을 섹터에 합산
+    # 선물 포지션을 섹터에 합산 + 미실현 손익 누적
     total_margin = 0.0
+    total_futures_unrealized = 0.0
     for fp in futures_positions or []:
         if fp.get("contracts", 0) <= 0:
             continue
@@ -591,9 +592,15 @@ def build_html_report(
         key = f"{sym}|{cm}"
         q = (futures_prices or {}).get(key) or (futures_prices or {}).get(sym) or {}
         price = q.get("price") if isinstance(q, dict) else q
+        avg = float(fp.get("avg_entry_price", 0))
+        contracts = int(fp.get("contracts", 0))
+        mult = int(fp.get("multiplier", 10))
         if price is None:
-            price = float(fp.get("avg_entry_price", 0))
-        notional = float(price) * int(fp.get("contracts", 0)) * int(fp.get("multiplier", 10))
+            price = avg
+        else:
+            sign = 1 if fp.get("direction", "long") == "long" else -1
+            total_futures_unrealized += (float(price) - avg) * contracts * mult * sign
+        notional = float(price) * contracts * mult
         sector_data[sector] += notional
         sector_futures[sector] += notional
         total_margin += float(fp.get("initial_margin", 0))
@@ -750,6 +757,13 @@ def build_html_report(
     return_class = "profit" if total_return >= 0 else "loss"
     return_sign = "+" if total_return >= 0 else ""
 
+    # 총 자산(NAV) = 현물 평가금 + 잔여 현금 + 선물 미실현손익
+    total_nav = total_eval + (cash_remaining if show_cash else 0) + total_futures_unrealized
+    nav_return = total_nav - initial_capital if initial_capital else 0
+    nav_return_pct = (nav_return / initial_capital * 100) if initial_capital else 0
+    nav_class = "profit" if nav_return >= 0 else "loss"
+    nav_sign = "+" if nav_return >= 0 else ""
+
     # 배지 HTML (Claude 리포트 구분용)
     badge_html = ""
     if show_cash:
@@ -850,7 +864,7 @@ def build_html_report(
   </div>
 
   <div class="cards">
-    {"<div class='card'><div class='label'>초기자본</div><div class='value'>" + format_number(int(initial_capital)) + "원</div></div>" if show_cash and initial_capital else ""}
+    {("<div class='card'><div class='label'>총 자산</div><div class='value'>" + format_number(int(total_nav)) + "원</div><div class='sub " + nav_class + "'>" + nav_sign + f"{nav_return_pct:.1f}% vs 초기자본</div></div>") if show_cash and initial_capital else ""}
     {"<div class='card'><div class='label'>잔여 현금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div></div>" if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
     <div class="card">
       <div class="label">총 평가금</div>

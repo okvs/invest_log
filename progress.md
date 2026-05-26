@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 잔고 헤더 "초기자본" 카드를 "총 자산"(NAV) 카드로 교체 (2026-05-26) — `bot/html_report.py` 헤더 첫 카드를 `total_eval(현물) + cash_remaining + total_futures_unrealized` 합산값(총 자산)으로 변경. sub-line에 `+X.X% vs 초기자본` 표시. 선물 미실현은 `(현재가 - 평균진입가) × 계약수 × 승수 × (롱=+1/숏=-1)` 으로 누적. 스모크 렌더 확인 — 326,658,757원 / +110.7% 카드 정상. 130 passed.
 - [x] 선물 추가 진입에 사유 이어쓰기 추가 (2026-05-26) — 같은 종목·방향·결제월 추가 진입 시 기존 진입사유가 있으면 "그대로 유지 / 사유 이어쓰기 / 사유 새로쓰기" 키보드를 띄움. 수동 `선물진입`(`futures_buy.py`) 과 KB 자동 파싱(`broker.py`) 양쪽 다 적용. 이어쓰기 선택 시 기존 사유\n새 사유 결합. `futures_existing_thesis_keyboard()` 신설, `EXISTING_THESIS`/`APPEND_INPUT` (수동) + `FUT_THESIS_CONFIRM`/`FUT_THESIS_APPEND` (broker) 상태 추가. 130 passed.
 - [x] 자동손절 알림 차트를 봉차트로 변경 (2026-05-25) — `scripts/stop_loss_alert.py` `_build_chart()` 의 line+음영 차트를 한국식 캔들차트로 교체. mplfinance 없이 matplotlib `Rectangle`(body) + `vlines`(wick) 로 직접 그림. 상승=#ef4444(빨강), 하락=#3b82f6(파랑). x축을 정수 인덱스로 두고 tick만 날짜 라벨(MM-DD) 6개로 균등 배치 — 주말·휴일 빈 갭 제거. 매수선/손절선/현재가 마커는 그대로. 삼성전자 25봉 스모크 테스트 OK.
 - [x] 선물 진입 UX 정리 + 손절알림 평가금 추가 (2026-05-22) — (1) 같은 종목 섹터 자동 스킵: `_ask_open_sector`(broker.py) + `_receive_body`(futures_buy.py) 둘 다 suggested 있으면 묻지 않고 바로 사유 단계. (2) 직접입력 = 증거금률(%): `_parse_margin_rate("36.9"/"36.9%"/"0.369")` 모두 0.369로 정규화, notional × rate = margin 자동계산. 버튼 라벨도 "증거금률 직접 입력 (%)". (3) 글로벌 LRU 카드 풀: `futures_margin_rate_pool.json` + `load_margin_rate_pool`/`touch_margin_rate_card`. 초기 시드는 [18/30/32.85/36/36.9/40/50] (7장). 카드 클릭·직접입력 모두 touch → 안 쓴 지 오래된 카드 evict. 36.9% 새로 추가됨. (4) `stop_loss_alert.py` 메시지에 평가금/주식수/실현예상 KRW 추가. 테스트 5개 새 의미에 맞춰 업데이트. 122 passed.
