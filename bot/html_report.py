@@ -125,15 +125,28 @@ def _isoprofit_paths(
     포지션 KRW profit ≈ total_eval × w × r / 10000 이므로,
     동일 KRW 임팩트 곡선은 w[%] × r[%] = 10000 · KRW / total_eval.
     예) total_eval=1억5천 + 500만 임팩트 → k = 333.
+
+    KRW 레벨은 y_max에 맞춰 동적으로 선택 — 최상위 곡선이 plot 상단 가장자리
+    r ≈ x_abs * 0.5 (=25%) 근처를 통과하도록 round-number 후보에서 고른다.
     """
     if total_eval <= 0:
         return []
 
+    nice = [
+        (1_000_000, "100만"), (2_000_000, "200만"), (3_000_000, "300만"),
+        (5_000_000, "500만"), (10_000_000, "1천만"), (20_000_000, "2천만"),
+        (30_000_000, "3천만"), (50_000_000, "5천만"),
+        (100_000_000, "1억"), (200_000_000, "2억"), (300_000_000, "3억"),
+    ]
+    krw_top_target = 0.5 * x_abs * y_max * total_eval / 10000.0
+    top_i = min(
+        range(len(nice)),
+        key=lambda i: abs(math.log(nice[i][0]) - math.log(max(krw_top_target, 1.0))),
+    )
+    idxs = sorted({max(0, top_i - 3), max(0, top_i - 1), top_i})
     # 색·강도 모두 1천만 톤(#22c55e/#ef4444 · opacity 0.70)으로 통일
     krw_targets = [
-        (5_000_000,   "500만",   "#22c55e", "#ef4444", 0.70),
-        (10_000_000,  "1천만",   "#22c55e", "#ef4444", 0.70),
-        (30_000_000,  "3천만",   "#22c55e", "#ef4444", 0.70),
+        (nice[i][0], nice[i][1], "#22c55e", "#ef4444", 0.70) for i in idxs
     ]
     levels: list[tuple[float, str, float, str]] = []
     for krw, label, c_pos, c_neg, opacity in krw_targets:
