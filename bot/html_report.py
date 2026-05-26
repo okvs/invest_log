@@ -284,23 +284,8 @@ def _build_quadrants_svg(
         f'style="background:#0f0f14;width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
     )
 
-    # 사분면 배경 — invset_mind 색감
-    parts.append(
-        f'<rect x="{ox}" y="{y_top}" width="{x_right - ox}" height="{oty - y_top}" '
-        f'fill="#ef4444" fill-opacity="0.11"/>'
-    )  # Q1 top-right · 잘하는 것 · 연빨강
-    parts.append(
-        f'<rect x="{x_left}" y="{y_top}" width="{ox - x_left}" height="{oty - y_top}" '
-        f'fill="#6366f1" fill-opacity="0.13"/>'
-    )  # Q2 top-left · 큰 위험 · 연파랑/라벤더
-    parts.append(
-        f'<rect x="{x_left}" y="{oty}" width="{ox - x_left}" height="{y_bottom - oty}" '
-        f'fill="#22c55e" fill-opacity="0.10"/>'
-    )  # Q3 bottom-left · 다행 · 연초록
-    parts.append(
-        f'<rect x="{ox}" y="{oty}" width="{x_right - ox}" height="{y_bottom - oty}" '
-        f'fill="#fbbf24" fill-opacity="0.11"/>'
-    )  # Q4 bottom-right · 비중 부족 · 연노랑
+    # 사분면 배경 — 단색 (SVG 컨테이너 background:#0f0f14 그대로),
+    # 사분면 구분은 그리드선과 모서리 배지로만 표시 (시인성 우선)
 
     # 격자 — X 10% 단위, Y 5% 단위 (5/15/25 도 확인 가능하게)
     ticks_x = list(range(-int(x_abs), int(x_abs) + 1, 10))
