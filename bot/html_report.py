@@ -427,8 +427,9 @@ def _build_quadrants_svg(
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
 
-    # 수익금 iso-profit 등고선 — 데이터 점 아래, 분리선 위에 깔림
-    parts.extend(_isoprofit_paths(sx, sy, y_max, total_eval, x_abs))
+    # 수익금 iso-profit 등고선 — Y축 weight 기준이 denom(현물+선물 notional)
+    # 이므로 분모도 denom 으로 맞춤. 데이터 점 아래, 분리선 위에 깔림.
+    parts.extend(_isoprofit_paths(sx, sy, y_max, denom, x_abs))
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
@@ -563,10 +564,14 @@ def _build_quadrants_svg(
             f'<tspan class="qd-label-weight" style="display:none" '
             f'fill="#9ca3af"> {p["weight_label"]}</tspan>'
         )
+        # 호버 툴팁 — name 옆에 amount · weight 띄움
+        tooltip = (
+            f'<title>{p["name"]}  ·  {p["amount_label"]}  ·  {p["weight_label"]}</title>'
+        )
         parts.append(
             f'<text x="{label_x:.2f}" y="{ly:.2f}" font-size="11" '
-            f'fill="#e0e0e0" text-anchor="{anchor}">'
-            f'{p["name"]}{amount_span}{weight_span}{suffix}</text>'
+            f'fill="#e0e0e0" text-anchor="{anchor}" style="cursor:default">'
+            f'{tooltip}{p["name"]}{amount_span}{weight_span}{suffix}</text>'
         )
 
     parts.append("</svg>")
@@ -1000,11 +1005,13 @@ def build_html_report(
   .qd-legend-item {{ display:flex; align-items:center; gap:6px; font-size:12px; color:#bbb; }}
   .qd-caption {{ text-align:center; font-size:11px; color:#888; margin-top:8px; }}
 
-  /* 4사분면 라벨 토글 */
-  .qd-toolbar {{ display:flex; justify-content:flex-end; gap:8px; margin:8px 0 4px; }}
-  .qd-toggle {{ background:#1a1a24; color:#888; border:1px solid #333;
-                padding:5px 12px; border-radius:6px; cursor:pointer;
-                font-size:12px; font-family:inherit; }}
+  /* 4사분면 라벨 토글 — 차트 Q1(잘하는 것) 근처에 오버레이 */
+  .qd-chart-wrap {{ position:relative; }}
+  .qd-toolbar {{ position:absolute; top:6.5%; right:16%;
+                 display:flex; flex-direction:column; gap:6px; z-index:5; }}
+  .qd-toggle {{ background:rgba(26,26,36,0.85); color:#888; border:1px solid #333;
+                padding:4px 10px; border-radius:6px; cursor:pointer;
+                font-size:11px; font-family:inherit; backdrop-filter:blur(2px); }}
   .qd-toggle:hover {{ border-color:#555; color:#bbb; }}
   .qd-toggle.on {{ background:#fbbf24; color:#0f0f14; border-color:#fbbf24; font-weight:600; }}
   body.show-amount .qd-label-amount {{ display:inline !important; }}
@@ -1039,11 +1046,13 @@ def build_html_report(
   <div class="stack">{stack_segments}</div>
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
-  <div class="qd-toolbar">
-    <button type="button" class="qd-toggle" data-target="amount">금액 표시</button>
-    <button type="button" class="qd-toggle" data-target="weight">비중 표시</button>
+  <div class="qd-chart-wrap">
+    <div class="qd-toolbar">
+      <button type="button" class="qd-toggle" data-target="amount">금액 표시</button>
+      <button type="button" class="qd-toggle" data-target="weight">비중 표시</button>
+    </div>
+    {_build_quadrants_svg(rows, sector_colors, total_eval, futures_positions, futures_prices)}
   </div>
-  {_build_quadrants_svg(rows, sector_colors, total_eval, futures_positions, futures_prices)}
 
   <div class="section-title">섹터별 비중</div>
   {sector_bars_html}
