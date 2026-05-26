@@ -27,6 +27,7 @@ def build_futures_section(
     positions: list[dict],
     current_prices: dict | None = None,
     total_equity: float | None = None,
+    futures_cash: float | None = None,
 ) -> str:
     """선물 포지션을 HTML 조각으로 반환. 빈 리스트면 빈 문자열.
 
@@ -44,6 +45,7 @@ def build_futures_section(
     rows_html = ""
     total_unrealized = 0.0
     total_margin = 0.0
+    total_notional = 0.0  # 현재가 × 계약수 × 승수 합 (= 선물 평가액)
     sources_seen: set[str] = set()
 
     for p in active:
@@ -94,6 +96,7 @@ def build_futures_section(
             unrealized = (cur - avg) * contracts * mult * sign
             notional = avg * contracts * mult
             unrealized_pct = (unrealized / notional * 100) if notional else 0.0
+            total_notional += float(cur) * contracts * mult
 
         # 기초자산 셀
         if u_price is None:
@@ -178,22 +181,44 @@ def build_futures_section(
             '</div>'
         )
 
+    # 선물 예수금 (futures_cash 인자가 들어오면 카드로 표기)
+    fc_val = float(futures_cash) if futures_cash else 0.0
+    deposit_total = fc_val + total_margin  # 선물 예탁금 = 가용 + 위탁증거금
+
+    futures_cash_card = (
+        "<div class='card'>"
+        "<div class='label'>선물 예수금</div>"
+        f"<div class='value'>{format_number(int(fc_val))}원</div>"
+        f"<div class='sub' style='color:#9ca3af'>예탁금 총 {format_number(int(deposit_total))}원</div>"
+        "</div>"
+    ) if fc_val > 0 else ""
+
     return f"""
   <div class="section-title" style="margin-top:40px">선물 포지션</div>
   {quote_note}
-  <div class="cards" style="grid-template-columns:repeat(3,1fr);max-width:600px">
+  <div class="cards" style="grid-template-columns:repeat(3,1fr)">
     <div class="card">
       <div class="label">포지션 수</div>
       <div class="value">{len(active)}개</div>
     </div>
     <div class="card">
+      <div class="label">선물 평가액 <span style="font-size:10px;color:#888">(notional)</span></div>
+      <div class="value">{format_number(int(total_notional))}원</div>
+    </div>
+    <div class="card">
       <div class="label">미실현 손익</div>
       <div class="value {total_class}">{total_sign}{format_number(int(total_unrealized))}원</div>
+    </div>
+    {futures_cash_card}
+    <div class="card">
+      <div class="label">위탁증거금</div>
+      <div class="value">{format_number(int(total_margin))}원</div>
+      <div class="sub" style="color:#9ca3af">잠식 <span class="{burn_class}">{margin_burn:.1f}%</span></div>
     </div>
     <div class="card">
       <div class="label">평가액 대비 증거금</div>
       <div class="value {equity_class}">{equity_ratio:.1f}%</div>
-      <div class="sub">잠식 <span class="{burn_class}">{margin_burn:.1f}%</span> · 총 {format_number(int(total_margin))}원</div>
+      <div class="sub" style="color:#9ca3af">전체 자산 중 증거금 비중</div>
     </div>
   </div>
   <div class="table-wrap">

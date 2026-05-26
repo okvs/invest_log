@@ -574,8 +574,8 @@ def render_asset_graph() -> io.BytesIO | None:
     ax2.tick_params(colors="#9ca3af", labelsize=9)
     ax2.set_ylabel("첫날 대비 (%)", color="#9ca3af", fontsize=9)
 
-    # 입출금 이벤트 마커
-    events = get_all_cash_events()
+    # 입출금 이벤트 마커 — user 가 직접 기록한 것만 표시 (auto 보정은 숨김)
+    events = [e for e in get_all_cash_events() if e.get("source") != "auto"]
     # 같은 X 위치에 라벨이 겹치지 않도록 stagger
     label_offsets: dict[date, int] = {}
     for ev in events:

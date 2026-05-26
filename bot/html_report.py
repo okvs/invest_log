@@ -168,6 +168,13 @@ def _isoprofit_paths(
             while r >= -x_abs:
                 rs.append(r); r -= step
         pts = []
+        # 명시적 top-edge 진입점 — 곡선이 plot 상단(w=y_max)에 정확히 닿게.
+        r_entry = k / y_max if y_max > 0 else None
+        if r_entry is not None:
+            if k > 0 and 0 < r_entry <= x_abs:
+                pts.append((sx_fn(r_entry), sy_fn(y_max)))
+            elif k < 0 and -x_abs <= r_entry < 0:
+                pts.append((sx_fn(r_entry), sy_fn(y_max)))
         for r in rs:
             w = k / r  # w × r = k
             if 0 < w <= y_max:
@@ -564,14 +571,14 @@ def _build_quadrants_svg(
             f'<tspan class="qd-label-weight" style="display:none" '
             f'fill="#9ca3af"> {p["weight_label"]}</tspan>'
         )
-        # 호버 툴팁 — name 옆에 amount · weight 띄움
-        tooltip = (
-            f'<title>{p["name"]}  ·  {p["amount_label"]}  ·  {p["weight_label"]}</title>'
-        )
+        # 호버 툴팁 — JS 가 data-tip 을 읽어 띄움 (SVG <title> 대신)
+        tip = f'{p["name"]} · {p["amount_label"]} · {p["weight_label"]}'
         parts.append(
             f'<text x="{label_x:.2f}" y="{ly:.2f}" font-size="11" '
-            f'fill="#e0e0e0" text-anchor="{anchor}" style="cursor:default">'
-            f'{tooltip}{p["name"]}{amount_span}{weight_span}{suffix}</text>'
+            f'fill="#e0e0e0" text-anchor="{anchor}" '
+            f'class="qd-pt-label" data-tip="{tip}" style="cursor:pointer">'
+            f'<title>{tip}</title>'
+            f'{p["name"]}{amount_span}{weight_span}{suffix}</text>'
         )
 
     parts.append("</svg>")
@@ -1017,6 +1024,14 @@ def build_html_report(
   body.show-amount .qd-label-amount {{ display:inline !important; }}
   body.show-weight .qd-label-weight {{ display:inline !important; }}
 
+  /* 4사분면 종목명 호버 툴팁 */
+  .qd-tip {{ position:fixed; pointer-events:none; background:#1a1a24;
+             color:#e0e0e0; padding:6px 10px; border-radius:6px;
+             border:1px solid #444; font-size:12px; z-index:50;
+             box-shadow:0 4px 12px rgba(0,0,0,0.4); display:none;
+             white-space:nowrap; }}
+  .qd-pt-label:hover {{ fill:#fbbf24 !important; }}
+
   /* 미등록 알림 */
   .warning {{ margin-top:24px; background:#2a2215; border:1px solid #665520; border-radius:8px; padding:16px; font-size:13px; color:#fbbf24; }}
 </style>
@@ -1079,7 +1094,7 @@ def build_html_report(
 
   {"<div class='warning'>⚠ 종목코드 미등록: " + ", ".join(missing) + "</div>" if missing else ""}
 
-  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining)}
+  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining, futures_cash=futures_cash_val)}
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{
@@ -1123,6 +1138,24 @@ document.querySelectorAll('.qd-toggle').forEach(btn => {{
     btn.classList.toggle('on');
   }});
 }});
+
+// 4사분면 종목명 호버 툴팁 (커스텀)
+(function() {{
+  const tip = document.createElement('div');
+  tip.className = 'qd-tip';
+  document.body.appendChild(tip);
+  document.querySelectorAll('.qd-pt-label').forEach(el => {{
+    el.addEventListener('mouseenter', e => {{
+      tip.textContent = el.getAttribute('data-tip') || '';
+      tip.style.display = 'block';
+    }});
+    el.addEventListener('mousemove', e => {{
+      tip.style.left = (e.clientX + 12) + 'px';
+      tip.style.top = (e.clientY + 12) + 'px';
+    }});
+    el.addEventListener('mouseleave', () => {{ tip.style.display = 'none'; }});
+  }});
+}})();
 </script>
 </body>
 </html>"""
