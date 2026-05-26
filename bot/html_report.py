@@ -764,9 +764,13 @@ def build_html_report(
     nav_class = "profit" if nav_return >= 0 else "loss"
     nav_sign = "+" if nav_return >= 0 else ""
 
-    # 신용대출 제외 순자산
+    # 신용대출 제외 순자산 — 메인 표기는 신용 제외(net_nav), 신용 포함은 sub
     total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
     net_nav = total_nav - total_credit
+    net_return = net_nav - initial_capital if initial_capital else 0
+    net_return_pct = (net_return / initial_capital * 100) if initial_capital else 0
+    net_class = "profit" if net_return >= 0 else "loss"
+    net_sign = "+" if net_return >= 0 else ""
 
     # 배지 HTML (Claude 리포트 구분용)
     badge_html = ""
@@ -868,11 +872,12 @@ def build_html_report(
   </div>
 
   <div class="cards">
-    {("<div class='card'><div class='label'>총 자산</div><div class='value'>" + format_number(int(total_nav)) + "원</div><div class='sub " + nav_class + "'>" + nav_sign + f"{nav_return_pct:.1f}% vs 초기자본</div>" + ("<div class='sub' style='color:#9ca3af'>신용 제외: " + format_number(int(net_nav)) + "원</div>" if total_credit > 0 else "") + "</div>") if show_cash and initial_capital else ""}
-    {"<div class='card'><div class='label'>잔여 현금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div></div>" if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
+    {("<div class='card'><div class='label'>총 자산 (신용 제외)</div><div class='value'>" + format_number(int(net_nav)) + "원</div><div class='sub " + net_class + "'>" + net_sign + f"{net_return_pct:.1f}% vs 초기자본</div>" + ("<div class='sub' style='color:#9ca3af'>신용 포함: " + format_number(int(total_nav)) + "원</div>" if total_credit > 0 else "") + "</div>") if show_cash and initial_capital else ""}
+    {("<div class='card'><div class='label'>예수금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div>" + ("<div class='sub' style='color:#9ca3af'>현물 " + format_number(int(max(cash_remaining - min(futures_cash_val, cash_remaining), 0))) + " / 선물 " + format_number(int(min(futures_cash_val, cash_remaining))) + "</div>" if futures_cash_val > 0 else "") + "</div>") if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
     <div class="card">
       <div class="label">총 평가금</div>
       <div class="value">{format_number(int(total_eval))}원</div>
+      {("<div class='sub' style='color:#9ca3af'>신용 제외: " + format_number(int(total_eval - total_credit)) + "원</div>") if total_credit > 0 else ""}
     </div>
     <div class="card">
       <div class="label">총 수익</div>
