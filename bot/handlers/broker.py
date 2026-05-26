@@ -796,10 +796,15 @@ async def _do_open_save(
     month = int(msg.contract_month[4:6])
     expiry_date = second_thursday(year, month).isoformat()
 
+    # 종목명 → 기초자산 ticker → symbol(6자리). ticker_map 캐시 활용
+    from storage.json_store import load_ticker_map  # noqa: E402
+    cached_ticker = load_ticker_map().get(msg.name, "")
+    underlying_symbol = cached_ticker.split(".")[0] if cached_ticker else ""
+
     tx = FuturesTransaction(
         type="open",
         name=msg.name,
-        symbol="",
+        symbol=underlying_symbol,
         contract_code="",
         contract_month=msg.contract_month,
         expiry_date=expiry_date,
@@ -824,13 +829,16 @@ async def _do_open_save(
                 pos.thesis = thesis
             if sector:
                 pos.sector = sector
+            # 기존 포지션의 symbol 이 비어있고 이번에 새로 얻었으면 채워준다
+            if not pos.symbol and underlying_symbol:
+                pos.symbol = underlying_symbol
             positions[idx] = pos.to_dict()
             tx.position_id = pos.id
 
     if action == "new":
         pos = FuturesPosition(
             name=msg.name,
-            symbol="",
+            symbol=underlying_symbol,
             contract_code="",
             contract_month=msg.contract_month,
             expiry_date=expiry_date,
@@ -966,7 +974,7 @@ async def _reply(update_or_query, text: str, is_callback: bool) -> None:
 def _other_command_filter() -> filters.BaseFilter:
     """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
     return filters.Regex(
-        r"^(매도|매수|현황|잔고|도움말|수정|회고|선물진입|선물청산|선물롤오버|선물회고)$"
+        r"^(매도|매수|현황|잔고|도움말|수정|회고|자산그래프|선물진입|선물청산|선물롤오버|선물회고)$"
     ) | filters.COMMAND
 
 

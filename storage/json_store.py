@@ -257,6 +257,33 @@ def save_account(data: dict) -> None:
     save(ACCOUNT_FILE, data)
 
 
+CASH_EVENTS_FILE = "cash_events.json"
+
+
+def load_cash_events() -> list[dict]:
+    """입출금 이벤트 리스트. 각 항목: {date(YYYY-MM-DD), amount, type, note}.
+
+    `type`: "deposit" | "withdraw" | "seed". seed는 초기자본 anchor.
+    `amount`: 양수. type=withdraw 면 차감으로 해석.
+    """
+    return load(CASH_EVENTS_FILE).get("events", [])
+
+
+def save_cash_events(events: list[dict]) -> None:
+    save(CASH_EVENTS_FILE, {"events": events})
+
+
+def add_cash_event(date: str, amount: float, ev_type: str, note: str = "") -> None:
+    """입출금 이벤트 1건 추가 후 저장."""
+    events = load_cash_events()
+    events.append({
+        "date": date, "amount": float(amount),
+        "type": ev_type, "note": note,
+    })
+    events.sort(key=lambda e: e.get("date", ""))
+    save_cash_events(events)
+
+
 def save_chat_id(chat_id: int) -> None:
     """알림 발송용 텔레그램 chat_id 저장. 이후 JobQueue가 사용."""
     account = load_account()

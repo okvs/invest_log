@@ -21,6 +21,7 @@ from bot.futures_alerts import (
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
+from bot.handlers.asset_graph import asset_graph_handler
 from bot.handlers.dashboard import dashboard_handler
 from bot.handlers.edit import edit_conversation
 from bot.handlers.futures_buy import futures_entry_conversation
@@ -92,6 +93,7 @@ async def start(update: Update, context) -> None:
         "선물회고 - 선물 청산 회고\n"
         "선물시세 - 정확한 선물가 수동 입력 (6시간 유효)\n"
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
+        "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
         "도움말 - 사용법"
     )
 
@@ -130,6 +132,7 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("잔고"), dashboard_handler))
+    app.add_handler(MessageHandler(_korean_command("자산그래프"), asset_graph_handler))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 

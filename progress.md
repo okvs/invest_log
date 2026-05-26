@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 자산그래프 명령 + 일별 NAV 그래프 초안 (2026-05-26) — `bot/asset_history.py`(거래내역 기반 일별 보유수량 재구성 + yfinance 일별 종가 + cash 자동 보정), `bot/handlers/asset_graph.py`(텔레그램 PNG 발송), main.py에 `자산그래프` 명령 등록. 다른 ConversationHandler abort filter 일괄 갱신. 시드 선물 포지션(거래내역 없는 백로딩)은 첫날 종가를 baseline 로 두어 첫날부터의 가격 변화만 미실현으로 반영. cash_events 자동 시드 + 일별 음수 방지 보정 + 잔차 보정. broker.py KB 자동 파싱에서 선물 진입 시 ticker_map으로 symbol 채워서 향후 시세 조회 가능. 그래프: dual Y(천만/억 KRW + 첫날 대비 %), ▲입금/▼출금 마커, 자동 추정 이벤트는 옅게(★). 사용자 chat_id로 발송 완료. 130 passed.
 - [x] 잔고 헤더 "초기자본" 카드를 "총 자산"(NAV) 카드로 교체 (2026-05-26) — `bot/html_report.py` 헤더 첫 카드를 `total_eval(현물) + cash_remaining + total_futures_unrealized` 합산값(총 자산)으로 변경. sub-line에 `+X.X% vs 초기자본` 표시. 선물 미실현은 `(현재가 - 평균진입가) × 계약수 × 승수 × (롱=+1/숏=-1)` 으로 누적. 스모크 렌더 확인 — 326,658,757원 / +110.7% 카드 정상. 130 passed.
 - [x] 선물 추가 진입에 사유 이어쓰기 추가 (2026-05-26) — 같은 종목·방향·결제월 추가 진입 시 기존 진입사유가 있으면 "그대로 유지 / 사유 이어쓰기 / 사유 새로쓰기" 키보드를 띄움. 수동 `선물진입`(`futures_buy.py`) 과 KB 자동 파싱(`broker.py`) 양쪽 다 적용. 이어쓰기 선택 시 기존 사유\n새 사유 결합. `futures_existing_thesis_keyboard()` 신설, `EXISTING_THESIS`/`APPEND_INPUT` (수동) + `FUT_THESIS_CONFIRM`/`FUT_THESIS_APPEND` (broker) 상태 추가. 130 passed.
 - [x] 자동손절 알림 차트를 봉차트로 변경 (2026-05-25) — `scripts/stop_loss_alert.py` `_build_chart()` 의 line+음영 차트를 한국식 캔들차트로 교체. mplfinance 없이 matplotlib `Rectangle`(body) + `vlines`(wick) 로 직접 그림. 상승=#ef4444(빨강), 하락=#3b82f6(파랑). x축을 정수 인덱스로 두고 tick만 날짜 라벨(MM-DD) 6개로 균등 배치 — 주말·휴일 빈 갭 제거. 매수선/손절선/현재가 마커는 그대로. 삼성전자 25봉 스모크 테스트 OK.
