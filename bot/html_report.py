@@ -485,15 +485,16 @@ def _build_quadrants_svg(
         f'transform="rotate(-90 16 {mid_y:.2f})">비중 (%)</text>'
     )
 
-    # 사분면 이름표(배지) — plot 바깥(위/아래)에 배치
+    # 사분면 이름표(배지) — plot 바깥(위/아래)에 배치. 상단 배지는 살짝 더 위로.
     badge_gap = 6
+    top_badge_gap = 12
     parts.append(_quadrant_badge(
-        anchor_x=x_right, anchor_y=y_top - badge_gap,
+        anchor_x=x_right, anchor_y=y_top - top_badge_gap,
         text="잘하는 것 (비중↑·수익)",
         bg="#ef4444", fg="#ffffff", side="tr",
     ))
     parts.append(_quadrant_badge(
-        anchor_x=x_left, anchor_y=y_top - badge_gap,
+        anchor_x=x_left, anchor_y=y_top - top_badge_gap,
         text="큰 위험 (비중↑·손실)",
         bg="#6366f1", fg="#ffffff", side="tl",
     ))
