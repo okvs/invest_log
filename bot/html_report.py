@@ -131,7 +131,7 @@ def _isoprofit_paths(
 
     krw_targets = [
         (5_000_000,   "500만",   "#86efac", "#fca5a5", 0.50),
-        (10_000_000,  "천만",    "#22c55e", "#ef4444", 0.70),
+        (10_000_000,  "1천만",   "#22c55e", "#ef4444", 0.70),
         (30_000_000,  "3천만",   "#15803d", "#991b1b", 0.95),
     ]
     levels: list[tuple[float, str, float, str]] = []
@@ -262,7 +262,7 @@ def _build_quadrants_svg(
 
     # Y축: 비중(%). 35% 고정 max, 그 너머는 클립 + 가로 물결.
     Y_THRESH = 10.0  # 비중부족/과체중 분리선
-    y_max = 35.0
+    y_max = 30.0
     y_min = 0.0
 
     x_min, x_max = -x_abs, x_abs
@@ -478,7 +478,7 @@ def _build_quadrants_svg(
         '<div class="qd-caption">'
         '점 크기 = 비중 tier (10% 단위) · 세모/네모/원/육각형/별 (T1·T2·T3·T4·T5) · '
         '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
-        '동일 수익금 등고선 (500만 / 천만 / 3천만 KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
+        '동일 수익금 등고선 (500만 / 1천만 / 3천만 KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
         "</div>"
     )
 
