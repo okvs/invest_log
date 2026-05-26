@@ -64,36 +64,44 @@ def _date_only(s: str) -> str:
 # Cash events 시드
 # ---------------------------------------------------------------------------
 
-def ensure_seed_cash_event() -> list[dict]:
-    """입출금 기록이 비어있으면 자동 시드 + 일별 보정.
+def _ensure_seed_on_disk() -> None:
+    """디스크에 seed 이벤트가 없으면 초기자본을 첫 거래일에 등록.
 
-    1) 초기자본을 첫 거래일에 type=seed 로 등록
-    2) 일별로 cash 시뮬레이션 → 음수가 되는 날마다 그 날 type=auto 입금 추가
-       (cash 가 0 이상 유지되도록 최소 보정)
-    3) 누적 보정 후 최종 cash 와 account.cash 가 다르면 오늘 날짜로 잔차 보정
-
-    auto 이벤트는 note에 "자동 추정" 표시 — 실제 입출금 시점은 사용자가 수동
-    `/입금` 명령으로 덮어쓰는 게 권장 (TBD).
+    user 이벤트만 디스크에 저장한다. auto 보정은 매번 in-memory로 계산.
     """
     events = load_cash_events()
-    if events:
-        return events
+    if any(e.get("type") == "seed" for e in events):
+        return
     account = load_account()
     initial = float(account.get("initial_capital") or 0)
-    current_cash = float(account.get("cash") or 0)
     if initial <= 0:
-        return events
+        return
+    txs = load_transactions()
+    first_iso = min(
+        (_date_only(t.get("date", "")) for t in txs if t.get("date")),
+        default=date.today().isoformat(),
+    )
+    add_cash_event(first_iso, initial, "seed", "초기자본 anchor")
+
+
+def get_all_cash_events() -> list[dict]:
+    """user 이벤트 + 자동 보정 이벤트 (in-memory). 디스크에는 user 만 저장.
+
+    절차:
+      1) seed 가 없으면 디스크에 추가
+      2) user 이벤트로 cash 트래젝토리 시뮬레이션
+      3) cash 가 음수가 되는 날마다 auto deposit 추가 (`source=auto`)
+      4) 끝에서 account.cash 와 잔차가 있으면 today 에 auto 보정
+    """
+    _ensure_seed_on_disk()
+    user_events = load_cash_events()
+    account = load_account()
+    current_cash = float(account.get("cash") or 0)
+    initial = float(account.get("initial_capital") or 0)
+    if initial <= 0 or not user_events:
+        return [{**e, "source": "user"} for e in user_events]
 
     txs = load_transactions()
-    if not txs:
-        return events
-
-    first_iso = min(_date_only(t.get("date", "")) for t in txs if t.get("date"))
-    try:
-        first_d = date.fromisoformat(first_iso)
-    except ValueError:
-        first_d = date.today()
-
     buys_by_day: dict[date, float] = defaultdict(float)
     sells_by_day: dict[date, float] = defaultdict(float)
     for t in txs:
@@ -110,33 +118,56 @@ def ensure_seed_cash_event() -> list[dict]:
         elif t.get("type") == "sell":
             sells_by_day[td] += amt
 
-    add_cash_event(first_iso, initial, "seed", "초기자본 anchor")
+    user_by_day: dict[date, float] = defaultdict(float)
+    for e in user_events:
+        try:
+            ed = date.fromisoformat(e.get("date", ""))
+        except (ValueError, TypeError):
+            continue
+        amt = float(e.get("amount", 0))
+        if e.get("type") == "withdraw":
+            amt = -amt
+        user_by_day[ed] += amt
 
-    auto_events: list[tuple[str, float, str, str]] = []  # (date, amount, type, note)
-    cash = initial
+    first_d = min(
+        (date.fromisoformat(_date_only(t.get("date", "")))
+         for t in txs if t.get("date")),
+        default=date.today(),
+    )
     today = date.today()
+
+    auto_events: list[dict] = []
+    cash = 0.0
     d = first_d
     while d <= today:
-        cash += sells_by_day[d] - buys_by_day[d]
+        cash += user_by_day[d] + sells_by_day[d] - buys_by_day[d]
         if cash < 0:
             needed = -cash
-            auto_events.append(
-                (d.isoformat(), needed, "deposit", "기록 보정(자동 추정)")
-            )
+            auto_events.append({
+                "date": d.isoformat(), "amount": needed,
+                "type": "deposit", "note": "기록 보정(자동 추정)",
+                "source": "auto",
+            })
             cash = 0
         d += timedelta(days=1)
 
-    # 잔차 (오늘 cash 와의 차이) 보정
     residual = current_cash - cash
     if abs(residual) > 1000:
         ev_type = "deposit" if residual > 0 else "withdraw"
-        auto_events.append(
-            (today.isoformat(), abs(residual), ev_type, "기록 보정(자동 추정)")
-        )
+        auto_events.append({
+            "date": today.isoformat(), "amount": abs(residual),
+            "type": ev_type, "note": "기록 보정(자동 추정)",
+            "source": "auto",
+        })
 
-    for d_iso, amt, ev_type, note in auto_events:
-        add_cash_event(d_iso, amt, ev_type, note)
-    return load_cash_events()
+    combined = [{**e, "source": "user"} for e in user_events] + auto_events
+    combined.sort(key=lambda e: e.get("date", ""))
+    return combined
+
+
+# 하위 호환용 alias — 이전 코드가 ensure_seed_cash_event() 호출하던 곳을 위해
+def ensure_seed_cash_event() -> list[dict]:
+    return get_all_cash_events()
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +575,7 @@ def render_asset_graph() -> io.BytesIO | None:
     ax2.set_ylabel("첫날 대비 (%)", color="#9ca3af", fontsize=9)
 
     # 입출금 이벤트 마커
-    events = ensure_seed_cash_event()
+    events = get_all_cash_events()
     # 같은 X 위치에 라벨이 겹치지 않도록 stagger
     label_offsets: dict[date, int] = {}
     for ev in events:
@@ -558,7 +589,7 @@ def render_asset_graph() -> io.BytesIO | None:
         ev_type = ev.get("type", "")
         is_seed = ev_type == "seed"
         is_withdraw = ev_type == "withdraw"
-        is_auto = "자동" in (ev.get("note") or "")
+        is_auto = ev.get("source") == "auto"
         # seed: 옅은 회색 vline만, 라벨 없음
         if is_seed:
             ax.axvline(ed, color="#6b7280", linewidth=0.6, linestyle=":", alpha=0.4, zorder=2)

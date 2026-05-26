@@ -764,6 +764,10 @@ def build_html_report(
     nav_class = "profit" if nav_return >= 0 else "loss"
     nav_sign = "+" if nav_return >= 0 else ""
 
+    # 신용대출 제외 순자산
+    total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
+    net_nav = total_nav - total_credit
+
     # 배지 HTML (Claude 리포트 구분용)
     badge_html = ""
     if show_cash:
@@ -864,7 +868,7 @@ def build_html_report(
   </div>
 
   <div class="cards">
-    {("<div class='card'><div class='label'>총 자산</div><div class='value'>" + format_number(int(total_nav)) + "원</div><div class='sub " + nav_class + "'>" + nav_sign + f"{nav_return_pct:.1f}% vs 초기자본</div></div>") if show_cash and initial_capital else ""}
+    {("<div class='card'><div class='label'>총 자산</div><div class='value'>" + format_number(int(total_nav)) + "원</div><div class='sub " + nav_class + "'>" + nav_sign + f"{nav_return_pct:.1f}% vs 초기자본</div>" + ("<div class='sub' style='color:#9ca3af'>신용 제외: " + format_number(int(net_nav)) + "원</div>" if total_credit > 0 else "") + "</div>") if show_cash and initial_capital else ""}
     {"<div class='card'><div class='label'>잔여 현금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div></div>" if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
     <div class="card">
       <div class="label">총 평가금</div>
