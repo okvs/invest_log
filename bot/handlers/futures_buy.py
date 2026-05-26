@@ -22,13 +22,17 @@ from telegram.ext import (
 )
 
 from bot.keyboards import (
+    APPEND_THESIS,
     BUY_STOCK_PREFIX,
+    EDIT_THESIS,
     FUTURES_DIR_PREFIX,
     FUTURES_LONG,
     FUTURES_MONTH_PREFIX,
     FUTURES_SHORT,
+    KEEP_EXISTING,
     REASON_PICK_PREFIX,
     futures_direction_keyboard,
+    futures_existing_thesis_keyboard,
     futures_month_keyboard,
     reason_select_keyboard,
     stock_search_keyboard,
@@ -52,7 +56,7 @@ from storage.json_store import (
 logger = logging.getLogger(__name__)
 
 # ConversationHandler states
-NAME, PICK_STOCK, DIRECTION, MONTH, BODY, SECTOR, REASON = range(7)
+NAME, PICK_STOCK, DIRECTION, MONTH, BODY, SECTOR, REASON, EXISTING_THESIS, APPEND_INPUT = range(9)
 
 
 def _strip_name(name: str) -> str:
@@ -242,9 +246,37 @@ def _suggest_sector(symbol: str, name: str) -> str:
 async def _proceed_to_reason(
     update: Update, context: ContextTypes.DEFAULT_TYPE, state: dict,
 ) -> int:
-    """섹터가 정해진 뒤 사유 단계 (혹은 본문에 이미 사유가 있으면 저장)."""
+    """섹터가 정해진 뒤 사유 단계.
+
+    분기:
+      - 본문에 사유가 함께 들어왔으면 → 바로 저장
+      - 같은 종목·방향·결제월의 기존 포지션이 있고 기존 사유가 있으면
+        → 유지/이어쓰기/새로쓰기 키보드 (EXISTING_THESIS)
+      - 그 외 → 최근 사유 키보드 + 자유 입력 (REASON)
+    """
     if state.get("reason"):
         return await _do_save(update, context, is_callback=False)
+
+    existing = _pick_existing_position(
+        state.get("symbol", ""), state.get("name", ""),
+        state.get("direction", ""), state.get("contract_month", ""),
+    )
+    existing_thesis = (existing or {}).get("thesis", "") if existing else ""
+    if existing_thesis:
+        state["existing_thesis"] = existing_thesis
+        name = state.get("name", "")
+        direction_kr = "롱" if state.get("direction") == "long" else "숏"
+        contracts = state.get("contracts", 0)
+        price = state.get("price", 0)
+        msg = (
+            f"[{name} {direction_kr} {contracts}계약 / {int(price):,}원]\n\n"
+            f"기존 진입사유:\n{existing_thesis}\n\n"
+            "유지하거나 이어쓰기/새로쓰기 중 선택해주세요."
+        )
+        await update.message.reply_text(
+            msg, reply_markup=futures_existing_thesis_keyboard(),
+        )
+        return EXISTING_THESIS
 
     reasons = get_recent_futures_reasons("open")
     context.user_data["recent_reasons"] = reasons
@@ -264,6 +296,59 @@ async def _proceed_to_reason(
         reply_markup=reason_select_keyboard(reasons) if reasons else None,
     )
     return REASON
+
+
+async def _existing_thesis_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """기존 사유 유지/이어쓰기/대체 분기."""
+    query = update.callback_query
+    await query.answer()
+    state = context.user_data.get("fut_entry") or {}
+    existing_thesis = state.get("existing_thesis", "")
+    if not state.get("contract_month"):
+        await query.edit_message_text("세션이 만료되었습니다. 다시 시작해주세요.")
+        _cleanup(context)
+        return ConversationHandler.END
+
+    if query.data == KEEP_EXISTING:
+        state["reason"] = existing_thesis
+        state.pop("existing_thesis", None)
+        return await _do_save(query, context, is_callback=True)
+
+    if query.data == APPEND_THESIS:
+        state["append_base"] = existing_thesis
+        preview = existing_thesis if existing_thesis else "(기존 사유 없음)"
+        await query.edit_message_text(
+            f"기존 진입사유:\n{preview}\n\n이어붙일 내용을 입력해주세요."
+        )
+        return APPEND_INPUT
+
+    # EDIT_THESIS — 대체: 최근 사유 키보드 + 자유 입력으로
+    state.pop("existing_thesis", None)
+    reasons = get_recent_futures_reasons("open")
+    context.user_data["recent_reasons"] = reasons
+    msg = "새로운 진입 사유를 입력해주세요."
+    if reasons:
+        msg += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+    await query.edit_message_text(
+        msg,
+        reply_markup=reason_select_keyboard(reasons) if reasons else None,
+    )
+    return REASON
+
+
+async def _append_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """기존 사유에 이어쓰기 → 결합 후 저장."""
+    state = context.user_data.get("fut_entry") or {}
+    base = state.pop("append_base", "")
+    if not state.get("contract_month"):
+        await update.message.reply_text("세션이 만료되었습니다. 다시 시작해주세요.")
+        _cleanup(context)
+        return ConversationHandler.END
+    extra = update.message.text.strip()
+    state["reason"] = f"{base}\n{extra}" if base else extra
+    return await _do_save(update, context, is_callback=False)
 
 
 async def _receive_sector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -404,7 +489,8 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
 
 
 def _cleanup(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for k in ("fut_entry", "fut_months", "recent_reasons", "suggested_sector"):
+    for k in ("fut_entry", "fut_months", "recent_reasons", "suggested_sector",
+              "append_base"):
         context.user_data.pop(k, None)
 
 
@@ -457,6 +543,18 @@ def futures_entry_conversation() -> ConversationHandler:
                 CallbackQueryHandler(_reason_pick, pattern=f"^{REASON_PICK_PREFIX}"),
                 MessageHandler(other_cmd, _abort),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _reason_text),
+            ],
+            EXISTING_THESIS: [
+                CallbackQueryHandler(
+                    _existing_thesis_confirm,
+                    pattern=f"^({KEEP_EXISTING}|{APPEND_THESIS}|{EDIT_THESIS})$",
+                ),
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _abort),
+            ],
+            APPEND_INPUT: [
+                MessageHandler(other_cmd, _abort),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _append_input),
             ],
         },
         fallbacks=[

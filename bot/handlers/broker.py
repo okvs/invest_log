@@ -34,6 +34,7 @@ from bot.keyboards import (
     REASON_PICK_PREFIX,
     SELL_PINNED_REASONS,
     existing_info_keyboard,
+    futures_existing_thesis_keyboard,
     futures_margin_rate_keyboard,
     margin_ratio_keyboard,
     reason_select_keyboard,
@@ -73,6 +74,8 @@ FUT_MARGIN = 20
 FUT_THESIS = 21
 FUT_CLOSE_REASON = 22
 FUT_SECTOR = 23
+FUT_THESIS_CONFIRM = 24
+FUT_THESIS_APPEND = 25
 
 
 def _end_other_conversations(
@@ -417,6 +420,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "fut_margin_rate", "fut_add_pos_id", "fut_close_pos_id",
         "fut_close_contracts", "fut_close_price",
         "fut_sector", "fut_suggested_sector",
+        "fut_existing_thesis", "fut_append_base",
     ):
         context.user_data.pop(key, None)
     await update.message.reply_text("취소되었습니다.")
@@ -655,7 +659,11 @@ async def _fut_sector_input(
 async def _ask_open_thesis(
     update_or_query, context: ContextTypes.DEFAULT_TYPE, *, is_callback: bool,
 ) -> int:
-    """증거금이 확정된 뒤 진입 사유 입력 단계."""
+    """증거금이 확정된 뒤 진입 사유 입력 단계.
+
+    추가 진입(`fut_action == "add"`)이고 기존 포지션에 사유가 있으면
+    유지/이어쓰기/새로쓰기 키보드를 먼저 띄운다.
+    """
     msg: FuturesBrokerMessage = context.user_data["fut_msg"]
     margin = int(context.user_data["fut_margin"])
     rate = context.user_data.get("fut_margin_rate")
@@ -664,6 +672,29 @@ async def _ask_open_thesis(
     header = f"증거금 {margin:,}원"
     if rate is not None:
         header += f" ({rate * 100:g}% × 명목 {int(notional):,}원)"
+
+    action = context.user_data.get("fut_action")
+    add_pos_id = context.user_data.get("fut_add_pos_id")
+    existing_thesis = ""
+    if action == "add" and add_pos_id:
+        for p in load_futures_positions():
+            if p.get("id") == add_pos_id:
+                existing_thesis = p.get("thesis", "") or ""
+                break
+
+    if existing_thesis:
+        context.user_data["fut_existing_thesis"] = existing_thesis
+        text = (
+            f"{header}\n\n"
+            f"기존 진입사유:\n{existing_thesis}\n\n"
+            "유지하거나 이어쓰기/새로쓰기 중 선택해주세요."
+        )
+        kb = futures_existing_thesis_keyboard()
+        if is_callback:
+            await update_or_query.edit_message_text(text, reply_markup=kb)
+        else:
+            await update_or_query.message.reply_text(text, reply_markup=kb)
+        return FUT_THESIS_CONFIRM
 
     reasons = get_recent_futures_reasons("open")
     context.user_data["recent_reasons"] = reasons
@@ -677,6 +708,48 @@ async def _ask_open_thesis(
     else:
         await update_or_query.message.reply_text(text, reply_markup=kb)
     return FUT_THESIS
+
+
+async def _fut_thesis_existing_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """선물 추가 진입: 기존 사유 유지/이어쓰기/대체 분기."""
+    query = update.callback_query
+    await query.answer()
+    existing_thesis = context.user_data.get("fut_existing_thesis", "")
+
+    if query.data == KEEP_EXISTING:
+        context.user_data.pop("fut_existing_thesis", None)
+        return await _do_open_save(query, context, existing_thesis, is_callback=True)
+
+    if query.data == APPEND_THESIS:
+        context.user_data["fut_append_base"] = existing_thesis
+        preview = existing_thesis if existing_thesis else "(기존 사유 없음)"
+        await query.edit_message_text(
+            f"기존 진입사유:\n{preview}\n\n이어붙일 내용을 입력해주세요."
+        )
+        return FUT_THESIS_APPEND
+
+    # EDIT_THESIS — 대체: 최근 사유 키보드 + 자유 입력
+    context.user_data.pop("fut_existing_thesis", None)
+    reasons = get_recent_futures_reasons("open")
+    context.user_data["recent_reasons"] = reasons
+    text = "새로운 진입 사유를 입력해주세요."
+    if reasons:
+        text += "\n\n최근 사유를 선택하거나 직접 입력하세요."
+    kb = reason_select_keyboard(reasons) if reasons else None
+    await query.edit_message_text(text, reply_markup=kb)
+    return FUT_THESIS
+
+
+async def _fut_thesis_append_input(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """선물 추가 진입: 기존 사유에 이어쓰기 → 결합 후 저장."""
+    base = context.user_data.pop("fut_append_base", "")
+    extra = update.message.text.strip()
+    thesis = f"{base}\n{extra}" if base else extra
+    return await _do_open_save(update, context, thesis, is_callback=False)
 
 
 async def _fut_thesis_input(
@@ -957,6 +1030,18 @@ def broker_conversation() -> ConversationHandler:
                 CallbackQueryHandler(_fut_thesis_pick, pattern=f"^{REASON_PICK_PREFIX}"),
                 MessageHandler(other_cmd, _cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_thesis_input),
+            ],
+            FUT_THESIS_CONFIRM: [
+                CallbackQueryHandler(
+                    _fut_thesis_existing_confirm,
+                    pattern=f"^({KEEP_EXISTING}|{APPEND_THESIS}|{EDIT_THESIS})$",
+                ),
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
+            ],
+            FUT_THESIS_APPEND: [
+                MessageHandler(other_cmd, _cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _fut_thesis_append_input),
             ],
             FUT_CLOSE_REASON: [
                 CallbackQueryHandler(_fut_close_reason_pick, pattern=f"^{REASON_PICK_PREFIX}"),

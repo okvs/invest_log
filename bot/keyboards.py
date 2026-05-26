@@ -103,6 +103,17 @@ def existing_info_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def futures_existing_thesis_keyboard() -> InlineKeyboardMarkup:
+    """선물 추가 진입 시 기존 사유 유지/이어쓰기/대체 선택."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("그대로 유지", callback_data=KEEP_EXISTING)],
+        [
+            InlineKeyboardButton("사유 이어쓰기", callback_data=APPEND_THESIS),
+            InlineKeyboardButton("사유 새로쓰기", callback_data=EDIT_THESIS),
+        ],
+    ])
+
+
 # --- 최근 사유 빠른 선택 ---
 REASON_PICK_PREFIX = "reason_pick:"
 

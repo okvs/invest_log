@@ -11,14 +11,24 @@ from bot.handlers.broker import (
     FUT_MARGIN,
     FUT_SECTOR,
     FUT_THESIS,
+    FUT_THESIS_APPEND,
+    FUT_THESIS_CONFIRM,
     _fut_close_reason_input,
     _fut_margin_input,
     _fut_margin_rate_pick,
     _fut_sector_input,
+    _fut_thesis_append_input,
+    _fut_thesis_existing_confirm,
     _fut_thesis_input,
     _receive_broker_msg,
 )
-from bot.keyboards import FUT_MARGIN_CUSTOM, FUT_MARGIN_RATE_PREFIX
+from bot.keyboards import (
+    APPEND_THESIS,
+    EDIT_THESIS,
+    FUT_MARGIN_CUSTOM,
+    FUT_MARGIN_RATE_PREFIX,
+    KEEP_EXISTING,
+)
 from storage.json_store import load_margin_rate_pool
 from models.futures_position import FuturesPosition
 from parsers.input_parser import (
@@ -201,9 +211,15 @@ async def test_buy_with_existing_long_is_add():
     assert result == FUT_MARGIN
     assert ctx.user_data["fut_action"] == "add"
 
-    # 증거금률 30% → 섹터 자동 스킵 → 사유 → 저장
+    # 증거금률 30% → 섹터 자동 스킵 → 기존 사유 있으면 confirm 단계
     result = await _fut_margin_input(_make_update("30")[0], ctx)
-    assert result == FUT_THESIS  # 섹터 건너뛰고 바로 thesis
+    assert result == FUT_THESIS_CONFIRM
+    assert ctx.user_data["fut_existing_thesis"] == "원래 사유"
+
+    # "사유 새로쓰기" 선택 → 자유 입력
+    cb_update = _make_callback_update(EDIT_THESIS)
+    result = await _fut_thesis_existing_confirm(cb_update, ctx)
+    assert result == FUT_THESIS
     await _fut_thesis_input(_make_update("추가 매수")[0], ctx)
 
     positions = load_futures_positions()
@@ -215,6 +231,88 @@ async def test_buy_with_existing_long_is_add():
     # 추가 margin = 13,520,000 × 0.3 = 4,056,000
     assert p["initial_margin"] == 2400000.0 + 4_056_000.0
     assert p["sector"] == "자동차"
+    assert p["thesis"] == "추가 매수"
+
+
+# ── 자동 분기: 추가 진입 + 기존 사유 옵션 ───────────────────────────────
+
+
+def _make_callback_update(data: str):
+    update = MagicMock()
+    update.callback_query = MagicMock()
+    update.callback_query.data = data
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
+    update.message = None
+    return update
+
+
+@pytest.mark.asyncio
+async def test_buy_add_existing_thesis_keep():
+    """추가 진입 시 '그대로 유지' 누르면 기존 사유 그대로 저장."""
+    _seed(direction="long", contracts=1)
+    positions = load_futures_positions()
+    positions[0]["sector"] = "자동차"
+    save_futures_positions(positions)
+
+    update, ctx = _make_update(SAMPLE)
+    await _receive_broker_msg(update, ctx)
+    result = await _fut_margin_input(_make_update("30")[0], ctx)
+    assert result == FUT_THESIS_CONFIRM
+
+    # 그대로 유지
+    cb = _make_callback_update(KEEP_EXISTING)
+    result = await _fut_thesis_existing_confirm(cb, ctx)
+    assert result == ConversationHandler.END
+
+    p = load_futures_positions()[0]
+    assert p["contracts"] == 3
+    assert p["thesis"] == "원래 사유"
+
+
+@pytest.mark.asyncio
+async def test_buy_add_existing_thesis_append():
+    """추가 진입 시 '사유 이어쓰기' 누르고 텍스트 입력하면 결합되어 저장."""
+    _seed(direction="long", contracts=1)
+    positions = load_futures_positions()
+    positions[0]["sector"] = "자동차"
+    save_futures_positions(positions)
+
+    update, ctx = _make_update(SAMPLE)
+    await _receive_broker_msg(update, ctx)
+    await _fut_margin_input(_make_update("30")[0], ctx)
+
+    # 이어쓰기
+    cb = _make_callback_update(APPEND_THESIS)
+    result = await _fut_thesis_existing_confirm(cb, ctx)
+    assert result == FUT_THESIS_APPEND
+    assert ctx.user_data["fut_append_base"] == "원래 사유"
+
+    # 추가 텍스트 입력
+    extra_update = _make_update("HBM 모멘텀")[0]
+    result = await _fut_thesis_append_input(extra_update, ctx)
+    assert result == ConversationHandler.END
+
+    p = load_futures_positions()[0]
+    assert p["thesis"] == "원래 사유\nHBM 모멘텀"
+
+
+@pytest.mark.asyncio
+async def test_buy_add_no_existing_thesis_skips_confirm():
+    """기존 사유가 비어있으면 confirm 단계 없이 곧장 FUT_THESIS."""
+    pos = FuturesPosition(
+        name="현대모비스", symbol="", contract_code="",
+        contract_month="202606", expiry_date="2026-06-11",
+        direction="long", contracts=1,
+        avg_entry_price=670000.0, initial_margin=2400000.0,
+        sector="자동차", thesis="",
+    )
+    save_futures_positions([pos.to_dict()])
+
+    update, ctx = _make_update(SAMPLE)
+    await _receive_broker_msg(update, ctx)
+    result = await _fut_margin_input(_make_update("30")[0], ctx)
+    assert result == FUT_THESIS  # confirm 건너뛰고 바로 thesis
 
 
 # ── 자동 분기: 청산 ─────────────────────────────────────────────────────

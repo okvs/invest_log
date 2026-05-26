@@ -8,12 +8,16 @@ import pytest
 from telegram.ext import ConversationHandler
 
 from bot.handlers.futures_buy import (
+    APPEND_INPUT as ENTRY_APPEND_INPUT,
     BODY as ENTRY_BODY,
     SECTOR as ENTRY_SECTOR,
     DIRECTION as ENTRY_DIRECTION,
+    EXISTING_THESIS as ENTRY_EXISTING_THESIS,
     MONTH as ENTRY_MONTH,
     NAME as ENTRY_NAME,
     REASON as ENTRY_REASON,
+    _append_input as _entry_append_input,
+    _existing_thesis_confirm as _entry_existing_thesis_confirm,
     _pick_direction,
     _pick_month,
     _receive_body as _entry_receive_body,
@@ -44,10 +48,13 @@ from bot.handlers.futures_roll import (
     _start as _roll_start,
 )
 from bot.keyboards import (
+    APPEND_THESIS,
+    EDIT_THESIS,
     FUTURES_LONG,
     FUTURES_MONTH_PREFIX,
     FUTURES_POS_PREFIX,
     FUTURES_SHORT,
+    KEEP_EXISTING,
     REASON_PICK_PREFIX,
 )
 from models.futures_position import FuturesPosition
@@ -212,6 +219,117 @@ async def test_entry_additional_entry_recomputes_average():
     assert len(positions) == 1
     assert positions[0]["contracts"] == 4
     assert positions[0]["avg_entry_price"] == 71000.0
+
+
+@pytest.mark.asyncio
+async def test_entry_additional_no_inline_reason_shows_existing_thesis():
+    """추가 진입이고 본문에 사유 없으면 → 기존 사유 유지/이어쓰기 선택지를 띄움."""
+    _seed_position(contracts=2, avg=70000.0, margin=2520000.0)
+
+    body_update, ctx = _make_update("1\n72000\n2592000")  # 사유 없음
+    ctx.user_data["fut_entry"] = {
+        "name": "삼성전자", "symbol": "005930", "direction": "long",
+        "contract_month": "202606", "expiry_date": "2026-06-11",
+    }
+    await _entry_receive_body(body_update, ctx)
+    sector_update, _ = _make_update(".")
+    result = await _entry_receive_sector(sector_update, ctx)
+    assert result == ENTRY_EXISTING_THESIS
+    assert ctx.user_data["fut_entry"]["existing_thesis"] == "테스트 진입사유"
+
+
+@pytest.mark.asyncio
+async def test_entry_existing_thesis_keep_saves_as_is():
+    """'그대로 유지' 누르면 기존 사유로 저장."""
+    _seed_position(contracts=2, avg=70000.0, margin=2520000.0)
+
+    body_update, ctx = _make_update("1\n72000\n2592000")
+    ctx.user_data["fut_entry"] = {
+        "name": "삼성전자", "symbol": "005930", "direction": "long",
+        "contract_month": "202606", "expiry_date": "2026-06-11",
+    }
+    await _entry_receive_body(body_update, ctx)
+    await _entry_receive_sector(_make_update(".")[0], ctx)
+
+    cb_update, _ = _make_callback(KEEP_EXISTING)
+    cb_update.callback_query.message = None
+    cb_update.message = None
+    # ctx 는 위에서 만든 것을 그대로 써야 하므로 _make_callback 의 ctx 무시
+    result = await _entry_existing_thesis_confirm(cb_update, ctx)
+    assert result == ConversationHandler.END
+
+    p = load_futures_positions()[0]
+    assert p["contracts"] == 3
+    assert p["thesis"] == "테스트 진입사유"
+
+
+@pytest.mark.asyncio
+async def test_entry_existing_thesis_append_combines():
+    """'사유 이어쓰기' 선택 후 추가 텍스트 입력하면 결합되어 저장."""
+    _seed_position(contracts=2, avg=70000.0, margin=2520000.0)
+
+    body_update, ctx = _make_update("1\n72000\n2592000")
+    ctx.user_data["fut_entry"] = {
+        "name": "삼성전자", "symbol": "005930", "direction": "long",
+        "contract_month": "202606", "expiry_date": "2026-06-11",
+    }
+    await _entry_receive_body(body_update, ctx)
+    await _entry_receive_sector(_make_update(".")[0], ctx)
+
+    cb_update, _ = _make_callback(APPEND_THESIS)
+    cb_update.message = None
+    result = await _entry_existing_thesis_confirm(cb_update, ctx)
+    assert result == ENTRY_APPEND_INPUT
+    assert ctx.user_data["fut_entry"]["append_base"] == "테스트 진입사유"
+
+    extra_update, _ = _make_update("AI 모멘텀 강화")
+    result = await _entry_append_input(extra_update, ctx)
+    assert result == ConversationHandler.END
+
+    p = load_futures_positions()[0]
+    assert p["thesis"] == "테스트 진입사유\nAI 모멘텀 강화"
+
+
+@pytest.mark.asyncio
+async def test_entry_existing_thesis_edit_goes_to_reason():
+    """'사유 새로쓰기' 누르면 REASON 단계로 가서 자유 입력 받는다."""
+    _seed_position(contracts=2, avg=70000.0, margin=2520000.0)
+
+    body_update, ctx = _make_update("1\n72000\n2592000")
+    ctx.user_data["fut_entry"] = {
+        "name": "삼성전자", "symbol": "005930", "direction": "long",
+        "contract_month": "202606", "expiry_date": "2026-06-11",
+    }
+    await _entry_receive_body(body_update, ctx)
+    await _entry_receive_sector(_make_update(".")[0], ctx)
+
+    cb_update, _ = _make_callback(EDIT_THESIS)
+    cb_update.message = None
+    result = await _entry_existing_thesis_confirm(cb_update, ctx)
+    assert result == ENTRY_REASON
+
+    new_update, _ = _make_update("완전히 새로운 사유")
+    await _entry_reason_text(new_update, ctx)
+    p = load_futures_positions()[0]
+    assert p["thesis"] == "완전히 새로운 사유"
+
+
+@pytest.mark.asyncio
+async def test_entry_inline_reason_skips_existing_thesis_confirm():
+    """본문에 사유가 함께 들어오면 confirm 단계 건너뛰고 그 사유로 덮어쓴다."""
+    _seed_position(contracts=2, avg=70000.0, margin=2520000.0)
+
+    body_update, ctx = _make_update("1\n72000\n2592000\n인라인 사유")
+    ctx.user_data["fut_entry"] = {
+        "name": "삼성전자", "symbol": "005930", "direction": "long",
+        "contract_month": "202606", "expiry_date": "2026-06-11",
+    }
+    await _entry_receive_body(body_update, ctx)
+    result = await _entry_receive_sector(_make_update(".")[0], ctx)
+    assert result == ConversationHandler.END
+
+    p = load_futures_positions()[0]
+    assert p["thesis"] == "인라인 사유"
 
 
 @pytest.mark.asyncio
