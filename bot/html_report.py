@@ -358,10 +358,11 @@ def _build_quadrants_svg(
     # X축: 수익률(%). ±50% 고정, 그 너머는 클립 + 세로 물결 표시.
     x_abs = 50.0
 
-    # Y축: 비중(%). 최대 비중 + 5% 여유, 5% 단위로 올림. 분리선 노출을 위해 최소 15%.
+    # Y축: 비중(%). 최대 비중 바로 위 5% 눈금 (예: 21% → 25%, 20% → 25%).
+    # 분리선(10%) 노출을 위해 최소 15%.
     Y_THRESH = 10.0  # 비중부족/과체중 분리선
     _max_w = max((p["weight"] for p in points), default=0.0)
-    y_max = max(15.0, math.ceil((_max_w + 5.0) / 5.0) * 5.0)
+    y_max = max(15.0, math.floor(_max_w / 5.0) * 5.0 + 5.0)
     y_min = 0.0
 
     x_min, x_max = -x_abs, x_abs
