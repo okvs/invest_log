@@ -254,10 +254,10 @@ def _build_quadrants_svg(
     if not rows or total_eval <= 0:
         return ""
 
-    # 선물 노출(notional) 합산 → 비중 분모에 포함
-    fut_rows: list[dict] = []
+    # 선물 노출(notional) — 같은 (종목, 방향)이면 월물 다른 것도 합산.
+    # 합산 손익률 = sum(미실현 PnL) / sum(cost_basis) × 100  (가중평균)
     futures_prices = futures_prices or {}
-    fut_total = 0.0
+    fut_groups: dict[tuple[str, str], dict] = {}
     for fp in futures_positions or []:
         if fp.get("contracts", 0) <= 0:
             continue
@@ -270,47 +270,82 @@ def _build_quadrants_svg(
         mult = int(fp.get("multiplier", 10))
         if cur is None or avg <= 0:
             continue
-        sign = 1 if fp.get("direction", "long") == "long" else -1
-        pnl_pct = (float(cur) - avg) / avg * 100 * sign
+        name = fp.get("name", "")
+        direction = fp.get("direction", "long")
+        sign = 1 if direction == "long" else -1
         notional = float(cur) * contracts * mult
-        fut_total += notional
-        fut_rows.append({
-            "name": fp.get("name", ""),
+        cost_basis = avg * contracts * mult
+        pnl = (float(cur) - avg) * contracts * mult * sign
+        key = (name, direction)
+        g = fut_groups.setdefault(key, {
+            "name": name, "direction": direction,
             "sector": fp.get("sector", "") or "기타",
-            "eval": notional,
+            "notional": 0.0, "cost_basis": 0.0, "pnl": 0.0,
+            "months": [],
+        })
+        g["notional"] += notional
+        g["cost_basis"] += cost_basis
+        g["pnl"] += pnl
+        if len(cm) == 6:
+            g["months"].append(cm[4:6])
+        # 섹터는 첫 등장값 유지 (대부분 같음)
+
+    fut_rows: list[dict] = []
+    fut_total = 0.0
+    for g in fut_groups.values():
+        fut_total += g["notional"]
+        pnl_pct = (g["pnl"] / g["cost_basis"] * 100) if g["cost_basis"] else 0.0
+        months = sorted(set(g["months"]))
+        months_label = "+".join(months) if months else ""
+        fut_rows.append({
+            "name": g["name"],
+            "sector": g["sector"],
+            "eval": g["notional"],
             "pnl_pct": pnl_pct,
-            "direction": fp.get("direction", "long"),
-            "contract_month": cm,
+            "direction": g["direction"],
+            "months_label": months_label,
         })
 
     denom = total_eval + fut_total
 
+    def _fmt_krw_short(amt: float) -> str:
+        a = abs(amt)
+        if a >= 1e8:
+            return f"{amt / 1e8:.2f}억"
+        if a >= 1e7:
+            return f"{amt / 1e7:.1f}천만"
+        if a >= 1e6:
+            return f"{amt / 1e6:.0f}백만"
+        return f"{int(amt):,}원"
+
     points = []
     for r in rows:
         weight = r["eval"] / denom * 100
-        ret = r["pnl_pct"]
         tier = _tier_for_weight(weight)
         points.append({
             "name": r["name"],
             "weight": weight,
-            "return": ret,
+            "return": r["pnl_pct"],
             "tier": tier,
             "color": sector_colors.get(r["sector"], "#9ca3af"),
             "is_futures": False,
+            "amount_label": _fmt_krw_short(r["eval"]),
+            "weight_label": f"{weight:.1f}%",
         })
     for r in fut_rows:
         weight = r["eval"] / denom * 100
-        ret = r["pnl_pct"]
         tier = _tier_for_weight(weight)
         dir_mark = "↑" if r["direction"] == "long" else "↓"
-        cm_short = r["contract_month"][2:4] + "/" + r["contract_month"][4:6] if len(r["contract_month"]) == 6 else r["contract_month"]
+        months_label = r["months_label"] or "?"
         points.append({
-            "name": f"{r['name']}F{dir_mark}{cm_short}",
+            "name": f"{r['name']}F{dir_mark}{months_label}",
             "weight": weight,
-            "return": ret,
+            "return": r["pnl_pct"],
             "tier": tier,
             "color": sector_colors.get(r["sector"], "#9ca3af"),
             "is_futures": True,
+            "amount_label": _fmt_krw_short(r["eval"]),
+            "weight_label": f"{weight:.1f}%",
         })
 
     # SVG 영역 — 정사각형 plot. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
@@ -503,9 +538,19 @@ def _build_quadrants_svg(
             ly = cy + 3
             anchor = "start"
 
+        # 금액/비중 토글용 tspan — body.show-amount / body.show-weight 클래스로 표시
+        amount_span = (
+            f'<tspan class="qd-label-amount" style="display:none" '
+            f'fill="#9ca3af"> ({p["amount_label"]})</tspan>'
+        )
+        weight_span = (
+            f'<tspan class="qd-label-weight" style="display:none" '
+            f'fill="#9ca3af"> {p["weight_label"]}</tspan>'
+        )
         parts.append(
             f'<text x="{label_x:.2f}" y="{ly:.2f}" font-size="11" '
-            f'fill="#e0e0e0" text-anchor="{anchor}">{p["name"]}{suffix}</text>'
+            f'fill="#e0e0e0" text-anchor="{anchor}">'
+            f'{p["name"]}{amount_span}{weight_span}{suffix}</text>'
         )
 
     parts.append("</svg>")
@@ -939,6 +984,16 @@ def build_html_report(
   .qd-legend-item {{ display:flex; align-items:center; gap:6px; font-size:12px; color:#bbb; }}
   .qd-caption {{ text-align:center; font-size:11px; color:#888; margin-top:8px; }}
 
+  /* 4사분면 라벨 토글 */
+  .qd-toolbar {{ display:flex; justify-content:flex-end; gap:8px; margin:8px 0 4px; }}
+  .qd-toggle {{ background:#1a1a24; color:#888; border:1px solid #333;
+                padding:5px 12px; border-radius:6px; cursor:pointer;
+                font-size:12px; font-family:inherit; }}
+  .qd-toggle:hover {{ border-color:#555; color:#bbb; }}
+  .qd-toggle.on {{ background:#fbbf24; color:#0f0f14; border-color:#fbbf24; font-weight:600; }}
+  body.show-amount .qd-label-amount {{ display:inline !important; }}
+  body.show-weight .qd-label-weight {{ display:inline !important; }}
+
   /* 미등록 알림 */
   .warning {{ margin-top:24px; background:#2a2215; border:1px solid #665520; border-radius:8px; padding:16px; font-size:13px; color:#fbbf24; }}
 </style>
@@ -968,6 +1023,10 @@ def build_html_report(
   <div class="stack">{stack_segments}</div>
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
+  <div class="qd-toolbar">
+    <button type="button" class="qd-toggle" data-target="amount">금액 표시</button>
+    <button type="button" class="qd-toggle" data-target="weight">비중 표시</button>
+  </div>
   {_build_quadrants_svg(rows, sector_colors, total_eval, futures_positions, futures_prices)}
 
   <div class="section-title">섹터별 비중</div>
@@ -1028,6 +1087,15 @@ document.querySelectorAll('th[data-key]').forEach(th => {{
     th.closest('tr').querySelectorAll('th[data-key]').forEach(h => {{
       if (h !== th) h.querySelector('.arrow').textContent = '▲▼';
     }});
+  }});
+}});
+
+// 4사분면 라벨 토글 (금액/비중)
+document.querySelectorAll('.qd-toggle').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    const target = btn.dataset.target;
+    document.body.classList.toggle(`show-${{target}}`);
+    btn.classList.toggle('on');
   }});
 }});
 </script>
