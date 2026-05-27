@@ -117,87 +117,99 @@ def _quadrant_badge(
     )
 
 
-def _isoprofit_paths(
-    sx_fn, sy_fn, y_max: float, total_eval: float, x_abs: float = 50.0
-) -> list[str]:
-    """수익금 등고선 (포지션 KRW 임팩트 = const).
+_ISOPROFIT_NICE = [
+    (1_000_000, "100만"), (2_000_000, "200만"), (3_000_000, "300만"),
+    (5_000_000, "500만"), (10_000_000, "1천만"), (20_000_000, "2천만"),
+    (30_000_000, "3천만"), (50_000_000, "5천만"),
+    (100_000_000, "1억"), (200_000_000, "2억"), (300_000_000, "3억"),
+]
 
-    포지션 KRW profit ≈ total_eval × w × r / 10000 이므로,
-    동일 KRW 임팩트 곡선은 w[%] × r[%] = 10000 · KRW / total_eval.
-    예) total_eval=1억5천 + 500만 임팩트 → k = 333.
 
-    KRW 레벨은 y_max에 맞춰 동적으로 선택 — 최상위 곡선이 plot 상단 가장자리
-    r ≈ x_abs * 0.5 (=25%) 근처를 통과하도록 round-number 후보에서 고른다.
+def _isoprofit_levels(
+    y_max: float, denom: float, x_abs: float = 50.0
+) -> list[tuple[float, str]]:
+    """그릴 수익금 등고선 레벨을 round-number 후보에서 고른다 (오름차순).
+
+    최상위 곡선이 plot 상단(w=y_max) 에서 r ≈ x_abs/2 근처를 지나도록 목표
+    KRW 를 잡고, 그 아래로 **연속된** 4개 레벨을 고른다 (중간 레벨을 건너뛰지
+    않도록 — 예전엔 500만 다음에 1천만을 건너뛰고 2천만을 그려, 800만짜리
+    포지션이 그릴 수 있는 등고선 사이가 비어 500만 선에 붙어 보였다).
     """
-    if total_eval <= 0:
+    if denom <= 0:
+        return []
+    r0 = 0.5 * x_abs
+    krw_top_target = denom * (y_max / 100.0) * r0 / (100.0 + r0)
+    top_i = min(
+        range(len(_ISOPROFIT_NICE)),
+        key=lambda i: abs(
+            math.log(_ISOPROFIT_NICE[i][0]) - math.log(max(krw_top_target, 1.0))
+        ),
+    )
+    idxs = list(range(max(0, top_i - 3), top_i + 1))
+    return [(_ISOPROFIT_NICE[i][0], _ISOPROFIT_NICE[i][1]) for i in idxs]
+
+
+def _isoprofit_paths(
+    sx_fn, sy_fn, y_max: float, denom: float,
+    levels: list[tuple[float, str]], x_abs: float = 50.0,
+) -> list[str]:
+    """수익금 등고선 (포지션 KRW 손익 = const).
+
+    포지션의 평가비중 w[%] = eval/denom×100 (eval=현재 평가금/명목금) 이고
+    수익률 r[%] 은 원가 기준이므로, 실제 KRW 손익은
+        profit = eval × r/(100+r) = denom × (w/100) × r/(100+r).
+    따라서 동일 손익 P 곡선은
+        w(r) = 100·P·(100+r) / (denom·r).
+    (예전엔 profit ≈ eval×r/100 로 근사해 (1+r/100) 배 과대평가됐다.)
+    """
+    if denom <= 0 or not levels:
         return []
 
-    nice = [
-        (1_000_000, "100만"), (2_000_000, "200만"), (3_000_000, "300만"),
-        (5_000_000, "500만"), (10_000_000, "1천만"), (20_000_000, "2천만"),
-        (30_000_000, "3천만"), (50_000_000, "5천만"),
-        (100_000_000, "1억"), (200_000_000, "2억"), (300_000_000, "3억"),
-    ]
-    krw_top_target = 0.5 * x_abs * y_max * total_eval / 10000.0
-    top_i = min(
-        range(len(nice)),
-        key=lambda i: abs(math.log(nice[i][0]) - math.log(max(krw_top_target, 1.0))),
-    )
-    idxs = sorted({max(0, top_i - 3), max(0, top_i - 1), top_i})
-    # 색·강도 모두 1천만 톤(#22c55e/#ef4444 · opacity 0.70)으로 통일
-    krw_targets = [
-        (nice[i][0], nice[i][1], "#22c55e", "#ef4444", 0.70) for i in idxs
-    ]
-    levels: list[tuple[float, str, float, str]] = []
-    for krw, label, c_pos, c_neg, opacity in krw_targets:
-        k = 10000.0 * krw / total_eval
-        levels.append(( k, c_pos, opacity, f"+{label}"))
-        levels.append((-k, c_neg, opacity, f"-{label}"))
-
     paths: list[str] = []
-    for k, color, opacity, label in levels:
-        # r 샘플링 — 부호 따라 r>0 또는 r<0
-        step = 0.5
-        rs = []
-        if k > 0:
-            r = step
-            while r <= x_abs:
-                rs.append(r); r += step
-        else:
-            r = -step
-            while r >= -x_abs:
-                rs.append(r); r -= step
-        pts = []
-        # 명시적 top-edge 진입점 — 곡선이 plot 상단(w=y_max)에 정확히 닿게.
-        r_entry = k / y_max if y_max > 0 else None
-        if r_entry is not None:
-            if k > 0 and 0 < r_entry <= x_abs:
+    for krw, label in levels:
+        for sign, color, lbl in ((1, "#22c55e", f"+{label}"),
+                                 (-1, "#ef4444", f"-{label}")):
+            P = sign * krw
+            opacity = 0.70
+            # w = y_max 가 되는 진입 r (plot 상단 가장자리)
+            denom_r = y_max * denom - 100.0 * P
+            r_entry = (10000.0 * P / denom_r) if denom_r != 0 else None
+            step = 0.25
+            rs: list[float] = []
+            if sign > 0:
+                r = step
+                while r <= x_abs:
+                    rs.append(r); r += step
+            else:
+                r = -step
+                while r >= -x_abs:
+                    rs.append(r); r -= step
+            pts: list[tuple[float, float]] = []
+            if r_entry is not None and (
+                (sign > 0 and 0 < r_entry <= x_abs)
+                or (sign < 0 and -x_abs <= r_entry < 0)
+            ):
                 pts.append((sx_fn(r_entry), sy_fn(y_max)))
-            elif k < 0 and -x_abs <= r_entry < 0:
-                pts.append((sx_fn(r_entry), sy_fn(y_max)))
-        for r in rs:
-            w = k / r  # w × r = k
-            if 0 < w <= y_max:
-                pts.append((sx_fn(r), sy_fn(w)))
-        if not pts:
-            continue
-        d = "M " + " L ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in pts)
-        paths.append(
-            f'<path d="{d}" stroke="{color}" stroke-width="1.4" fill="none" '
-            f'stroke-dasharray="4,3" opacity="{opacity}"/>'
-        )
-        # 라벨은 곡선 중간 지점에 작게 — 데이터 점과 부딪힐 수 있어 일단 생략
-        # 곡선 끝점(가장 윗쪽) 옆에 작은 텍스트
-        top_pt = max(pts, key=lambda p: -p[1])  # y 가 가장 작은 (위쪽) 점
-        tx, ty = top_pt
-        # 라벨 좌측·우측은 부호로 결정
-        anchor = "start" if k > 0 else "end"
-        dx_off = 4 if k > 0 else -4
-        paths.append(
-            f'<text x="{tx + dx_off:.2f}" y="{ty - 4:.2f}" font-size="9" '
-            f'fill="{color}" text-anchor="{anchor}" font-weight="600" '
-            f'opacity="{opacity}">{label}</text>'
-        )
+            for r in rs:
+                w = 100.0 * P * (100.0 + r) / (denom * r)
+                if 0 < w <= y_max:
+                    pts.append((sx_fn(r), sy_fn(w)))
+            if not pts:
+                continue
+            d = "M " + " L ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in pts)
+            paths.append(
+                f'<path d="{d}" stroke="{color}" stroke-width="1.4" fill="none" '
+                f'stroke-dasharray="4,3" opacity="{opacity}"/>'
+            )
+            top_pt = min(pts, key=lambda p: p[1])  # y 가 가장 작은 (위쪽) 점
+            tx, ty = top_pt
+            anchor = "start" if sign > 0 else "end"
+            dx_off = 4 if sign > 0 else -4
+            paths.append(
+                f'<text x="{tx + dx_off:.2f}" y="{ty - 4:.2f}" font-size="9" '
+                f'fill="{color}" text-anchor="{anchor}" font-weight="600" '
+                f'opacity="{opacity}">{lbl}</text>'
+            )
     return paths
 
 
@@ -436,7 +448,8 @@ def _build_quadrants_svg(
 
     # 수익금 iso-profit 등고선 — Y축 weight 기준이 denom(현물+선물 notional)
     # 이므로 분모도 denom 으로 맞춤. 데이터 점 아래, 분리선 위에 깔림.
-    parts.extend(_isoprofit_paths(sx, sy, y_max, denom, x_abs))
+    iso_levels = _isoprofit_levels(y_max, denom, x_abs)
+    parts.extend(_isoprofit_paths(sx, sy, y_max, denom, iso_levels, x_abs))
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
@@ -627,11 +640,12 @@ def _build_quadrants_svg(
         '<div class="qd-legend">' + "".join(legend_items) + "</div>"
     )
 
+    iso_label_str = " / ".join(lbl for _, lbl in iso_levels) if iso_levels else "—"
     caption = (
         '<div class="qd-caption">'
         '점 크기 = 비중 tier (10% 단위) · 세모/네모/원/육각형/별 (T1·T2·T3·T4·T5) · '
         '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
-        '동일 수익금 등고선 (500만 / 1천만 / 3천만 KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
+        f'동일 수익금 등고선 ({iso_label_str} KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
         "</div>"
     )
 
