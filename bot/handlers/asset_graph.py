@@ -10,8 +10,8 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.asset_history import compute_daily_nav, render_asset_graph, get_all_cash_events
-from storage.json_store import load_holdings
+from bot.asset_history import compute_profit_trend, render_asset_graph
+from storage.json_store import load_account
 
 logger = logging.getLogger(__name__)
 
@@ -36,34 +36,21 @@ async def asset_graph_handler(
         )
         return
 
-    rows = compute_daily_nav()
-    events = get_all_cash_events()
-    auto = [e for e in events if e.get("source") == "auto"]
-    user_ev = [e for e in events if e.get("source") == "user" and e.get("type") != "seed"]
-    pct = (rows[-1]["nav"] / rows[0]["nav"] - 1) * 100 if rows else 0
+    rows = compute_profit_trend()
+    last = rows[-1] if rows else None
+    account = load_account()
+    initial = float(account.get("initial_capital") or 0)
 
-    # 신용 제외 — 오늘 기준
-    holdings = load_holdings()
-    total_credit = sum(float(h.get("credit_loan", 0) or 0)
-                       for h in holdings if h.get("quantity", 0) > 0)
-    net_nav = rows[-1]["nav"] - total_credit
-
-    caption_lines = [
-        f"<b>자산 추이</b>  ·  {rows[0]['date']} ~ {rows[-1]['date']}",
-        f"첫날 {int(rows[0]['nav']):,}원 → 오늘 {int(rows[-1]['nav']):,}원 ({pct:+.1f}%)",
-    ]
-    if total_credit > 0:
-        caption_lines.append(
-            f"신용 제외(오늘): {int(net_nav):,}원  "
-            f"(신용잔액 -{int(total_credit):,}원)"
-        )
-    if user_ev:
-        caption_lines.append(f"\n📌 등록 입출금 {len(user_ev)}건")
-    if auto:
-        caption_lines.append(
-            f"⚠️ 자동 추정 입출금 {len(auto)}건(★ 표시) — `입금`/`출금` 명령으로 실제 시점 등록 권장"
-        )
-    caption = "\n".join(caption_lines)
+    caption = "자산 추이"
+    if last:
+        asset = last["asset"]
+        pct = (asset / initial - 1) * 100 if initial > 0 else 0.0
+        caption = "\n".join([
+            f"<b>수익금·평가금 추이</b>  ·  {rows[0]['date']} ~ {last['date']}",
+            f"평가금 {int(asset):,}원 (초기자본 대비 {pct:+.1f}%)",
+            f"실현 {int(last['realized']):,}원 · 미실현 {int(last['unrealized']):,}원 "
+            f"· 합계 {int(last['profit']):,}원",
+        ])
 
     await context.bot.send_photo(
         chat_id=chat_id, photo=buf, caption=caption, parse_mode="HTML",
