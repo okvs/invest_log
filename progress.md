@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 마진콜 유지증거금 — 실측 비율 적용 + 토글버튼 한 줄 위로 (2026-05-27) — 유지증거금을 2/3 추정 대신 `account.json`의 `futures_maintenance_ratio`(현재 0.7444 = 위탁의 74.4%, 사용자 실측)로 계산: `유지 = 위탁증거금 합 × 비율`. 포지션이 바뀌어도 위탁에 비례. 배너에 "유지증거금 NNNN만(위탁 × 74.4%)" 표기, 현재 마진콜 -28.0%. `build_futures_section(maintenance_ratio=)` → `build_html_report(futures_maintenance_ratio=)` → dashboard. 4사분면 금액/비중 토글버튼 `top:6.5%→3%`(한 줄 위). 148 passed.
 - [x] 선물 섹션에 마진콜(추가증거금) 예상 하락률 배너 추가 (2026-05-27) — `bot/futures_report.py`. 순자산(예수금+위탁증거금+미실현)이 유지증거금 밑으로 내려가는 일괄 변동률 `x*=(equity-maint)/signed_notional` 계산. 롱/숏 부호 반영(`total_notional_signed`), 유지증거금은 포지션 maintenance_margin 우선·없으면 위탁×2/3(`MAINTENANCE_RATIO`). 배너에 가용예수금 소진 지점·순자산·유지증거금도 표기. 현재 -30.4% 하락 시 마진콜. 텔레그램 발송 완료. 148 passed.
 - [x] 4사분면 등고선 1천만/3천만 2개만 표시 (2026-05-27) — 점선이 빽빽해 `_isoprofit_levels`가 연속 4개 대신 한 칸 건너뛴 2개(top_i, top_i-2)만 반환. 현재 포트폴리오 기준 1천만/3천만. 캡션 동적 반영. 148 passed.
 - [x] KIS 선물 시세 다건 조회 스로틀+재시도 (2026-05-27) — `잔고`에서 선물 4건 연속 조회 시 초당 거래건수 초과(EGW00201)로 일부가 yfinance 폴백되던 문제. `bot/kis_futures.py`에 호출 간 최소 간격 스로틀(`_throttle`, 기본 0.35s·`KIS_QUOTE_MIN_INTERVAL`), EGW00201 백오프 재시도(0.6→1.2→2.4s, 최대 3회), `KisClient` 메모이즈 추가. 적용 후 4건 모두 `src=kis`. 148 passed.

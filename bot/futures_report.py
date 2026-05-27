@@ -22,6 +22,7 @@ def _format_man(n: float) -> str:
 def _margin_call_banner(
     equity_now: float, maint_total: float, total_margin: float,
     free_cash: float, total_unrealized: float, signed_notional: float,
+    maint_note: str = "위탁 × 2/3 가정",
 ) -> str:
     """보유 선물 현재가가 일괄로 몇 % 움직이면 마진콜(추가증거금)이 걸리는지 배너.
 
@@ -55,9 +56,9 @@ def _margin_call_banner(
     sub_parts: list[str] = []
     if 0 < x_cash < x_call:  # 순롱 기준 가용현금이 먼저 소진되는 지점
         sub_parts.append(f"가용예수금 소진 {sign_txt}{abs(x_cash) * 100:.1f}%")
-    sub_parts.append("유지증거금 = 위탁 × 2/3 가정")
     sub_parts.append(
-        f"현 순자산 {_format_man(equity_now)} · 유지증거금 {_format_man(maint_total)}"
+        f"현 순자산 {_format_man(equity_now)} · "
+        f"유지증거금 {_format_man(maint_total)}({maint_note})"
     )
     sub_txt = " · ".join(sub_parts)
 
@@ -83,6 +84,7 @@ def build_futures_section(
     current_prices: dict | None = None,
     total_equity: float | None = None,
     futures_cash: float | None = None,
+    maintenance_ratio: float | None = None,
 ) -> str:
     """선물 포지션을 HTML 조각으로 반환. 빈 리스트면 빈 문자열.
 
@@ -91,6 +93,8 @@ def build_futures_section(
       current_prices: 두 가지 포맷 지원 (호환):
         - {"005930|202606": {"price": ..., "change_pct": ..., "source": ...}, ...}
         - {"005930": <price>, ...}  (구버전 — change_pct 없음)
+      maintenance_ratio: 유지증거금 ÷ 위탁증거금 비율(실측). 주어지면 마진콜
+        기준선으로 `위탁증거금 합 × 이 비율`을 쓰고, 없으면 위탁 × 2/3 추정치.
     """
     active = [p for p in positions if p.get("contracts", 0) > 0]
     if not active:
@@ -249,10 +253,17 @@ def build_futures_section(
 
     # 마진콜(추가증거금) 예상 — 보유 선물 현재가가 일괄로 몇 % 움직이면 순자산이
     # 유지증거금 밑으로 내려가는지. 순자산 = 예탁금 + 현재 미실현.
+    # 유지증거금은 실측 비율(maintenance_ratio)이 있으면 `위탁 × 비율`, 없으면 위탁×2/3.
+    if maintenance_ratio and maintenance_ratio > 0:
+        maint_for_call = total_margin * float(maintenance_ratio)
+        maint_note = f"위탁 × {float(maintenance_ratio) * 100:.1f}%"
+    else:
+        maint_for_call = total_maint
+        maint_note = "위탁 × 2/3 가정"
     equity_now = deposit_total + total_unrealized
     margin_call_banner = _margin_call_banner(
-        equity_now, total_maint, total_margin, fc_val,
-        total_unrealized, total_notional_signed,
+        equity_now, maint_for_call, total_margin, fc_val,
+        total_unrealized, total_notional_signed, maint_note,
     )
 
     futures_cash_card = (

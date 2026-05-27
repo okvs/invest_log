@@ -674,6 +674,7 @@ def build_html_report(
     futures_positions: list[dict] | None = None,
     futures_prices: dict[str, float] | None = None,
     futures_cash: float | None = None,
+    futures_maintenance_ratio: float | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -1029,7 +1030,7 @@ def build_html_report(
 
   /* 4사분면 라벨 토글 — 차트 Q1(잘하는 것) 근처에 오버레이 */
   .qd-chart-wrap {{ position:relative; }}
-  .qd-toolbar {{ position:absolute; top:6.5%; right:16%;
+  .qd-toolbar {{ position:absolute; top:3%; right:16%;
                  display:flex; flex-direction:column; gap:6px; z-index:5; }}
   .qd-toggle {{ background:rgba(26,26,36,0.85); color:#888; border:1px solid #333;
                 padding:4px 10px; border-radius:6px; cursor:pointer;
@@ -1109,7 +1110,7 @@ def build_html_report(
 
   {"<div class='warning'>⚠ 종목코드 미등록: " + ", ".join(missing) + "</div>" if missing else ""}
 
-  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining, futures_cash=futures_cash_val)}
+  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining, futures_cash=futures_cash_val, maintenance_ratio=futures_maintenance_ratio)}
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{

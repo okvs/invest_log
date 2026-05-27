@@ -334,6 +334,7 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         user_capital = account.get("initial_capital")
         user_cash = account.get("cash")
         user_futures_cash = account.get("futures_cash")
+        user_futures_maint_ratio = account.get("futures_maintenance_ratio")
         html_file = build_html_report(
             holdings,
             initial_capital=user_capital,
@@ -342,6 +343,7 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             futures_positions=futures_positions,
             futures_prices=futures_prices,
             futures_cash=user_futures_cash,
+            futures_maintenance_ratio=user_futures_maint_ratio,
         )
         html_file = _save_html_locally(html_file, "my_portfolio")
         await update.message.reply_document(document=html_file, caption="내 포트폴리오")
