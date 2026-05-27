@@ -14,6 +14,7 @@ import os
 import re
 import ssl
 import sys
+import threading
 import time
 import urllib.request
 import zipfile
@@ -40,6 +41,29 @@ MASTER_TTL = 24 * 60 * 60  # 하루
 # 시세 캐시 (5분) — 같은 호출이 짧은 간격으로 반복될 때 KIS 한도 절약
 _PRICE_CACHE: dict[str, tuple[dict, float]] = {}
 PRICE_CACHE_TTL = 5 * 60
+
+# KIS 초당 거래건수(EGW00201) 회피용 스로틀 — 연속 호출 사이 최소 간격.
+# KIS_QUOTE_MIN_INTERVAL 환경변수로 조정 가능(초).
+_MIN_CALL_INTERVAL = float(os.environ.get("KIS_QUOTE_MIN_INTERVAL", "0.35"))
+_RATE_LIMIT_RETRIES = 3   # 레이트리밋 시 재시도 횟수
+_RATE_LIMIT_BACKOFF = 0.6  # 첫 백오프(초), 시도마다 2배
+_throttle_lock = threading.Lock()
+_last_call_ts = 0.0
+
+
+def _throttle() -> None:
+    """직전 KIS 호출과 최소 간격을 보장 (스레드 안전)."""
+    global _last_call_ts
+    with _throttle_lock:
+        wait = _MIN_CALL_INTERVAL - (time.time() - _last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_ts = time.time()
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "EGW00201" in msg or "초당 거래건수" in msg
 
 
 def _ensure_stocks_battle_on_path() -> None:
@@ -129,12 +153,23 @@ def lookup_futures_code(symbol: str, contract_month: str) -> Optional[str]:
     return None
 
 
-def _build_client():
-    """stocks_battle 의 KisClient 인스턴스. 환경변수에 따라 실전/모의 자동 선택."""
-    _ensure_stocks_battle_on_path()
-    from broker.kis import KisClient  # type: ignore  # noqa: E402
+_CLIENT = None
+_client_lock = threading.Lock()
 
-    return KisClient()
+
+def _build_client():
+    """stocks_battle 의 KisClient 인스턴스(메모이즈). 환경변수에 따라 실전/모의 자동 선택.
+
+    호출마다 새로 만들면 토큰 재발급 등 부가 요청이 늘어 KIS 한도를 더 빨리
+    소진하므로 프로세스당 1개만 만들어 재사용한다.
+    """
+    global _CLIENT
+    with _client_lock:
+        if _CLIENT is None:
+            _ensure_stocks_battle_on_path()
+            from broker.kis import KisClient  # type: ignore  # noqa: E402
+            _CLIENT = KisClient()
+        return _CLIENT
 
 
 def _parse_float(s) -> Optional[float]:
@@ -164,14 +199,26 @@ def fetch_kis_futures_quote(
         if cached and time.time() - cached[1] < PRICE_CACHE_TTL:
             return cached[0]
 
-    try:
-        client = _build_client()
-        # 개별주식선물 시장구분 = JF (지수선물은 F, 지수옵션은 O)
-        output = client.futures_current_price(code, mrkt_div="JF")
-    except Exception as e:
-        logger.warning("KIS 선물 시세 조회 실패 (%s %s → %s): %s",
-                       symbol, contract_month, code, e)
-        return None
+    output = None
+    backoff = _RATE_LIMIT_BACKOFF
+    for attempt in range(_RATE_LIMIT_RETRIES + 1):
+        try:
+            client = _build_client()
+            _throttle()
+            # 개별주식선물 시장구분 = JF (지수선물은 F, 지수옵션은 O)
+            output = client.futures_current_price(code, mrkt_div="JF")
+            break
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < _RATE_LIMIT_RETRIES:
+                logger.info("KIS 레이트리밋 — %.1fs 후 재시도 (%s %s, %d/%d)",
+                            backoff, symbol, contract_month,
+                            attempt + 1, _RATE_LIMIT_RETRIES)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            logger.warning("KIS 선물 시세 조회 실패 (%s %s → %s): %s",
+                           symbol, contract_month, code, e)
+            return None
 
     if not output:
         return None
