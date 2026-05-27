@@ -131,9 +131,9 @@ def _isoprofit_levels(
     """그릴 수익금 등고선 레벨을 round-number 후보에서 고른다 (오름차순).
 
     최상위 곡선이 plot 상단(w=y_max) 에서 r ≈ x_abs/2 근처를 지나도록 목표
-    KRW 를 잡고, 그 아래로 **연속된** 4개 레벨을 고른다 (중간 레벨을 건너뛰지
-    않도록 — 예전엔 500만 다음에 1천만을 건너뛰고 2천만을 그려, 800만짜리
-    포지션이 그릴 수 있는 등고선 사이가 비어 500만 선에 붙어 보였다).
+    KRW 를 잡고, 그 아래로 한 단계 건너뛴 2개 레벨을 고른다 (top_i, top_i-2).
+    예전엔 4개(연속) 다 그렸지만 점선이 빽빽해 보여, 최상위와 그 아래 한 칸
+    건너뛴 레벨만 남긴다 — 현재 포트폴리오 기준 1천만/3천만 두 개.
     """
     if denom <= 0:
         return []
@@ -145,7 +145,7 @@ def _isoprofit_levels(
             math.log(_ISOPROFIT_NICE[i][0]) - math.log(max(krw_top_target, 1.0))
         ),
     )
-    idxs = list(range(max(0, top_i - 3), top_i + 1))
+    idxs = sorted({i for i in (top_i - 2, top_i) if i >= 0})
     return [(_ISOPROFIT_NICE[i][0], _ISOPROFIT_NICE[i][1]) for i in idxs]
 
 
