@@ -9,10 +9,65 @@ from datetime import date
 
 from bot.formatters import format_number
 
+# 유지위탁증거금률 ÷ 위탁증거금률 — KRX 주식선물은 보통 위탁의 2/3 수준.
+# 포지션에 maintenance_margin 이 직접 세팅돼 있으면 그 값을 우선 쓴다.
+MAINTENANCE_RATIO = 2.0 / 3.0
+
 
 def _format_man(n: float) -> str:
     man = int(n // 10000)
     return f"{man:,}만"
+
+
+def _margin_call_banner(
+    equity_now: float, maint_total: float, total_margin: float,
+    free_cash: float, total_unrealized: float, signed_notional: float,
+) -> str:
+    """보유 선물 현재가가 일괄로 몇 % 움직이면 마진콜(추가증거금)이 걸리는지 배너.
+
+    순자산(예수금 + 위탁증거금 + 미실현) = E, 일괄 변동률 x 에서 longs/shorts
+    부호를 반영한 명목금 합 signed_notional 만큼 손익이 바뀐다:
+        E(x) = equity_now - x · signed_notional.
+    E(x) 가 유지증거금(maint_total) 밑으로 내려가는 x* 를 구한다.
+        x* = (equity_now - maint_total) / signed_notional.
+    signed_notional > 0(순롱)이면 x*>0 은 '하락', <0(순숏)이면 '상승' 트리거.
+    """
+    if total_margin <= 0 or signed_notional == 0:
+        return ""
+
+    x_call = (equity_now - maint_total) / signed_notional
+    x_cash = (free_cash + total_unrealized) / signed_notional  # 순자산이 위탁증거금까지 내려오는 변동
+    net_long = signed_notional > 0
+    sign_txt = "-" if net_long else "+"
+    move = "하락" if net_long else "상승"
+
+    if x_call <= 0:
+        head = "보유 선물이 현재 이미 추가증거금(마진콜) 필요 수준입니다"
+    elif x_call >= 1:
+        head = f"현재가가 일괄 100% {move}해도 마진콜 없음 (증거금 여유 충분)"
+    else:
+        head = (
+            f"보유 선물 현재가가 일괄 "
+            f"<b style='color:#f87171'>{sign_txt}{abs(x_call) * 100:.1f}%</b> "
+            f"{move}하면 추가증거금(마진콜) 발생 예상"
+        )
+
+    sub_parts: list[str] = []
+    if 0 < x_cash < x_call:  # 순롱 기준 가용현금이 먼저 소진되는 지점
+        sub_parts.append(f"가용예수금 소진 {sign_txt}{abs(x_cash) * 100:.1f}%")
+    sub_parts.append("유지증거금 = 위탁 × 2/3 가정")
+    sub_parts.append(
+        f"현 순자산 {_format_man(equity_now)} · 유지증거금 {_format_man(maint_total)}"
+    )
+    sub_txt = " · ".join(sub_parts)
+
+    return (
+        "<div style='margin-top:12px;padding:10px 14px;border-radius:8px;"
+        "background:#161620;border:1px solid #2a2a3a;font-size:13px;color:#e5e7eb'>"
+        f"{head}"
+        f"<div style='font-size:11px;color:#888;margin-top:3px'>{sub_txt}</div>"
+        "</div>"
+    )
 
 
 def _days_to_expiry(expiry_iso: str) -> int | None:
@@ -45,7 +100,9 @@ def build_futures_section(
     rows_html = ""
     total_unrealized = 0.0
     total_margin = 0.0
+    total_maint = 0.0  # 유지증거금 합 (마진콜 기준선)
     total_notional = 0.0  # 현재가 × 계약수 × 승수 합 (= 선물 평가액)
+    total_notional_signed = 0.0  # 롱 +, 숏 - (마진콜 하락률 계산용)
     sources_seen: set[str] = set()
 
     for p in active:
@@ -97,6 +154,7 @@ def build_futures_section(
             notional = avg * contracts * mult
             unrealized_pct = (unrealized / notional * 100) if notional else 0.0
             total_notional += float(cur) * contracts * mult
+            total_notional_signed += float(cur) * contracts * mult * sign
 
         # 기초자산 셀
         if u_price is None:
@@ -113,6 +171,10 @@ def build_futures_section(
 
         total_unrealized += unrealized
         total_margin += margin
+        maint = float(p.get("maintenance_margin", 0) or 0)
+        if maint <= 0:
+            maint = margin * MAINTENANCE_RATIO
+        total_maint += maint
 
         days = _days_to_expiry(p.get("expiry_date", ""))
         if days is None:
@@ -185,6 +247,14 @@ def build_futures_section(
     fc_val = float(futures_cash) if futures_cash else 0.0
     deposit_total = fc_val + total_margin  # 선물 예탁금 = 가용 + 위탁증거금
 
+    # 마진콜(추가증거금) 예상 — 보유 선물 현재가가 일괄로 몇 % 움직이면 순자산이
+    # 유지증거금 밑으로 내려가는지. 순자산 = 예탁금 + 현재 미실현.
+    equity_now = deposit_total + total_unrealized
+    margin_call_banner = _margin_call_banner(
+        equity_now, total_maint, total_margin, fc_val,
+        total_unrealized, total_notional_signed,
+    )
+
     futures_cash_card = (
         "<div class='card'>"
         "<div class='label'>선물 예수금</div>"
@@ -221,6 +291,7 @@ def build_futures_section(
       <div class="sub" style="color:#9ca3af">전체 자산 중 증거금 비중</div>
     </div>
   </div>
+  {margin_call_banner}
   <div class="table-wrap">
     <table>
       <thead>
