@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 4사분면 iso-profit 등고선 1천만/3천만 고정 (2026-05-28) — 동적 선택이 denom·y_max 변동으로 target KRW 가 2천만/3천만 로그-중점을 넘나들며 1천만·3천만 ↔ 500만·2천만 사이로 튕겼다. `_isoprofit_levels` 를 `[(1천만), (3천만)]` 두 레벨로 hardcode. 148 passed.
 - [x] 4사분면 X축 비대칭 확장 (-50%~+100%) (2026-05-28) — 수익측만 +100%까지 확장(손실측은 -50% 유지). `x_abs` 단일 변수를 `x_pos=100`/`x_neg=-50`로 분리, ticks/iso_levels/iso_paths/clip 임계값을 모두 비대칭으로 갱신. 등고선 레벨 선택은 `min(x_pos,x_neg_abs)/2` 기준으로 잡아 X 확장 전후 동일하게 1천만/3천만 두 개 유지. KODEX반도체레버리지(+110%)만 우측 클립 + 물결 표시. 148 passed.
 - [x] 마진콜 유지증거금 — 실측 비율 적용 + 토글버튼 한 줄 위로 (2026-05-27) — 유지증거금을 2/3 추정 대신 `account.json`의 `futures_maintenance_ratio`(현재 0.7444 = 위탁의 74.4%, 사용자 실측)로 계산: `유지 = 위탁증거금 합 × 비율`. 포지션이 바뀌어도 위탁에 비례. 배너에 "유지증거금 NNNN만(위탁 × 74.4%)" 표기, 현재 마진콜 -28.0%. `build_futures_section(maintenance_ratio=)` → `build_html_report(futures_maintenance_ratio=)` → dashboard. 4사분면 금액/비중 토글버튼 `top:6.5%→3%`(한 줄 위). 148 passed.
 - [x] 선물 섹션에 마진콜(추가증거금) 예상 하락률 배너 추가 (2026-05-27) — `bot/futures_report.py`. 순자산(예수금+위탁증거금+미실현)이 유지증거금 밑으로 내려가는 일괄 변동률 `x*=(equity-maint)/signed_notional` 계산. 롱/숏 부호 반영(`total_notional_signed`), 유지증거금은 포지션 maintenance_margin 우선·없으면 위탁×2/3(`MAINTENANCE_RATIO`). 배너에 가용예수금 소진 지점·순자산·유지증거금도 표기. 현재 -30.4% 하락 시 마진콜. 텔레그램 발송 완료. 148 passed.

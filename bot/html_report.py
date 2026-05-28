@@ -129,30 +129,17 @@ def _isoprofit_levels(
     y_max: float, denom: float,
     x_pos: float = 50.0, x_neg_abs: float | None = None,
 ) -> list[tuple[float, str]]:
-    """그릴 수익금 등고선 레벨을 round-number 후보에서 고른다 (오름차순).
+    """수익금 등고선 레벨 — 1천만/3천만 두 단계 고정 (사용자 선호).
 
-    최상위 곡선이 plot 상단(w=y_max) 에서 r ≈ (작은쪽 폭)/2 근처를 지나도록 목표
-    KRW 를 잡고, 그 아래로 한 단계 건너뛴 2개 레벨을 고른다 (top_i, top_i-2).
-    예전엔 4개(연속) 다 그렸지만 점선이 빽빽해 보여, 최상위와 그 아래 한 칸
-    건너뛴 레벨만 남긴다 — 현재 포트폴리오 기준 1천만/3천만 두 개.
-
-    비대칭 X축(예: -50%~+100%)에서는 작은 쪽(=음수측) 절반을 기준으로 잡아
-    레벨 선택이 X 확장 전후로 흔들리지 않게 한다.
+    예전엔 portfolio scale (denom × y_max) 에 맞춰 동적 선택했지만, denom 이
+    조금만 변하면(현물 평가금 변동 등) target KRW 가 2천만/3천만 로그-중점
+    근처에서 튕겨 1천만·3천만 ↔ 500만·2천만 사이를 오갔다. 사용자가 두
+    레벨을 명시했으므로 그대로 고정. 포트폴리오 규모가 크게 달라지면 다시 조정.
+    인자 (y_max, x_pos, x_neg_abs) 는 호출 시그니처 호환용으로 받기만 한다.
     """
     if denom <= 0:
         return []
-    if x_neg_abs is None:
-        x_neg_abs = x_pos
-    r0 = 0.5 * min(x_pos, x_neg_abs)
-    krw_top_target = denom * (y_max / 100.0) * r0 / (100.0 + r0)
-    top_i = min(
-        range(len(_ISOPROFIT_NICE)),
-        key=lambda i: abs(
-            math.log(_ISOPROFIT_NICE[i][0]) - math.log(max(krw_top_target, 1.0))
-        ),
-    )
-    idxs = sorted({i for i in (top_i - 2, top_i) if i >= 0})
-    return [(_ISOPROFIT_NICE[i][0], _ISOPROFIT_NICE[i][1]) for i in idxs]
+    return [(10_000_000, "1천만"), (30_000_000, "3천만")]
 
 
 def _isoprofit_paths(
