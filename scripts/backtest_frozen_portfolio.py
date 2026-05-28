@@ -683,12 +683,12 @@ def run_backtest() -> dict | None:
         float(h.get("credit_loan", 0) or 0) for h in load_holdings()
     )
 
-    # 5) 자산그래프 식으로 현재 NAV 계산 (cash-based 와 회계적으로 동치)
+    # 5) 자산그래프와 동일한 식: NAV = initial + 누적 실현(현물+선물) + 미실현
+    # 입출금·신용 차감 무시 (사용자 요청: 순수 손익 NAV)
     nav_actual_today_gross = (
-        initial + total_dep + total_realized
-        + cur_unrealized_spot + cur_unrealized_futures
+        initial + total_realized + cur_unrealized_spot + cur_unrealized_futures
     )
-    nav_actual_today = nav_actual_today_gross - cur_credit  # 신용 제외 순자산
+    nav_actual_today = nav_actual_today_gross  # 신용 차감 안 함 (gross = net)
 
     # 6) 흰점선용 — 자산그래프 라인 그대로 (gross, 현물만, 신용 미차감)
     try:
@@ -698,18 +698,17 @@ def run_backtest() -> dict | None:
         print("[warn] compute_profit_trend 실패", file=sys.stderr)
         graph_asset_by_d = {}
 
-    # 각 D(거래일만) 에 대해 동결-오늘 NAV
+    # 각 D(거래일만) 에 대해 동결-오늘 NAV — 식 통일
+    # NAV = initial + 누적 실현(D 까지, 현물+선물) + 미실현(D 보유 × 오늘가, 현물+선물)
     rows: list[dict] = []
     for d_ in trade_dates:
         unreal_frozen = _unrealized_frozen(d_)
         cum_real_d = cum_realized_by_d.get(d_, 0.0)
-        credit_d = credit_by_d.get(d_, 0.0)
-        nav_frozen_today_gross = (
-            initial + total_dep + cum_real_d + unreal_frozen
-        )
-        nav_frozen_today = nav_frozen_today_gross - credit_d
+        credit_d = credit_by_d.get(d_, 0.0)  # 표시용 (식에는 안 들어감)
+        nav_frozen_today_gross = initial + cum_real_d + unreal_frozen
+        nav_frozen_today = nav_frozen_today_gross  # 신용 차감 안 함
 
-        # 그날 실제 NAV (흰점선) — 자산그래프 라인 그대로
+        # 그날 실제 NAV (흰점선) — 자산그래프 와 동일 식 (선물 포함, 신용 미차감)
         nav_actual_d = graph_asset_by_d.get(d_, nav_frozen_today_gross)
 
         rows.append({
@@ -794,15 +793,14 @@ def run_backtest() -> dict | None:
         })
 
     summary_text = (
-        f"=== 백테스트: 포트폴리오 동결 시 오늘 순자산 (현물+선물, 신용 제외) ===\n"
+        f"=== 백테스트: 포트폴리오 동결 시 오늘 NAV ===\n"
+        f"식: initial + 누적 실현(현물+선물) + 미실현(현물+선물)\n"
         f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)\n"
-        f"현재 순자산: {_fmt_krw(nav_actual_today)}  "
-        f"= 총자산 {_fmt_krw(nav_actual_today_gross)} − 신용 {_fmt_krw(cur_credit)}\n"
-        f"  (현물 {_fmt_krw(cur_holdings_value)} + 선물 {_fmt_krw(cur_futures_value)} "
-        f"+ 현금 {_fmt_krw(today_total_cash)})\n"
-        f"초기자본: {_fmt_krw(initial)} "
-        f"({(nav_actual_today/initial-1)*100:+.1f}% 순)\n"
-        f"→ 현재 순자산 초과 거래일: {len(higher)}/{len(rows)}건"
+        f"현재 NAV: {_fmt_krw(nav_actual_today)}  "
+        f"(= 초기자본 {_fmt_krw(initial)} + 실현 {_fmt_krw(total_realized)} "
+        f"+ 미실현 {_fmt_krw(cur_unrealized_spot + cur_unrealized_futures)})\n"
+        f"수익률: {(nav_actual_today/initial-1)*100:+.1f}%\n"
+        f"→ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건"
     )
     table_lines = [
         f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재':>14} {'그날 실제 NAV':>16}  {'표시'}",
@@ -832,7 +830,7 @@ def run_backtest() -> dict | None:
     ax.plot(xs, ys_frozen, color="#3b82f6", linewidth=2.4,
             label="그날 동결 → 오늘 순자산", zorder=5)
     ax.axhline(nav_actual_today, color="#f59e0b", linewidth=1.6, linestyle="--",
-               label=f"현재 순자산 {_fmt_krw(nav_actual_today)} (신용 제외)", zorder=4)
+               label=f"현재 NAV {_fmt_krw(nav_actual_today)}", zorder=4)
     ax.axhline(initial, color="#22c55e", linewidth=0.7, linestyle=":", alpha=0.5)
     ax.annotate(f"초기자본 {_fmt_krw(initial)}", xy=(xs[0], initial),
                 xytext=(0, 6), textcoords="offset points",
@@ -853,13 +851,13 @@ def run_backtest() -> dict | None:
     for spine in ("bottom", "left"):
         ax.spines[spine].set_color("#444")
     ax.tick_params(colors="#9ca3af", labelsize=10)
-    ax.set_ylabel("순자산 (KRW, 신용 제외)", color="#9ca3af", fontsize=9)
+    ax.set_ylabel("NAV (KRW) = 초기 + 실현 + 미실현", color="#9ca3af", fontsize=9)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12))
     ax.legend(loc="lower right", facecolor="#16161e", edgecolor="#333",
               labelcolor="#ddd", fontsize=9)
     ax.set_title(
-        f"포트폴리오 동결 백테스트 — 현물+선물, 신용 제외 — "
+        f"포트폴리오 동결 백테스트 — 현물+선물 — "
         f"{start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
         color="#fff", fontsize=12, loc="left", pad=12,
     )

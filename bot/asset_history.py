@@ -137,17 +137,102 @@ def _fetch_pykrx_closes(
     return out
 
 
+def _load_futures_tx() -> list[dict]:
+    from storage.json_store import load as _load_json
+    return _load_json("futures_transactions.json").get("transactions", [])
+
+
+def _load_futures_pos() -> list[dict]:
+    from storage.json_store import load as _load_json
+    return _load_json("futures_positions.json").get("positions", [])
+
+
+# 이름 정규화 — 백테스트와 동일한 alias
+_NAME_ALIAS = {
+    "G넥스원": "LIG넥스원",
+    "반도체레버리지": "KODEX반도체레버리지",
+    "LIG디펜스앤에어로스페이스": "LIG넥스원",
+}
+
+
+def _canon(name: str) -> str:
+    return _NAME_ALIAS.get(name, name)
+
+
+def _reconstruct_daily_futures(
+    futures_tx: list[dict], seed_positions: list[dict], dates: list[date]
+) -> dict[date, dict[str, dict]]:
+    """각 date 의 선물 포지션 {pid: {name, dir, contracts, avg_entry, mult}}.
+
+    seed positions(전부 백로딩 + entry_date 시점에 open 가정) + transactions 합성.
+    """
+    # seed → synthetic open
+    tx_pids = {t.get("position_id") for t in futures_tx if t.get("position_id")}
+    synthetic: list[dict] = []
+    for p in seed_positions:
+        pid = p.get("id")
+        if pid in tx_pids:
+            continue
+        synthetic.append({
+            "id": f"seed-{pid}",
+            "type": "open",
+            "name": p.get("name", ""),
+            "direction": p.get("direction", "long"),
+            "contracts": int(p.get("contracts", 0)),
+            "price": float(p.get("avg_entry_price", 0)),
+            "multiplier": int(p.get("multiplier", 10)),
+            "date": (p.get("entry_date", "") or "") + "T00:00:00",
+            "position_id": pid,
+        })
+    all_tx = sorted(list(futures_tx) + synthetic, key=lambda x: x.get("date", ""))
+    out: dict[date, dict[str, dict]] = {d: {} for d in dates}
+    state: dict[str, dict] = {}
+    idx = 0
+    for d in dates:
+        while idx < len(all_tx) and date.fromisoformat(_date_only(all_tx[idx]["date"])) <= d:
+            t = all_tx[idx]
+            pid = t.get("position_id") or t.get("id")
+            ctr = int(t.get("contracts", 0))
+            pr = float(t.get("price", 0))
+            mult = int(t.get("multiplier", 10))
+            ttype = t.get("type", "")
+            if ttype in {"open", "roll_open"}:
+                cur = state.get(pid)
+                if cur is None:
+                    state[pid] = {
+                        "name": t.get("name", ""),
+                        "direction": t.get("direction", "long"),
+                        "contracts": ctr,
+                        "avg_entry": pr,
+                        "multiplier": mult,
+                    }
+                else:
+                    nc = cur["contracts"] + ctr
+                    if nc > 0:
+                        cur["avg_entry"] = (
+                            cur["avg_entry"] * cur["contracts"] + pr * ctr
+                        ) / nc
+                    cur["contracts"] = nc
+            elif ttype in {"close", "roll_close"}:
+                cur = state.get(pid)
+                if cur:
+                    cur["contracts"] -= ctr
+                    if cur["contracts"] <= 0:
+                        state.pop(pid, None)
+            idx += 1
+        out[d] = {pid: dict(v) for pid, v in state.items()}
+    return out
+
+
 def compute_profit_trend() -> list[dict]:
-    """일별 수익금·평가금 추이 행 리스트.
+    """일별 NAV 추이 — 식: initial + 누적 실현(현물+선물) + 미실현(현물+선물).
 
     각 row: {date, realized, unrealized, profit, deposits, asset}
-      - realized   = 누적 실현손익 (매도 기록 profit_loss 합산)
-      - unrealized = 당일 보유분 평가손익 (pykrx 종가 − 평단)
+      - realized   = 누적 실현 (현물 매도 profit_loss + 선물 청산 pnl)
+      - unrealized = 그날 보유 미실현 (현물 종가−평단 + 선물 종가−평균진입)
       - profit     = realized + unrealized
-      - asset      = 초기자본 + 누적 입출금 + profit  (= 그날 실제 자산)
-
-    cash/신용 역산이 아니라 실현손익(정확) + 시세 기반 미실현으로 구성해
-    매도된 종목의 과거 시세 공백 영향을 최소화한다.
+      - deposits   = 누적 입출금 (참고 표시용. asset 식에는 안 들어감)
+      - asset      = initial + profit  (입출금/신용 무시 — 순수 손익 NAV)
     """
     transactions = load_transactions()
     if not transactions:
@@ -161,6 +246,12 @@ def compute_profit_trend() -> list[dict]:
         if t.get("type") == "sell" and t.get("date"):
             realized_by_day[date.fromisoformat(_date_only(t["date"]))] += float(
                 t.get("profit_loss", 0) or 0
+            )
+    futures_tx = _load_futures_tx()
+    for t in futures_tx:
+        if t.get("type") in {"close", "roll_close"} and t.get("date"):
+            realized_by_day[date.fromisoformat(_date_only(t["date"]))] += float(
+                t.get("pnl", 0) or 0
             )
 
     dep_by_day: dict[date, float] = defaultdict(float)
@@ -185,21 +276,38 @@ def compute_profit_trend() -> list[dict]:
         dates.append(d)
         d += timedelta(days=1)
 
-    hold_by_day = _reconstruct_holdings_with_avg(transactions, dates)
+    # 현물 보유 (alias 적용)
+    canon_tx = [dict(t, name=_canon(t.get("name", ""))) for t in transactions]
+    hold_by_day = _reconstruct_holdings_with_avg(canon_tx, dates)
+
+    # 종목 코드 매핑 (alias 적용)
+    name_to_ticker_canon: dict[str, str] = {}
+    for n, t in name_to_ticker.items():
+        name_to_ticker_canon[_canon(n)] = t
     code_by_name: dict[str, str] = {}
-    for n in {t.get("name", "") for t in transactions}:
-        tk = name_to_ticker.get(n, "")
+    for n in {_canon(t.get("name", "")) for t in transactions}:
+        tk = name_to_ticker_canon.get(n, "")
         if tk:
             code_by_name[n] = tk.split(".")[0]
+    # 선물 기초자산도 필요
+    for fp in _load_futures_pos():
+        n = fp.get("name", "")
+        sym = fp.get("symbol", "")
+        if n and sym:
+            code_by_name.setdefault(_canon(n), sym)
+
     price = _fetch_pykrx_closes(code_by_name.values(), start, end)
 
     def close_on(code: str, dd: date) -> float | None:
         cur = dd
-        for _ in range(10):  # 휴장일은 직전 영업일 종가로 ffill
+        for _ in range(10):
             if (code, cur) in price:
                 return price[(code, cur)]
             cur -= timedelta(days=1)
         return None
+
+    # 일별 선물 포지션
+    fut_by_day = _reconstruct_daily_futures(futures_tx, _load_futures_pos(), dates)
 
     rows: list[dict] = []
     rp = 0.0
@@ -208,19 +316,33 @@ def compute_profit_trend() -> list[dict]:
         rp += realized_by_day.get(d, 0.0)
         dp += dep_by_day.get(d, 0.0)
         unreal = 0.0
+        # 현물 미실현
         for name, (qty, avg) in hold_by_day[d].items():
             code = code_by_name.get(name)
             c = close_on(code, d) if code else None
-            if c is None:  # 미매핑/시세없음 → 평단 가정(미실현 0)
+            if c is None:
                 continue
             unreal += (c - avg) * qty
+        # 선물 미실현 (mark-to-market, margin 제외)
+        for pid, fp in fut_by_day[d].items():
+            ctr = int(fp.get("contracts", 0))
+            if ctr <= 0:
+                continue
+            code = code_by_name.get(_canon(fp.get("name", "")))
+            c = close_on(code, d) if code else None
+            if c is None:
+                continue
+            avg = float(fp.get("avg_entry", 0))
+            mult = int(fp.get("multiplier", 10))
+            dir_sign = 1 if fp.get("direction") == "long" else -1
+            unreal += (c - avg) * ctr * mult * dir_sign
         rows.append({
             "date": d,
             "realized": rp,
             "unrealized": unreal,
             "profit": rp + unreal,
             "deposits": dp,
-            "asset": initial + dp + rp + unreal,
+            "asset": initial + rp + unreal,  # 입출금/신용 무시
         })
     return rows
 
