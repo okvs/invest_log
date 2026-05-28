@@ -34,12 +34,21 @@ from matplotlib import font_manager
 from matplotlib.ticker import FuncFormatter
 
 from storage.json_store import (
+    load,
     load_account,
     load_cash_events,
     load_holdings,
     load_ticker_map,
     load_transactions,
 )
+
+
+def _load_futures_transactions() -> list[dict]:
+    return load("futures_transactions.json").get("transactions", [])
+
+
+def _load_futures_positions() -> list[dict]:
+    return load("futures_positions.json").get("positions", [])
 
 
 _KO_FONT_CANDIDATES = [
@@ -137,21 +146,118 @@ def _reconstruct_daily_holdings(
     return out
 
 
+def _seed_futures_synthetic_opens(
+    positions: list[dict], transactions: list[dict]
+) -> list[dict]:
+    """transactions 에 없는 백로딩된 시드 포지션을 synthetic open tx 로 변환.
+
+    entry_date 시점에 (전량) open 된 것처럼 처리. position_id 기준으로 transactions
+    에 한 건이라도 매칭되는 게 있으면 시드 아님(스킵).
+    """
+    tx_pids = {t.get("position_id") for t in transactions if t.get("position_id")}
+    out: list[dict] = []
+    for p in positions:
+        pid = p.get("id")
+        if pid in tx_pids:
+            continue
+        out.append({
+            "id": f"seed-{pid}",
+            "type": "open",
+            "name": p.get("name", ""),
+            "symbol": p.get("symbol", ""),
+            "contract_month": p.get("contract_month", ""),
+            "expiry_date": p.get("expiry_date", ""),
+            "direction": p.get("direction", "long"),
+            "contracts": int(p.get("contracts", 0)),
+            "price": float(p.get("avg_entry_price", 0)),
+            "multiplier": int(p.get("multiplier", 10)),
+            "margin": float(p.get("initial_margin", 0)),
+            "sector": p.get("sector", ""),
+            "date": (p.get("entry_date", "") or "") + "T00:00:00",
+            "position_id": pid,
+            "thesis": p.get("thesis", ""),
+            "_seed": True,
+        })
+    return out
+
+
+def _reconstruct_daily_futures_positions(
+    futures_tx: list[dict], dates: list[date]
+) -> dict[date, dict[str, dict]]:
+    """각 date 시점의 선물 포지션 {position_id: {name, dir, contracts, avg, mult, margin}}.
+
+    open/roll_open → 가중평균 진입가 갱신 + 계약수 + margin 증가.
+    close/roll_close → 계약수 감소(0 되면 제거). margin 비례 감소.
+    """
+    txs = sorted(futures_tx, key=lambda x: x.get("date", ""))
+    out: dict[date, dict[str, dict]] = {d: {} for d in dates}
+    state: dict[str, dict] = {}
+    idx = 0
+    for d in dates:
+        while idx < len(txs) and date.fromisoformat(_date_only(txs[idx]["date"])) <= d:
+            t = txs[idx]
+            pid = t.get("position_id") or t.get("id")
+            ctr = int(t.get("contracts", 0))
+            pr = float(t.get("price", 0))
+            mult = int(t.get("multiplier", 10))
+            mgn = float(t.get("margin", 0))
+            ttype = t.get("type", "")
+            if ttype in {"open", "roll_open"}:
+                cur = state.get(pid)
+                if cur is None:
+                    state[pid] = {
+                        "name": t.get("name", ""),
+                        "symbol": t.get("symbol", ""),
+                        "direction": t.get("direction", "long"),
+                        "contracts": ctr,
+                        "avg_entry": pr,
+                        "multiplier": mult,
+                        "margin": mgn,
+                    }
+                else:
+                    nc = cur["contracts"] + ctr
+                    if nc > 0:
+                        cur["avg_entry"] = (
+                            cur["avg_entry"] * cur["contracts"] + pr * ctr
+                        ) / nc
+                    cur["contracts"] = nc
+                    cur["margin"] += mgn
+            elif ttype in {"close", "roll_close"}:
+                cur = state.get(pid)
+                if cur:
+                    # margin 은 계약수 비례로 환원
+                    if cur["contracts"] > 0:
+                        mgn_per = cur["margin"] / cur["contracts"]
+                    else:
+                        mgn_per = 0
+                    cur["contracts"] -= ctr
+                    cur["margin"] -= mgn_per * ctr
+                    if cur["contracts"] <= 0:
+                        state.pop(pid, None)
+            idx += 1
+        # snapshot
+        out[d] = {pid: dict(v) for pid, v in state.items()}
+    return out
+
+
 def _daily_cash_balance(
     transactions: list[dict],
     cash_events: list[dict],
+    futures_tx: list[dict],
     today_cash: float,
     dates: list[date],
 ) -> dict[date, float]:
-    """장 마감 시점 spot cash 잔고. 오늘 실측 cash 를 anchor 로 역산.
+    """장 마감 시점 통합 cash 잔고 (spot + futures sub-account).
 
-    cash_D = today_cash - (sells_after_D - buys_after_D)
-                        - (dep_after_D - withd_after_D)
+    today_cash 를 anchor 로 역산. 거래 후 누적 cash 변동을 일별로 빼나가
+    이전 일자 cash 를 복원.
 
-    초기자본 + 누적 거래로 forward 계산하면 spot↔futures 서브계좌 이체 등
-    cash_events 에 안 잡힌 흐름 때문에 reality 와 어긋남 — 역산이 더 안전.
+    Cash flow events:
+      - spot buy/sell: ±qty×price
+      - futures open/roll_open: -margin (마진 묶임)
+      - futures close/roll_close: +margin + pnl (마진 회수 + 실현손익)
+      - deposit/withdraw: ±amount
     """
-    # 일별 net cash flow (>0 = cash 증가)
     flow: dict[date, float] = defaultdict(float)
     for e in cash_events:
         if e.get("type") == "seed":
@@ -172,12 +278,22 @@ def _daily_cash_balance(
             flow[d] -= qty * pr
         elif t.get("type") == "sell":
             flow[d] += qty * pr
-    # 역산: today_cash 를 시작점으로 미래→과거로 차감
+    for t in futures_tx:
+        if not t.get("date"):
+            continue
+        d = date.fromisoformat(_date_only(t["date"]))
+        mgn = float(t.get("margin", 0))
+        pnl = float(t.get("pnl", 0) or 0)
+        ttype = t.get("type", "")
+        if ttype in {"open", "roll_open"}:
+            flow[d] -= mgn
+        elif ttype in {"close", "roll_close"}:
+            flow[d] += mgn + pnl
     out: dict[date, float] = {}
     cur = today_cash
     for d in sorted(dates, reverse=True):
         out[d] = cur
-        cur -= flow.get(d, 0.0)  # 그날 flow 제거 → 전날 cash
+        cur -= flow.get(d, 0.0)
     return out
 
 
@@ -250,26 +366,44 @@ def _fmt_krw_axis(x: float, _pos) -> str:
     return f"{x/1e7:.0f}천만"
 
 
-def main() -> int:
+def run_backtest() -> dict | None:
+    """백테스트 실행. 결과 dict 또는 None 반환.
+
+    dict: {rows, nav_actual_today, cur_holdings_value, cur_futures_value,
+           today_total_cash, initial, png_buf, summary_text, table_text}
+    """
+    import io as _io
+
     transactions = load_transactions()
     if not transactions:
-        print("거래 내역 없음.")
-        return 1
+        return None
     account = load_account()
     initial = float(account.get("initial_capital") or 0)
     cash_events = load_cash_events()
     code_by_name = _name_to_code()
     last_known = _last_known_price(transactions)
 
-    # 거래일(매수/매도가 있던 날)만 D 후보로. 그 외 날은 동결 의미가 없음.
+    # 선물: 백로딩된 시드 포지션 → synthetic open 으로 변환해 합침
+    raw_futures_tx = _load_futures_transactions()
+    futures_seeded = _seed_futures_synthetic_opens(
+        _load_futures_positions(), raw_futures_tx
+    )
+    futures_tx = list(raw_futures_tx) + futures_seeded
+
+    # 거래일 D 후보 = 현물 buy/sell + 선물 open/close/roll
     trade_dates_set = {
         date.fromisoformat(_date_only(t["date"]))
         for t in transactions
         if t.get("date") and t.get("type") in {"buy", "sell"}
     }
+    trade_dates_set |= {
+        date.fromisoformat(_date_only(t["date"]))
+        for t in futures_tx
+        if t.get("date")
+        and t.get("type") in {"open", "close", "roll_open", "roll_close"}
+    }
     start = min(trade_dates_set)
     today = date.today()
-    # holdings/cash 재구성은 전체 캘린더 일자로(다만 평가는 거래일만)
     dates: list[date] = []
     d = start
     while d <= today:
@@ -278,51 +412,13 @@ def main() -> int:
     trade_dates = sorted(trade_dates_set)
 
     hold = _reconstruct_daily_holdings(transactions, dates)
-    today_cash = float(account.get("cash") or 0)
-    cash = _daily_cash_balance(transactions, cash_events, today_cash, dates)
-
-    # 보정: cash_events 에 안 잡힌 spot→futures 서브계좌 이체.
-    # 첫 선물 진입일을 경계로, 그 이전 cash 는 (forward 식으로) 초기자본 기반이 맞고
-    # 그 이후 cash 는 (reverse 식으로) today_cash 기반이 맞다 — 두 추정의 차이가
-    # 서브계좌로 빠진 금액. 그 차이를 first_fut_d 시점에 일시 출금으로 모델링.
-    forward_cash_today = (
-        initial
-        + sum(
-            (-float(e["amount"]) if e.get("type") == "withdraw" else float(e["amount"]))
-            for e in cash_events
-            if e.get("type") != "seed" and e.get("date", "")
-        )
-        + sum(
-            float(t.get("quantity", 0)) * float(t.get("price", 0))
-            * (1 if t.get("type") == "sell" else -1)
-            for t in transactions
-            if t.get("type") in {"buy", "sell"}
-        )
+    fut_hold = _reconstruct_daily_futures_positions(futures_tx, dates)
+    today_total_cash = (
+        float(account.get("cash") or 0) + float(account.get("futures_cash") or 0)
     )
-    sub_xfer = forward_cash_today - today_cash  # >0 = spot 에서 빠짐, <0 = 들어옴
-    first_fut_d: date | None = None
-    try:
-        from storage.json_store import load
-        ft = load("futures_transactions.json").get("transactions", [])
-        if ft:
-            first_fut_d = date.fromisoformat(
-                min(t["date"] for t in ft if t.get("date"))[:10]
-            )
-    except Exception:
-        pass
-    if abs(sub_xfer) > 1e6 and first_fut_d:
-        dir_label = "spot→sub" if sub_xfer > 0 else "sub→spot"
-        print(f"[info] {dir_label} 추정 이체 {sub_xfer:+,.0f}원 → {first_fut_d} 시점 모델링. "
-              f"(cash_events 에 미기록된 흐름)",
-              file=sys.stderr)
-        # first_fut_d 시점에 sub_xfer 만큼의 cash 변동이 있었다고 가정.
-        # reverse 는 그 변동을 안 본 채 today_cash 에서 walk back 했으므로,
-        # 그 이전 날들은 (sub_xfer) 만큼 보정 필요.
-        # sub_xfer<0 (외부→spot 인플로우): 인플로우 이전엔 cash 가 더 적었어야 → 빼줌
-        # sub_xfer>0 (spot→외부 아웃플로우): 아웃플로우 이전엔 cash 가 더 많았어야 → 더해줌
-        for d_, v in list(cash.items()):
-            if d_ < first_fut_d:
-                cash[d_] = v + sub_xfer
+    cash = _daily_cash_balance(
+        transactions, cash_events, futures_tx, today_total_cash, dates
+    )
 
     # 시세
     codes_needed = {code_by_name.get(n) for d_ in dates for n in hold[d_].keys()}
@@ -359,78 +455,137 @@ def main() -> int:
     if unmapped:
         print(f"[warn] 매핑+폴백 모두 실패 (계산 제외): {sorted(unmapped)}", file=sys.stderr)
 
-    # 현재 실측 NAV (현물만): 오늘 보유×오늘가 + 현재 cash
+    def _futures_value(positions: dict[str, dict], price_lookup) -> tuple[float, bool]:
+        """positions(pid→dict) 를 오늘 시점으로 평가.
+
+        포지션 가치 = margin + (today_underlying − avg_entry) × contracts × mult × dir
+        (롤오버 가정: 만기 무관하게 기초자산 가격을 그대로 사용)
+        price_lookup(name) → float | None
+        """
+        tot = 0.0
+        any_valued = False
+        for pid, p in positions.items():
+            ctr = int(p.get("contracts", 0))
+            if ctr <= 0:
+                continue
+            tp = price_lookup(p.get("name", ""))
+            if tp is None:
+                continue
+            avg = float(p.get("avg_entry", 0))
+            mult = int(p.get("multiplier", 10))
+            dir_sign = 1 if p.get("direction") == "long" else -1
+            mgn = float(p.get("margin", 0))
+            tot += mgn + (tp - avg) * ctr * mult * dir_sign
+            any_valued = True
+        return tot, any_valued
+
+    def _today_price_for(name: str) -> float | None:
+        code = code_by_name.get(name)
+        if code and code in price_today:
+            return price_today[code]
+        return last_known.get(name)
+
+    def _close_for(name: str, dd: date) -> float | None:
+        code = code_by_name.get(name)
+        p = _close_ffill(price, code, dd, lookback=10) if code else None
+        if p is None:
+            p = last_known.get(name)
+        return p
+
+    # 현재 실측 NAV (현물 + 선물): 보유×오늘가 + 선물 미실현 + 현재 cash 총합
     current_holdings = {h.get("name", ""): int(h.get("quantity", 0)) for h in load_holdings()}
     cur_holdings_value = 0.0
     for n, q in current_holdings.items():
-        code = code_by_name.get(n)
-        p = price_today.get(code) if code else None
+        p = _today_price_for(n)
         if p is not None:
             cur_holdings_value += q * p
-    cur_cash = float(account.get("cash") or 0)
-    nav_actual_today = cur_holdings_value + cur_cash
+    # 선물 현재 평가
+    cur_fut_positions: dict[str, dict] = {}
+    for p in _load_futures_positions():
+        cur_fut_positions[p.get("id")] = {
+            "name": p.get("name", ""),
+            "direction": p.get("direction", "long"),
+            "contracts": int(p.get("contracts", 0)),
+            "avg_entry": float(p.get("avg_entry_price", 0)),
+            "multiplier": int(p.get("multiplier", 10)),
+            "margin": float(p.get("initial_margin", 0)),
+        }
+    cur_futures_value, _ = _futures_value(cur_fut_positions, _today_price_for)
+    nav_actual_today = cur_holdings_value + cur_futures_value + today_total_cash
 
     # 각 D(거래일만) 에 대해 동결-오늘 NAV
     rows: list[dict] = []
     for d_ in trade_dates:
         held = hold[d_]
-        # 보유 0 종목인 날(완전 현금)도 의미 있으니 포함
-        frozen_val = 0.0
-        valued_any = False
+        # 현물 동결-오늘 평가
+        spot_frozen = 0.0
         for n, q in held.items():
-            code = code_by_name.get(n)
-            p = price_today.get(code) if code else None
-            if p is None:
-                p = last_known.get(n)  # 0% 수익 가정 폴백
+            p = _today_price_for(n)
             if p is None:
                 continue
-            frozen_val += q * p
-            valued_any = True
-        # 동결-오늘 cash = D 시점 cash + D 이후 net deposits
-        cash_d = cash.get(d_, initial)
+            spot_frozen += q * p
+        # 선물 동결-오늘 평가
+        fut_frozen, _ = _futures_value(fut_hold[d_], _today_price_for)
+        # 동결 cash = D 시점 통합 cash + D 이후 net deposits
+        cash_d = cash.get(d_, today_total_cash)
         net_dep_after = _net_deposits_after(cash_events, d_)
-        nav_frozen_today = frozen_val + cash_d + net_dep_after
+        nav_frozen_today = spot_frozen + fut_frozen + cash_d + net_dep_after
 
-        # 비교용: 그날 실제 NAV (그날 보유 × 그날 종가 + 그날 cash)
-        nav_actual_d = cash_d
+        # 비교용: 그날 실제 NAV (그날 보유 × 그날 종가 + 선물 D 시점 미실현 + 그날 cash)
+        spot_actual_d = 0.0
         for n, q in held.items():
-            code = code_by_name.get(n)
-            p = _close_ffill(price, code, d_, lookback=10) if code else None
-            if p is None:
-                p = last_known.get(n)
+            p = _close_for(n, d_)
             if p is not None:
-                nav_actual_d += q * p
+                spot_actual_d += q * p
+        fut_actual_d = 0.0
+        for pid, fp in fut_hold[d_].items():
+            ctr = int(fp.get("contracts", 0))
+            if ctr <= 0:
+                continue
+            tp = _close_for(fp.get("name", ""), d_)
+            if tp is None:
+                continue
+            avg = float(fp.get("avg_entry", 0))
+            mult = int(fp.get("multiplier", 10))
+            dir_sign = 1 if fp.get("direction") == "long" else -1
+            mgn = float(fp.get("margin", 0))
+            fut_actual_d += mgn + (tp - avg) * ctr * mult * dir_sign
+        nav_actual_d = spot_actual_d + fut_actual_d + cash_d
 
         rows.append({
             "date": d_,
             "nav_frozen_today": nav_frozen_today,
             "nav_actual_d": nav_actual_d,
             "cash_d": cash_d,
-            "net_dep_after": net_dep_after,
-            "frozen_holdings_value_today": frozen_val,
-            "valued_any": valued_any,
+            "spot_frozen": spot_frozen,
+            "fut_frozen": fut_frozen,
         })
 
-    # 텍스트 표 — 모든 거래일을 날짜순으로
-    print()
-    print(f"=== 백테스트: 현물 동결 시 오늘 NAV ===")
-    print(f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)")
-    print(f"현재 실측 NAV (현물): {_fmt_krw(nav_actual_today)}  "
-          f"(보유 {_fmt_krw(cur_holdings_value)} + 현금 {_fmt_krw(cur_cash)})")
-    print(f"초기자본: {_fmt_krw(initial)}")
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
-    print(f"→ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건")
-    print()
-    print(f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재':>14} {'그날 실제 NAV':>16}  {'표시'}")
+    summary_text = (
+        f"=== 백테스트: 포트폴리오 동결 시 오늘 NAV (현물+선물) ===\n"
+        f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)\n"
+        f"현재 실측 NAV: {_fmt_krw(nav_actual_today)}  "
+        f"(현물 {_fmt_krw(cur_holdings_value)} + 선물 {_fmt_krw(cur_futures_value)} "
+        f"+ 현금 {_fmt_krw(today_total_cash)})\n"
+        f"초기자본: {_fmt_krw(initial)}\n"
+        f"→ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건"
+    )
+    table_lines = [
+        f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재':>14} {'그날 실제 NAV':>16}  {'표시'}",
+    ]
     for r in rows:
         diff = r["nav_frozen_today"] - nav_actual_today
         sign = "+" if diff > 0 else ""
         marker = " ★ 초과" if diff > 0 else ""
-        print(f"  {r['date'].isoformat():<12} "
-              f"{_fmt_krw(r['nav_frozen_today']):>16} "
-              f"{sign + _fmt_krw(diff):>14} "
-              f"{_fmt_krw(r['nav_actual_d']):>16}"
-              f"{marker}")
+        table_lines.append(
+            f"  {r['date'].isoformat():<12} "
+            f"{_fmt_krw(r['nav_frozen_today']):>16} "
+            f"{sign + _fmt_krw(diff):>14} "
+            f"{_fmt_krw(r['nav_actual_d']):>16}"
+            f"{marker}"
+        )
+    table_text = "\n".join(table_lines)
 
     # 그래프
     _setup_korean_font()
@@ -471,17 +626,49 @@ def main() -> int:
     ax.legend(loc="lower right", facecolor="#16161e", edgecolor="#333",
               labelcolor="#ddd", fontsize=9)
     ax.set_title(
-        f"포트폴리오 동결 백테스트 — 현물 only — {start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
+        f"포트폴리오 동결 백테스트 — 현물+선물 — {start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
         color="#fff", fontsize=12, loc="left", pad=12,
     )
     fig.tight_layout()
 
+    # PNG → 메모리 + 디스크 양쪽
+    png_buf = _io.BytesIO()
+    fig.savefig(png_buf, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    png_buf.seek(0)
     out = ROOT / "reports" / f"backtest_frozen_{today:%Y%m%d}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, format="png", facecolor=fig.get_facecolor())
-    plt.close(fig)
+    out.write_bytes(png_buf.getvalue())
+    png_buf.seek(0)
+
+    return {
+        "rows": rows,
+        "nav_actual_today": nav_actual_today,
+        "cur_holdings_value": cur_holdings_value,
+        "cur_futures_value": cur_futures_value,
+        "today_total_cash": today_total_cash,
+        "initial": initial,
+        "higher": higher,
+        "png_buf": png_buf,
+        "png_path": out,
+        "summary_text": summary_text,
+        "table_text": table_text,
+        "start": start,
+        "today": today,
+    }
+
+
+def main() -> int:
+    res = run_backtest()
+    if res is None:
+        print("거래 내역 없음.")
+        return 1
     print()
-    print(f"PNG 저장: {out}")
+    print(res["summary_text"])
+    print()
+    print(res["table_text"])
+    print()
+    print(f"PNG 저장: {res['png_path']}")
     return 0
 
 

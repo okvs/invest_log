@@ -22,6 +22,7 @@ from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
 from bot.handlers.asset_graph import asset_graph_handler
+from bot.handlers.backtest import backtest_handler
 from bot.handlers.cash_event import (
     delete_cash_event,
     deposit_conversation,
@@ -99,6 +100,7 @@ async def start(update: Update, context) -> None:
         "선물시세 - 정확한 선물가 수동 입력 (6시간 유효)\n"
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
         "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
+        "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
         "입금 - 입금 이벤트 등록 (날짜+금액+메모)\n"
         "출금 - 출금 이벤트 등록\n"
         "입출금목록 - 등록된 입출금 이벤트 목록\n"
@@ -141,6 +143,7 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("잔고"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("자산그래프"), asset_graph_handler))
+    app.add_handler(MessageHandler(_korean_command("백테스트"), backtest_handler))
     app.add_handler(MessageHandler(_korean_command("입출금목록"), list_cash_events))
     app.add_handler(MessageHandler(filters.Regex(r"^입출금삭제"), delete_cash_event))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
