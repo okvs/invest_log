@@ -8,12 +8,18 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.backtest_html import build_backtest_html
 from scripts.backtest_frozen_portfolio import run_backtest
+
+REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
 
 logger = logging.getLogger(__name__)
 
@@ -89,33 +95,34 @@ async def backtest_handler(
 
     caption = "\n".join(caption_lines)
 
+    # PNG 발송 (PNG 버퍼는 HTML 임베드용으로 재사용해야 하므로 복사)
+    png_bytes = res["png_buf"].getvalue()
+    photo_buf = io.BytesIO(png_bytes)
     await context.bot.send_photo(
         chat_id=chat_id,
-        photo=res["png_buf"],
+        photo=photo_buf,
         caption=caption,
         parse_mode="HTML",
     )
 
-    # 전체 표는 별도 monospace 메시지로 (4096자 제한 고려해 분할)
-    table = res["table_text"]
-    header = "<b>전체 거래일 표</b>\n<pre>"
-    footer = "</pre>"
-    body_limit = 4096 - len(header) - len(footer) - 20
-    lines = table.split("\n")
-    chunks: list[str] = []
-    cur = ""
-    for ln in lines:
-        if len(cur) + len(ln) + 1 > body_limit:
-            chunks.append(cur)
-            cur = ln
-        else:
-            cur = cur + "\n" + ln if cur else ln
-    if cur:
-        chunks.append(cur)
-    for i, ch in enumerate(chunks):
-        prefix = header if i == 0 else "<pre>"
-        await context.bot.send_message(
+    # HTML 리포트 (PNG 임베드 + 전체 표) 파일로 발송
+    try:
+        # build_backtest_html 가 png_buf.getvalue() 를 호출하므로 새 버퍼 제공
+        res["png_buf"] = io.BytesIO(png_bytes)
+        html_buf = await asyncio.to_thread(build_backtest_html, res)
+    except Exception:
+        logger.exception("백테스트 HTML 렌더 실패")
+        html_buf = None
+    if html_buf is not None:
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fp = REPORTS_DIR / f"backtest_{ts}.html"
+        data = html_buf.getvalue()
+        fp.write_bytes(data)
+        doc_buf = io.BytesIO(data)
+        doc_buf.name = fp.name
+        await context.bot.send_document(
             chat_id=chat_id,
-            text=f"{prefix}{ch}{footer}",
-            parse_mode="HTML",
+            document=doc_buf,
+            caption="백테스트 상세 리포트 (HTML)",
         )
