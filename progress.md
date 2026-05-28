@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 백테스트 흰점선을 자산그래프와 동일한 식으로 교체 (2026-05-28) — 기존 흰점선(`nav_actual_d` = spot+선물+cash−credit) 이 자산그래프(initial+dep+realized+unrealized) 와 4/3 기준 ~1억 차이가 났던 문제. 백테스트가 `compute_profit_trend()` 의 `asset` 시계열을 직접 가져와 흰점선으로 사용하도록 변경. 라벨 "실제 그날 자산 (자산그래프와 동일)". 4/3 시작점이 1.55억(=초기자본) 으로 자산그래프와 일치. 148 passed.
 - [x] 도움말 갱신 + `help` 키워드 추가 (2026-05-28) — `HELP_TEXT` 를 5개 카테고리(조회·리포트 / 현물 / 선물 / 현금 / 설정)로 재구성, HTML 포맷, 자동 기능(KB 자동파싱·자동손절·만기알림)과 예시 포함. `/help` 외에 `help`/`HELP`/`Help` 키워드도 인식(`(?i)^help$`). 11개 ConversationHandler abort filter 에 `help` 추가해 대화 중에도 안내 표시. 148 passed.
 - [x] 백테스트 HTML — 표 헤더 정렬 + TOP3 상세 잔고 (2026-05-28) — 메인 표의 `th` 가 left-align 이라 우측정렬 데이터와 어긋난 것 수정 (`th.num, td.num` 모두 right). TOP3 상세 섹션 추가: 각 거래일에 대해 현물(수량·평단·그날종가·그날평가금·오늘종가·동결-오늘평가금·신용·수익률) + 선물(계약·평균진입·그날가·평가·오늘가·평가·증거금·수익률) 표. `_reconstruct_daily_holdings_with_avg` 신설로 평단 가중평균 재구성. `_reconstruct_daily_credit` 가 종목별 dict 도 반환하도록 확장. `run_backtest()` 가 `top3_details` 포함. 결과 텔레그램 발송: 4/13#1, 4/12#2, 4/24#3 — 그날 보유한 KODEX반도체레버리지(+140.6%)/SK하이닉스(+159.8%)/OCI(+95.4%)를 그대로 들었으면 +4.7천만씩 더 좋았다는 명확한 증거. 148 passed.
 - [x] 백테스트 — HTML 리포트 발송 추가 (2026-05-28) — `bot/backtest_html.py` 신설: 다크 테마 카드 4개(현재 순자산 / 총자산 / 신용대출 / 초과 거래일) + base64 임베드 PNG + 전체 거래일 표(★ 초과 강조 + 행 배경색) + TOP5 win 카드 + 푸터 주석. `bot/handlers/backtest.py`: PNG 발송 후 HTML 도 `reports/backtest_YYYYMMDD_HHMMSS.html` 로 저장 + `reply_document` 발송. 기존 monospace 다중 메시지 표 발송 제거(HTML로 대체). PNG 버퍼는 한 번 만들고 발송·임베드용으로 복사. 148 passed.

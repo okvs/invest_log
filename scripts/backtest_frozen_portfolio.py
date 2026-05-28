@@ -42,6 +42,10 @@ from storage.json_store import (
     load_transactions,
 )
 
+# 자산그래프와 동일한 식의 일별 NAV 시계열을 흰점선에 쓰기 위해
+# (initial + 누적 입출금 + 누적 실현 + 그날 미실현)
+from bot.asset_history import compute_profit_trend
+
 
 def _load_futures_transactions() -> list[dict]:
     return load("futures_transactions.json").get("transactions", [])
@@ -602,6 +606,16 @@ def run_backtest() -> dict | None:
     )
     nav_actual_today = nav_actual_today_gross - cur_credit  # 신용 제외 순자산
 
+    # 자산그래프 (compute_profit_trend) 의 일별 asset 시계열을 가져와
+    # 백테스트 흰점선("실제 그날 NAV") 로 사용. 자산그래프와 동일한 라인이 보이도록.
+    # asset = initial + 누적 입출금 + 누적 실현 + 그날 미실현 (현물만, 신용 미차감 gross)
+    try:
+        graph_rows = compute_profit_trend()
+        graph_asset_by_d = {r["date"]: float(r["asset"]) for r in graph_rows}
+    except Exception:
+        print("[warn] compute_profit_trend 실패 — 흰점선 fallback", file=sys.stderr)
+        graph_asset_by_d = {}
+
     # 각 D(거래일만) 에 대해 동결-오늘 NAV
     rows: list[dict] = []
     for d_ in trade_dates:
@@ -623,26 +637,16 @@ def run_backtest() -> dict | None:
         nav_frozen_today_gross = spot_frozen + fut_frozen + cash_d + net_dep_after
         nav_frozen_today = nav_frozen_today_gross - credit_d  # 신용 제외 순자산
 
-        # 비교용: 그날 실제 NAV (그날 보유 × 그날 종가 + 선물 D 시점 미실현 + 그날 cash)
-        spot_actual_d = 0.0
-        for n, q in held.items():
-            p = _close_for(n, d_)
-            if p is not None:
-                spot_actual_d += q * p
-        fut_actual_d = 0.0
-        for pid, fp in fut_hold[d_].items():
-            ctr = int(fp.get("contracts", 0))
-            if ctr <= 0:
-                continue
-            tp = _close_for(fp.get("name", ""), d_)
-            if tp is None:
-                continue
-            avg = float(fp.get("avg_entry", 0))
-            mult = int(fp.get("multiplier", 10))
-            dir_sign = 1 if fp.get("direction") == "long" else -1
-            mgn = float(fp.get("margin", 0))
-            fut_actual_d += mgn + (tp - avg) * ctr * mult * dir_sign
-        nav_actual_d = spot_actual_d + fut_actual_d + cash_d - credit_d
+        # 그날 실제 NAV (참고용) — 자산그래프와 동일한 식
+        # asset = initial + 누적 입출금 + 누적 실현 + 그날 미실현 (현물, 신용 미차감)
+        nav_actual_d = graph_asset_by_d.get(d_)
+        if nav_actual_d is None:  # 매핑 누락 시 (이론상 없음) cash-based 폴백
+            spot_actual_d = 0.0
+            for n, q in held.items():
+                p = _close_for(n, d_)
+                if p is not None:
+                    spot_actual_d += q * p
+            nav_actual_d = spot_actual_d + cash_d - credit_d
 
         rows.append({
             "date": d_,
@@ -760,7 +764,7 @@ def run_backtest() -> dict | None:
 
     fig, ax = plt.subplots(figsize=(11, 5.8), dpi=120)
     ax.plot(xs, ys_actual_d, color="#9ca3af", linewidth=1.4, linestyle=":",
-            label="실제 그날 순자산 (참고)", zorder=3)
+            label="실제 그날 자산 (자산그래프와 동일)", zorder=3)
     ax.plot(xs, ys_frozen, color="#3b82f6", linewidth=2.4,
             label="그날 동결 → 오늘 순자산", zorder=5)
     ax.axhline(nav_actual_today, color="#f59e0b", linewidth=1.6, linestyle="--",
