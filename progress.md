@@ -1,6 +1,7 @@
 # Progress
 
 ## 완료
+- [x] 과거일자 동결 백테스트 (현물 only) (2026-05-28) — `scripts/backtest_frozen_portfolio.py`. 각 D 의 현물 보유량을 동결하고 오늘 종가로 평가한 hypothetical NAV vs 현재 NAV 비교. 데이터 클린업 처리: (1) 종목명 alias(`G넥스원`≡`LIG넥스원`, `반도체레버리지`≡`KODEX반도체레버리지`, `LIG디펜스앤에어로스페이스`≡`LIG넥스원`) — 별칭 통일 후 재구성 05-28 qty 가 portfolio.json 과 완전 일치 확인. (2) cash_events 미기록 sub→spot ~30M 이체를 first_fut_d(5/22) 시점에 모델링. (3) ticker_map 누락 종목은 manual map + last-known price 폴백. 결과: 현재 NAV(3.15억) 초과하는 동결-오늘 NAV 는 5/22~5/27 의 6일뿐(+9만 ~ +146만, 1% 미만). 실질적으로 wash. PNG `reports/backtest_frozen_YYYYMMDD.png`. 148 passed.
 - [x] 4사분면 iso-profit 등고선 1천만/3천만 고정 (2026-05-28) — 동적 선택이 denom·y_max 변동으로 target KRW 가 2천만/3천만 로그-중점을 넘나들며 1천만·3천만 ↔ 500만·2천만 사이로 튕겼다. `_isoprofit_levels` 를 `[(1천만), (3천만)]` 두 레벨로 hardcode. 148 passed.
 - [x] 4사분면 X축 비대칭 확장 (-50%~+100%) (2026-05-28) — 수익측만 +100%까지 확장(손실측은 -50% 유지). `x_abs` 단일 변수를 `x_pos=100`/`x_neg=-50`로 분리, ticks/iso_levels/iso_paths/clip 임계값을 모두 비대칭으로 갱신. 등고선 레벨 선택은 `min(x_pos,x_neg_abs)/2` 기준으로 잡아 X 확장 전후 동일하게 1천만/3천만 두 개 유지. KODEX반도체레버리지(+110%)만 우측 클립 + 물결 표시. 148 passed.
 - [x] 마진콜 유지증거금 — 실측 비율 적용 + 토글버튼 한 줄 위로 (2026-05-27) — 유지증거금을 2/3 추정 대신 `account.json`의 `futures_maintenance_ratio`(현재 0.7444 = 위탁의 74.4%, 사용자 실측)로 계산: `유지 = 위탁증거금 합 × 비율`. 포지션이 바뀌어도 위탁에 비례. 배너에 "유지증거금 NNNN만(위탁 × 74.4%)" 표기, 현재 마진콜 -28.0%. `build_futures_section(maintenance_ratio=)` → `build_html_report(futures_maintenance_ratio=)` → dashboard. 4사분면 금액/비중 토글버튼 `top:6.5%→3%`(한 줄 위). 148 passed.
