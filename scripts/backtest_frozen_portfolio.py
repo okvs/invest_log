@@ -724,17 +724,35 @@ def run_backtest() -> dict | None:
 
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
 
-    # 상위 3 거래일 — 동결-오늘 NAV 가 가장 큰 날 (이긴 게 0건이어도)
-    top3 = sorted(rows, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
-    top3_details: list[dict] = []
-    for r in top3:
+    # 현재 보유 qty / 현재 선물 contracts 매핑 (alias 적용)
+    current_qty_by_name = {
+        _canon(n): info["qty"] for n, info in current_holdings.items()
+    }
+    current_fut_by_name: dict[str, int] = {}
+    for fp in cur_fut_positions.values():
+        nm = _canon(fp.get("name", ""))
+        current_fut_by_name[nm] = current_fut_by_name.get(nm, 0) + int(
+            fp.get("contracts", 0)
+        )
+
+    def _build_detail(r: dict) -> dict:
         d_ = r["date"]
+        # D 시점 자산그래프 식 NAV — 비중 계산 분모
+        nav_d = r["nav_actual_d"]
         spot_items = []
         for n, (q, avg) in hold_avg.get(d_, {}).items():
             p_then = _close_for(n, d_)
             p_now = _today_price_for(n)
             eval_then = q * p_then if p_then is not None else None
             eval_now = q * p_now if p_now is not None else None
+            cur_qty = int(current_qty_by_name.get(n, 0))
+            # 그날 비중 (그날 평가금 / 그날 NAV)
+            w_then = (eval_then / nav_d * 100) if eval_then and nav_d else None
+            # 현재 비중 (현재 평가금 / 현재 NAV) — 현재 비보유면 0
+            cur_eval = (cur_qty * p_now) if p_now else 0
+            w_now = (cur_eval / nav_actual_today * 100
+                     if nav_actual_today else None)
+            w_diff = (w_now - w_then) if (w_now is not None and w_then is not None) else None
             spot_items.append({
                 "name": n,
                 "qty": q,
@@ -744,10 +762,14 @@ def run_backtest() -> dict | None:
                 "eval_then": eval_then,
                 "eval_now": eval_now,
                 "credit_then": credit_per_name_by_d.get(d_, {}).get(n, 0.0),
+                "cur_qty": cur_qty,
+                "qty_diff": cur_qty - q,
+                "weight_then": w_then,
+                "weight_now": w_now,
+                "weight_diff": w_diff,
             })
-        spot_items.sort(
-            key=lambda x: (x["eval_now"] or 0), reverse=True
-        )
+        spot_items.sort(key=lambda x: (x["eval_now"] or 0), reverse=True)
+
         fut_items = []
         for pid, fp in fut_hold.get(d_, {}).items():
             ctr = int(fp.get("contracts", 0))
@@ -768,6 +790,7 @@ def run_backtest() -> dict | None:
                 mgn + (p_now - avg) * ctr * mult * dir_sign
                 if p_now is not None else None
             )
+            cur_ctr = current_fut_by_name.get(_canon(name), 0)
             fut_items.append({
                 "name": name,
                 "direction": fp.get("direction", "long"),
@@ -779,9 +802,11 @@ def run_backtest() -> dict | None:
                 "price_now": p_now,
                 "val_then": val_then,
                 "val_now": val_now,
+                "cur_contracts": cur_ctr,
+                "contracts_diff": cur_ctr - ctr,
             })
         fut_items.sort(key=lambda x: (x["val_now"] or 0), reverse=True)
-        top3_details.append({
+        return {
             "date": d_,
             "nav_frozen_today": r["nav_frozen_today"],
             "nav_actual_d": r["nav_actual_d"],
@@ -791,7 +816,14 @@ def run_backtest() -> dict | None:
             "credit_d": r["credit_d"],
             "spot": spot_items,
             "futures": fut_items,
-        })
+        }
+
+    # TOP 3 — 동결-오늘 NAV 가장 큰 3일
+    top3 = sorted(rows, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
+    top3_details = [_build_detail(r) for r in top3]
+    # BOTTOM 3 — 동결-오늘 NAV 가장 작은 3일
+    bottom3 = sorted(rows, key=lambda r: r["nav_frozen_today"])[:3]
+    bottom3_details = [_build_detail(r) for r in bottom3]
 
     summary_text = (
         f"=== 백테스트: 포트폴리오 동결 시 오늘 NAV ===\n"
@@ -886,8 +918,35 @@ def run_backtest() -> dict | None:
     ax.set_ylabel("NAV (KRW) = 초기 + 실현 + 미실현", color="#9ca3af", fontsize=9)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12))
+
+    # 우측 여백 + 끝점 라벨 (초기자본 / 누적실현 / 미실현 / 실제자산)
+    last_x = xs[-1]
+    last_r = rows[-1]
+    last_init = initial
+    last_real_top = initial + max(0, last_r["cum_realized_d"])
+    last_unr_top = (
+        last_real_top
+        + max(0, last_r["unrealized_spot"])
+        + max(0, last_r["unrealized_futures"])
+    )
+    last_actual = last_r["nav_actual_d"]
+    ax.set_xlim(xs[0], last_x + timedelta(days=8))
+    label_specs = [
+        (last_init / 2, "초기자본", "#22c55e"),
+        ((last_init + last_real_top) / 2, "누적실현", "#f59e0b"),
+        ((last_real_top + last_unr_top) / 2, "미실현", "#3b82f6"),
+        (last_actual, "실제자산", "#9ca3af"),
+    ]
+    for y, txt, color in label_specs:
+        ax.annotate(
+            txt,
+            xy=(last_x, y),
+            xytext=(8, 0), textcoords="offset points",
+            color=color, fontsize=9, va="center", ha="left",
+        )
+
     ax.legend(loc="lower right", facecolor="#16161e", edgecolor="#333",
-              labelcolor="#ddd", fontsize=9)
+              labelcolor="#ddd", fontsize=8)
     ax.set_title(
         f"포트폴리오 동결 백테스트 — 현물+선물 — "
         f"{start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
@@ -916,6 +975,7 @@ def run_backtest() -> dict | None:
         "initial": initial,
         "higher": higher,
         "top3_details": top3_details,
+        "bottom3_details": bottom3_details,
         "png_buf": png_buf,
         "png_path": out,
         "summary_text": summary_text,
