@@ -618,16 +618,15 @@ def run_backtest() -> dict | None:
         cum_realized_by_d[d_] = running
     total_realized = running  # 전체 누적 실현
 
-    # 3) D 시점 보유 → 오늘 가격으로 미실현 평가
-    def _unrealized_frozen(d_: date) -> float:
-        val = 0.0
-        # 현물
+    # 3) D 시점 보유 → 오늘 가격으로 미실현 평가 (현물, 선물 분리 반환)
+    def _unrealized_frozen(d_: date) -> tuple[float, float]:
+        spot_unreal = 0.0
         for n, (q, avg) in hold_avg.get(d_, {}).items():
             p_now = _today_price_for(n)
             if p_now is None:
                 continue
-            val += (p_now - avg) * q
-        # 선물 (mark-to-market, margin 은 cash 의 일부라 미실현에 안 들어감)
+            spot_unreal += (p_now - avg) * q
+        fut_unreal = 0.0
         for pid, fp in fut_hold.get(d_, {}).items():
             ctr = int(fp.get("contracts", 0))
             if ctr <= 0:
@@ -638,8 +637,8 @@ def run_backtest() -> dict | None:
             avg = float(fp.get("avg_entry", 0))
             mult = int(fp.get("multiplier", 10))
             dir_sign = 1 if fp.get("direction") == "long" else -1
-            val += (p_now - avg) * ctr * mult * dir_sign
-        return val
+            fut_unreal += (p_now - avg) * ctr * mult * dir_sign
+        return spot_unreal, fut_unreal
 
     # 4) 오늘 시점 미실현 (실측) — 현재 보유·포지션을 오늘 가격으로
     current_holdings = {
@@ -702,13 +701,13 @@ def run_backtest() -> dict | None:
     # NAV = initial + 누적 실현(D 까지, 현물+선물) + 미실현(D 보유 × 오늘가, 현물+선물)
     rows: list[dict] = []
     for d_ in trade_dates:
-        unreal_frozen = _unrealized_frozen(d_)
+        unreal_spot, unreal_fut = _unrealized_frozen(d_)
+        unreal_total = unreal_spot + unreal_fut
         cum_real_d = cum_realized_by_d.get(d_, 0.0)
-        credit_d = credit_by_d.get(d_, 0.0)  # 표시용 (식에는 안 들어감)
-        nav_frozen_today_gross = initial + cum_real_d + unreal_frozen
-        nav_frozen_today = nav_frozen_today_gross  # 신용 차감 안 함
+        credit_d = credit_by_d.get(d_, 0.0)
+        nav_frozen_today_gross = initial + cum_real_d + unreal_total
+        nav_frozen_today = nav_frozen_today_gross
 
-        # 그날 실제 NAV (흰점선) — 자산그래프 와 동일 식 (선물 포함, 신용 미차감)
         nav_actual_d = graph_asset_by_d.get(d_, nav_frozen_today_gross)
 
         rows.append({
@@ -718,13 +717,15 @@ def run_backtest() -> dict | None:
             "nav_actual_d": nav_actual_d,
             "credit_d": credit_d,
             "cum_realized_d": cum_real_d,
-            "unrealized_frozen": unreal_frozen,
+            "unrealized_frozen": unreal_total,
+            "unrealized_spot": unreal_spot,
+            "unrealized_futures": unreal_fut,
         })
 
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
 
-    # 상위 3 거래일에 대해 그날 잔고 상세 (현물+선물+신용)
-    top3 = sorted(higher, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
+    # 상위 3 거래일 — 동결-오늘 NAV 가 가장 큰 날 (이긴 게 0건이어도)
+    top3 = sorted(rows, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
     top3_details: list[dict] = []
     for r in top3:
         d_ = r["date"]
@@ -825,18 +826,49 @@ def run_backtest() -> dict | None:
     ys_actual_d = [r["nav_actual_d"] for r in rows]
 
     fig, ax = plt.subplots(figsize=(11, 5.8), dpi=120)
+
+    # Stacked area: 파란선(동결-오늘 NAV) 아래에 구성요소 시각화
+    # 4 layer (bottom-up): 초기자본 / 실현 / 현물 미실현 / 선물 미실현(빗금)
+    # 음수 미실현은 0 으로 클립 (영역 표시 단순화 — 음수 영역은 별도 작은 표시)
+    ys_init = [initial] * len(xs)
+    ys_real = [max(0, r["cum_realized_d"]) for r in rows]
+    ys_spot_unr = [max(0, r["unrealized_spot"]) for r in rows]
+    ys_fut_unr = [max(0, r["unrealized_futures"]) for r in rows]
+    base = [0.0] * len(xs)
+    top_init = ys_init
+    top_real = [a + b for a, b in zip(top_init, ys_real)]
+    top_spot = [a + b for a, b in zip(top_real, ys_spot_unr)]
+    top_fut = [a + b for a, b in zip(top_spot, ys_fut_unr)]
+    ax.fill_between(xs, base, top_init, color="#22c55e", alpha=0.12,
+                    zorder=1, label=f"초기자본 {_fmt_krw(initial)}")
+    ax.fill_between(xs, top_init, top_real, color="#f59e0b", alpha=0.18,
+                    zorder=1, label="누적 실현 (D 까지)")
+    ax.fill_between(xs, top_real, top_spot, color="#3b82f6", alpha=0.18,
+                    zorder=1, label="현물 미실현 (오늘)")
+    ax.fill_between(xs, top_spot, top_fut, facecolor="none", edgecolor="#3b82f6",
+                    hatch="///", alpha=0.4, linewidth=0.0,
+                    zorder=1, label="선물 미실현 (오늘, 빗금)")
+    # 음수 실현·미실현은 별도 빨강 영역으로 0 아래에 표시
+    neg_real = [min(0, r["cum_realized_d"]) for r in rows]
+    neg_spot = [min(0, r["unrealized_spot"]) for r in rows]
+    neg_fut = [min(0, r["unrealized_futures"]) for r in rows]
+    has_neg = any(v < 0 for v in (neg_real + neg_spot + neg_fut))
+    if has_neg:
+        neg_total = [a + b + c for a, b, c in zip(neg_real, neg_spot, neg_fut)]
+        ax.fill_between(xs, [initial + n for n in neg_total], ys_init,
+                        color="#ef4444", alpha=0.10, zorder=1,
+                        label="음수 손익 (실현/미실현)")
+
     ax.plot(xs, ys_actual_d, color="#9ca3af", linewidth=1.4, linestyle=":",
             label="실제 그날 자산 (자산그래프와 동일)", zorder=3)
     ax.plot(xs, ys_frozen, color="#3b82f6", linewidth=2.4,
-            label="그날 동결 → 오늘 순자산", zorder=5)
+            label="그날 동결 → 오늘 NAV", zorder=5)
     ax.axhline(nav_actual_today, color="#f59e0b", linewidth=1.6, linestyle="--",
                label=f"현재 NAV {_fmt_krw(nav_actual_today)}", zorder=4)
-    ax.axhline(initial, color="#22c55e", linewidth=0.7, linestyle=":", alpha=0.5)
-    ax.annotate(f"초기자본 {_fmt_krw(initial)}", xy=(xs[0], initial),
-                xytext=(0, 6), textcoords="offset points",
-                color="#22c55e", fontsize=8, va="bottom", ha="left")
+    ax.axhline(initial, color="#22c55e", linewidth=0.7, linestyle=":",
+               alpha=0.5, zorder=2)
 
-    # 현재 초과 일자 강조
+    # 현재 초과 일자 강조 (있을 때만)
     over_xs = [r["date"] for r in higher]
     over_ys = [r["nav_frozen_today"] for r in higher]
     if over_xs:
