@@ -140,6 +140,7 @@ def main() -> None:
 
     # 한국어 키워드 핸들러
     app.add_handler(MessageHandler(_korean_command("도움말"), help_handler))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)^help$"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("잔고"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("자산그래프"), asset_graph_handler))
