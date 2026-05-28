@@ -126,18 +126,24 @@ _ISOPROFIT_NICE = [
 
 
 def _isoprofit_levels(
-    y_max: float, denom: float, x_abs: float = 50.0
+    y_max: float, denom: float,
+    x_pos: float = 50.0, x_neg_abs: float | None = None,
 ) -> list[tuple[float, str]]:
     """그릴 수익금 등고선 레벨을 round-number 후보에서 고른다 (오름차순).
 
-    최상위 곡선이 plot 상단(w=y_max) 에서 r ≈ x_abs/2 근처를 지나도록 목표
+    최상위 곡선이 plot 상단(w=y_max) 에서 r ≈ (작은쪽 폭)/2 근처를 지나도록 목표
     KRW 를 잡고, 그 아래로 한 단계 건너뛴 2개 레벨을 고른다 (top_i, top_i-2).
     예전엔 4개(연속) 다 그렸지만 점선이 빽빽해 보여, 최상위와 그 아래 한 칸
     건너뛴 레벨만 남긴다 — 현재 포트폴리오 기준 1천만/3천만 두 개.
+
+    비대칭 X축(예: -50%~+100%)에서는 작은 쪽(=음수측) 절반을 기준으로 잡아
+    레벨 선택이 X 확장 전후로 흔들리지 않게 한다.
     """
     if denom <= 0:
         return []
-    r0 = 0.5 * x_abs
+    if x_neg_abs is None:
+        x_neg_abs = x_pos
+    r0 = 0.5 * min(x_pos, x_neg_abs)
     krw_top_target = denom * (y_max / 100.0) * r0 / (100.0 + r0)
     top_i = min(
         range(len(_ISOPROFIT_NICE)),
@@ -151,7 +157,8 @@ def _isoprofit_levels(
 
 def _isoprofit_paths(
     sx_fn, sy_fn, y_max: float, denom: float,
-    levels: list[tuple[float, str]], x_abs: float = 50.0,
+    levels: list[tuple[float, str]],
+    x_pos: float = 50.0, x_neg_abs: float | None = None,
 ) -> list[str]:
     """수익금 등고선 (포지션 KRW 손익 = const).
 
@@ -164,6 +171,8 @@ def _isoprofit_paths(
     """
     if denom <= 0 or not levels:
         return []
+    if x_neg_abs is None:
+        x_neg_abs = x_pos
 
     paths: list[str] = []
     for krw, label in levels:
@@ -178,16 +187,16 @@ def _isoprofit_paths(
             rs: list[float] = []
             if sign > 0:
                 r = step
-                while r <= x_abs:
+                while r <= x_pos:
                     rs.append(r); r += step
             else:
                 r = -step
-                while r >= -x_abs:
+                while r >= -x_neg_abs:
                     rs.append(r); r -= step
             pts: list[tuple[float, float]] = []
             if r_entry is not None and (
-                (sign > 0 and 0 < r_entry <= x_abs)
-                or (sign < 0 and -x_abs <= r_entry < 0)
+                (sign > 0 and 0 < r_entry <= x_pos)
+                or (sign < 0 and -x_neg_abs <= r_entry < 0)
             ):
                 pts.append((sx_fn(r_entry), sy_fn(y_max)))
             for r in rs:
@@ -275,10 +284,10 @@ def _build_quadrants_svg(
 ) -> str:
     """수익률(X) × 비중(Y) 4사분면 산점도를 inline SVG 로 그린다.
 
-    분리선: 수익률 X=0, 비중 Y=10% (비중부족 기준). X축은 ±50% 대칭, Y축은
-    0~max 비대칭 (바닥이 0%). 50% 초과 종목은 plot 좌우 끝에 마커를 찍고
-    세로 물결로 클립 신호 + (±NN%) 실측 라벨. 점 크기/모양은 SIZE_TABLE/
-    MARKER_TABLE (10% tier). 범례는 T1~T5 전부 표시.
+    분리선: 수익률 X=0, 비중 Y=10% (비중부족 기준). X축은 손실 -50%~수익 +100%
+    로 비대칭 (수익측 확장), Y축은 0~max 비대칭 (바닥이 0%). 범위 초과 종목은
+    plot 좌/우 끝에 마커를 찍고 세로 물결로 클립 신호 + 실측 라벨. 점 크기/
+    모양은 SIZE_TABLE/MARKER_TABLE (10% tier). 범례는 T1~T5 전부 표시.
 
     선물 포지션은 같은 마커 위에 빗금 패턴 오버레이로 표시.
     비중 분모는 (현물 평가금 + 선물 notional) 합산.
@@ -387,8 +396,11 @@ def _build_quadrants_svg(
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
-    # X축: 수익률(%). ±50% 고정, 그 너머는 클립 + 세로 물결 표시.
-    x_abs = 50.0
+    # X축: 수익률(%). 손실측은 -50%, 수익측은 +100%까지 비대칭으로 열어둠
+    # (수익 100%까지 한 화면에서 보기 위함). 범위 너머는 클립 + 세로 물결 표시.
+    x_pos = 100.0
+    x_neg = -50.0
+    x_neg_abs = -x_neg
 
     # Y축: 비중(%). 최대 비중 바로 위 5% 눈금 (예: 21% → 25%, 20% → 25%).
     # 분리선(10%) 노출을 위해 최소 15%.
@@ -397,7 +409,7 @@ def _build_quadrants_svg(
     y_max = max(15.0, math.floor(_max_w / 5.0) * 5.0 + 5.0)
     y_min = 0.0
 
-    x_min, x_max = -x_abs, x_abs
+    x_min, x_max = x_neg, x_pos
 
     def sx(x: float) -> float:
         return pad_l + (x - x_min) / (x_max - x_min) * plot_w
@@ -431,7 +443,7 @@ def _build_quadrants_svg(
     # 사분면 구분은 그리드선과 모서리 배지로만 표시 (시인성 우선)
 
     # 격자 — X 10% 단위, Y 5% 단위 (5/15/25 도 확인 가능하게)
-    ticks_x = list(range(-int(x_abs), int(x_abs) + 1, 10))
+    ticks_x = list(range(int(x_neg), int(x_pos) + 1, 10))
     ticks_y = list(range(0, int(y_max) + 1, 5))
     for tx in ticks_x:
         px = sx(tx)
@@ -448,8 +460,8 @@ def _build_quadrants_svg(
 
     # 수익금 iso-profit 등고선 — Y축 weight 기준이 denom(현물+선물 notional)
     # 이므로 분모도 denom 으로 맞춤. 데이터 점 아래, 분리선 위에 깔림.
-    iso_levels = _isoprofit_levels(y_max, denom, x_abs)
-    parts.extend(_isoprofit_paths(sx, sy, y_max, denom, iso_levels, x_abs))
+    iso_levels = _isoprofit_levels(y_max, denom, x_pos, x_neg_abs)
+    parts.extend(_isoprofit_paths(sx, sy, y_max, denom, iso_levels, x_pos, x_neg_abs))
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
@@ -526,7 +538,7 @@ def _build_quadrants_svg(
     WAVE_COLOR = "#fbbf24"
     for p in sorted(points, key=lambda d: (-d["tier"], -d["weight"])):
         r = SVG_RADIUS[p["tier"]]
-        clipped_x = abs(p["return"]) > 50.0
+        clipped_x = p["return"] > x_pos or p["return"] < x_neg
         clipped_y = p["weight"] > 35.0  # 위쪽으로 잘림 (비중은 항상 양수)
 
         # 마커 좌표 — 클립된 축은 plot 가장자리로 밀어붙임
