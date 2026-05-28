@@ -56,19 +56,22 @@ async def backtest_handler(
     nav_now = res["nav_actual_today"]
 
     # 캡션: 요약 + 초과한 날 (있으면) top 5
+    gross = res.get("nav_actual_today_gross", nav_now)
+    cur_credit = res.get("cur_credit", 0)
     caption_lines = [
-        "<b>포트폴리오 동결 백테스트 (현물+선물)</b>",
+        "<b>포트폴리오 동결 백테스트 (현물+선물, 신용 제외)</b>",
         f"{rows[0]['date']} ~ {rows[-1]['date']} · 거래일 {len(rows)}일",
-        f"현재 NAV {_fmt_krw_short(nav_now)} "
-        f"(현물 {_fmt_krw_short(res['cur_holdings_value'])} + "
+        f"현재 순자산 {_fmt_krw_short(nav_now)} "
+        f"= 총자산 {_fmt_krw_short(gross)} − 신용 {_fmt_krw_short(cur_credit)}",
+        f"  (현물 {_fmt_krw_short(res['cur_holdings_value'])} + "
         f"선물 {_fmt_krw_short(res['cur_futures_value'])} + "
         f"현금 {_fmt_krw_short(res['today_total_cash'])})",
         f"초기자본 {_fmt_krw_short(res['initial'])} "
-        f"({(nav_now/res['initial']-1)*100:+.1f}%)",
+        f"({(nav_now/res['initial']-1)*100:+.1f}% 순)",
     ]
     if higher:
         caption_lines.append(
-            f"\n<b>★ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건</b>"
+            f"\n<b>★ 현재 순자산 초과 거래일: {len(higher)}/{len(rows)}건</b>"
         )
         for r in higher[:5]:
             diff = r["nav_frozen_today"] - nav_now
@@ -80,7 +83,7 @@ async def backtest_handler(
             caption_lines.append(f"  ... +{len(higher)-5}건")
     else:
         caption_lines.append(
-            f"\n→ <b>현재 NAV 가 ALL-TIME HIGH</b> "
+            f"\n→ <b>현재 순자산이 ALL-TIME HIGH</b> "
             f"(모든 거래일 동결 시나리오보다 높음)"
         )
 

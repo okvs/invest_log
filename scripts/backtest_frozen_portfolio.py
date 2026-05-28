@@ -146,6 +146,52 @@ def _reconstruct_daily_holdings(
     return out
 
 
+def _reconstruct_daily_credit(
+    transactions: list[dict], dates: list[date]
+) -> dict[date, float]:
+    """각 date 시점의 신용대출 총잔액.
+
+    매수 시 qty × price × (100 − margin_ratio)/100 만큼 종목 credit 누적.
+    margin_ratio 가 None 또는 ≥100 이면 자기자본 100%로 보고 신용 0.
+    매도 시 (credit / qty) 비례 차감.
+    """
+    ev: dict[str, list[dict]] = defaultdict(list)
+    for t in sorted(transactions, key=lambda x: x.get("date", "")):
+        if t.get("date"):
+            ev[_canon(t.get("name", ""))].append(t)
+    per_name_total: dict[date, dict[str, float]] = {d: {} for d in dates}
+    for name, evs in ev.items():
+        qty = 0
+        credit = 0.0
+        idx = 0
+        for d in dates:
+            while idx < len(evs) and date.fromisoformat(_date_only(evs[idx]["date"])) <= d:
+                e = evs[idx]
+                q = int(e.get("quantity", 0))
+                pr = float(e.get("price", 0))
+                mr = e.get("margin_ratio")
+                if e.get("type") == "buy":
+                    if mr is None or float(mr) >= 100:
+                        buy_credit = 0.0
+                    else:
+                        buy_credit = q * pr * (100.0 - float(mr)) / 100.0
+                    credit += buy_credit
+                    qty += q
+                elif e.get("type") == "sell":
+                    if qty > 0:
+                        cps = credit / qty
+                        credit -= q * cps
+                        qty -= q
+                        if qty <= 0:
+                            qty = 0
+                            credit = 0.0
+                idx += 1
+            if credit > 0:
+                per_name_total[d][name] = credit
+    # 합계 dict 반환
+    return {d: sum(v.values()) for d, v in per_name_total.items()}
+
+
 def _seed_futures_synthetic_opens(
     positions: list[dict], transactions: list[dict]
 ) -> list[dict]:
@@ -412,6 +458,7 @@ def run_backtest() -> dict | None:
     trade_dates = sorted(trade_dates_set)
 
     hold = _reconstruct_daily_holdings(transactions, dates)
+    credit_by_d = _reconstruct_daily_credit(transactions, dates)
     fut_hold = _reconstruct_daily_futures_positions(futures_tx, dates)
     today_total_cash = (
         float(account.get("cash") or 0) + float(account.get("futures_cash") or 0)
@@ -511,7 +558,13 @@ def run_backtest() -> dict | None:
             "margin": float(p.get("initial_margin", 0)),
         }
     cur_futures_value, _ = _futures_value(cur_fut_positions, _today_price_for)
-    nav_actual_today = cur_holdings_value + cur_futures_value + today_total_cash
+    cur_credit = sum(
+        float(h.get("credit_loan", 0) or 0) for h in load_holdings()
+    )
+    nav_actual_today_gross = (
+        cur_holdings_value + cur_futures_value + today_total_cash
+    )
+    nav_actual_today = nav_actual_today_gross - cur_credit  # 신용 제외 순자산
 
     # 각 D(거래일만) 에 대해 동결-오늘 NAV
     rows: list[dict] = []
@@ -529,7 +582,10 @@ def run_backtest() -> dict | None:
         # 동결 cash = D 시점 통합 cash + D 이후 net deposits
         cash_d = cash.get(d_, today_total_cash)
         net_dep_after = _net_deposits_after(cash_events, d_)
-        nav_frozen_today = spot_frozen + fut_frozen + cash_d + net_dep_after
+        # D 시점 신용대출 (동결 시에도 그대로 유지 가정, 이자 무시)
+        credit_d = credit_by_d.get(d_, 0.0)
+        nav_frozen_today_gross = spot_frozen + fut_frozen + cash_d + net_dep_after
+        nav_frozen_today = nav_frozen_today_gross - credit_d  # 신용 제외 순자산
 
         # 비교용: 그날 실제 NAV (그날 보유 × 그날 종가 + 선물 D 시점 미실현 + 그날 cash)
         spot_actual_d = 0.0
@@ -550,26 +606,30 @@ def run_backtest() -> dict | None:
             dir_sign = 1 if fp.get("direction") == "long" else -1
             mgn = float(fp.get("margin", 0))
             fut_actual_d += mgn + (tp - avg) * ctr * mult * dir_sign
-        nav_actual_d = spot_actual_d + fut_actual_d + cash_d
+        nav_actual_d = spot_actual_d + fut_actual_d + cash_d - credit_d
 
         rows.append({
             "date": d_,
             "nav_frozen_today": nav_frozen_today,
+            "nav_frozen_today_gross": nav_frozen_today_gross,
             "nav_actual_d": nav_actual_d,
             "cash_d": cash_d,
+            "credit_d": credit_d,
             "spot_frozen": spot_frozen,
             "fut_frozen": fut_frozen,
         })
 
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
     summary_text = (
-        f"=== 백테스트: 포트폴리오 동결 시 오늘 NAV (현물+선물) ===\n"
+        f"=== 백테스트: 포트폴리오 동결 시 오늘 순자산 (현물+선물, 신용 제외) ===\n"
         f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)\n"
-        f"현재 실측 NAV: {_fmt_krw(nav_actual_today)}  "
-        f"(현물 {_fmt_krw(cur_holdings_value)} + 선물 {_fmt_krw(cur_futures_value)} "
+        f"현재 순자산: {_fmt_krw(nav_actual_today)}  "
+        f"= 총자산 {_fmt_krw(nav_actual_today_gross)} − 신용 {_fmt_krw(cur_credit)}\n"
+        f"  (현물 {_fmt_krw(cur_holdings_value)} + 선물 {_fmt_krw(cur_futures_value)} "
         f"+ 현금 {_fmt_krw(today_total_cash)})\n"
-        f"초기자본: {_fmt_krw(initial)}\n"
-        f"→ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건"
+        f"초기자본: {_fmt_krw(initial)} "
+        f"({(nav_actual_today/initial-1)*100:+.1f}% 순)\n"
+        f"→ 현재 순자산 초과 거래일: {len(higher)}/{len(rows)}건"
     )
     table_lines = [
         f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재':>14} {'그날 실제 NAV':>16}  {'표시'}",
@@ -595,11 +655,11 @@ def run_backtest() -> dict | None:
 
     fig, ax = plt.subplots(figsize=(11, 5.8), dpi=120)
     ax.plot(xs, ys_actual_d, color="#9ca3af", linewidth=1.4, linestyle=":",
-            label="실제 그날 NAV (참고)", zorder=3)
+            label="실제 그날 순자산 (참고)", zorder=3)
     ax.plot(xs, ys_frozen, color="#3b82f6", linewidth=2.4,
-            label="그날 동결 → 오늘 NAV", zorder=5)
+            label="그날 동결 → 오늘 순자산", zorder=5)
     ax.axhline(nav_actual_today, color="#f59e0b", linewidth=1.6, linestyle="--",
-               label=f"현재 실측 NAV {_fmt_krw(nav_actual_today)}", zorder=4)
+               label=f"현재 순자산 {_fmt_krw(nav_actual_today)} (신용 제외)", zorder=4)
     ax.axhline(initial, color="#22c55e", linewidth=0.7, linestyle=":", alpha=0.5)
     ax.annotate(f"초기자본 {_fmt_krw(initial)}", xy=(xs[0], initial),
                 xytext=(0, 6), textcoords="offset points",
@@ -620,13 +680,14 @@ def run_backtest() -> dict | None:
     for spine in ("bottom", "left"):
         ax.spines[spine].set_color("#444")
     ax.tick_params(colors="#9ca3af", labelsize=10)
-    ax.set_ylabel("NAV (KRW)", color="#9ca3af", fontsize=9)
+    ax.set_ylabel("순자산 (KRW, 신용 제외)", color="#9ca3af", fontsize=9)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=12))
     ax.legend(loc="lower right", facecolor="#16161e", edgecolor="#333",
               labelcolor="#ddd", fontsize=9)
     ax.set_title(
-        f"포트폴리오 동결 백테스트 — 현물+선물 — {start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
+        f"포트폴리오 동결 백테스트 — 현물+선물, 신용 제외 — "
+        f"{start:%Y-%m-%d} ~ {today:%Y-%m-%d}",
         color="#fff", fontsize=12, loc="left", pad=12,
     )
     fig.tight_layout()
@@ -643,7 +704,9 @@ def run_backtest() -> dict | None:
 
     return {
         "rows": rows,
-        "nav_actual_today": nav_actual_today,
+        "nav_actual_today": nav_actual_today,            # 신용 제외 순자산
+        "nav_actual_today_gross": nav_actual_today_gross,  # 총자산 (신용 포함)
+        "cur_credit": cur_credit,
         "cur_holdings_value": cur_holdings_value,
         "cur_futures_value": cur_futures_value,
         "today_total_cash": today_total_cash,
