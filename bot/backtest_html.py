@@ -21,6 +21,129 @@ def _fmt_krw(x: float) -> str:
     return f"{int(round(x)):,}원"
 
 
+def _cell_won(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return f"{int(round(v)):,}원"
+
+
+def _cell_krw(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return _fmt_krw(v)
+
+
+def _pct_span(pct: float | None) -> str:
+    if pct is None:
+        return "—"
+    cls = "pos" if pct >= 0 else "neg"
+    sign = "+" if pct >= 0 else ""
+    return f"<span class='{cls}'>{sign}{pct:.1f}%</span>"
+
+
+def _render_top3(top3: list[dict], nav_now: float) -> str:
+    sections = []
+    for i, d in enumerate(top3):
+        # 현물 표
+        spot_body = []
+        for it in d["spot"]:
+            pct_now = (
+                (it["price_now"] / it["avg"] - 1) * 100
+                if it["avg"] and it["price_now"] else None
+            )
+            credit_cell = _fmt_krw(it["credit_then"]) if it["credit_then"] > 0 else "—"
+            spot_body.append(
+                "<tr>"
+                f"<td>{escape(it['name'])}</td>"
+                f"<td class='num'>{it['qty']:,}주</td>"
+                f"<td class='num'>{_cell_won(it['avg'])}</td>"
+                f"<td class='num'>{_cell_won(it['price_then'])}</td>"
+                f"<td class='num'>{_cell_krw(it['eval_then'])}</td>"
+                f"<td class='num'>{_cell_won(it['price_now'])}</td>"
+                f"<td class='num pos-soft'>{_cell_krw(it['eval_now'])}</td>"
+                f"<td class='num small neg'>{credit_cell}</td>"
+                f"<td class='num small'>{_pct_span(pct_now)}</td>"
+                "</tr>"
+            )
+        spot_tbl = ""
+        if spot_body:
+            spot_tbl = (
+                "<table class='detail'><thead><tr>"
+                "<th>종목</th>"
+                "<th class='num'>수량</th>"
+                "<th class='num'>평단</th>"
+                "<th class='num'>그날 종가</th>"
+                "<th class='num'>그날 평가금</th>"
+                "<th class='num'>오늘 종가</th>"
+                "<th class='num'>동결-오늘 평가금</th>"
+                "<th class='num'>그날 신용</th>"
+                "<th class='num'>오늘 수익률</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(spot_body)}</tbody></table>"
+            )
+
+        # 선물 표
+        fut_body = []
+        for it in d["futures"]:
+            ds = "롱" if it["direction"] == "long" else "숏"
+            pct_now = (
+                (it["price_now"] / it["avg_entry"] - 1) * 100
+                if it["avg_entry"] and it["price_now"] else None
+            )
+            fut_body.append(
+                "<tr>"
+                f"<td>{escape(it['name'])} ({ds})</td>"
+                f"<td class='num'>{it['contracts']}계약×{it['multiplier']}</td>"
+                f"<td class='num'>{_cell_won(it['avg_entry'])}</td>"
+                f"<td class='num'>{_cell_won(it['price_then'])}</td>"
+                f"<td class='num'>{_cell_krw(it['val_then'])}</td>"
+                f"<td class='num'>{_cell_won(it['price_now'])}</td>"
+                f"<td class='num pos-soft'>{_cell_krw(it['val_now'])}</td>"
+                f"<td class='num small'>{_fmt_krw(it['margin'])}</td>"
+                f"<td class='num small'>{_pct_span(pct_now)}</td>"
+                "</tr>"
+            )
+        fut_tbl = ""
+        if fut_body:
+            fut_tbl = (
+                "<h4 class='detail-h4'>선물 포지션</h4>"
+                "<table class='detail'><thead><tr>"
+                "<th>종목 (방향)</th>"
+                "<th class='num'>계약×승수</th>"
+                "<th class='num'>평균진입</th>"
+                "<th class='num'>그날 기초자산</th>"
+                "<th class='num'>그날 평가</th>"
+                "<th class='num'>오늘 기초자산</th>"
+                "<th class='num'>동결-오늘 평가</th>"
+                "<th class='num'>증거금</th>"
+                "<th class='num'>오늘 수익률</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(fut_body)}</tbody></table>"
+            )
+
+        header_line = (
+            f"<h3 class='detail-h3'>"
+            f"#{i+1} · {d['date']:%Y-%m-%d} "
+            f"<span class='pos'>(현재 대비 +{_fmt_krw(d['diff'])})</span>"
+            f"<div class='muted-small'>"
+            f"동결-오늘 {_fmt_krw(d['nav_frozen_today'])} · "
+            f"그날 실제 {_fmt_krw(d['nav_actual_d'])} · "
+            f"현금 {_fmt_krw(d['cash_d'])} · "
+            f"신용 {_fmt_krw(d['credit_d'])}"
+            f"</div></h3>"
+        )
+        spot_h4 = "<h4 class='detail-h4'>현물 보유</h4>" if spot_tbl else ""
+        sections.append(
+            f"<div class='detail-section'>"
+            f"{header_line}{spot_h4}{spot_tbl}{fut_tbl}"
+            f"</div>"
+        )
+    return (
+        "<h2 class='section-h2'>TOP 3 상세 · 그날 잔고를 그대로 들고 있었으면</h2>"
+        + "".join(sections)
+    )
+
+
 def build_backtest_html(res: dict) -> io.BytesIO:
     """run_backtest() 결과 dict 를 HTML BytesIO 로 변환."""
     rows = res["rows"]
@@ -60,7 +183,7 @@ def build_backtest_html(res: dict) -> io.BytesIO:
         )
     table_body = "\n".join(tr_rows)
 
-    # 정점 (가장 큰 win) 강조
+    # 정점 (가장 큰 win) 강조 — TOP 5 간단 리스트
     top_beats = sorted(
         higher, key=lambda r: r["nav_frozen_today"], reverse=True
     )[:5]
@@ -77,6 +200,12 @@ def build_backtest_html(res: dict) -> io.BytesIO:
             f"★ 현재 순자산 초과 거래일 TOP 5</div>"
             f"<ul class='top-list'>{items}</ul></div>"
         )
+
+    # TOP 3 상세 — 그날 보유 종목·평단·평가금·동결-오늘 평가금
+    top3_html = ""
+    top3 = res.get("top3_details", [])
+    if top3:
+        top3_html = _render_top3(top3, nav_now)
 
     html = f"""<!doctype html>
 <html lang="ko"><head>
@@ -126,7 +255,7 @@ def build_backtest_html(res: dict) -> io.BytesIO:
             border-bottom: 1px solid var(--border); }}
   th {{ background: #1c1c26; color: var(--muted); font-weight: 500;
         font-size: 12px; }}
-  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  th.num, td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   td.small {{ color: var(--muted); font-size: 12px; }}
   td.marker {{ color: var(--pos); font-size: 14px; text-align: center;
                width: 36px; }}
@@ -135,6 +264,19 @@ def build_backtest_html(res: dict) -> io.BytesIO:
   tr.worse td.diff {{ color: var(--neg); }}
   .note {{ color: var(--muted); font-size: 11px; margin-top: 16px;
            line-height: 1.5; }}
+  .section-h2 {{ font-size: 16px; font-weight: 600; margin: 28px 0 12px 0; }}
+  .detail-section {{ background: var(--card); border: 1px solid var(--border);
+                     border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }}
+  .detail-h3 {{ font-size: 14px; font-weight: 600; margin: 0 0 10px 0;
+                line-height: 1.5; }}
+  .detail-h4 {{ font-size: 12px; font-weight: 500; color: var(--muted);
+                margin: 14px 0 6px 0; text-transform: uppercase;
+                letter-spacing: 0.04em; }}
+  .muted-small {{ color: var(--muted); font-size: 11px; font-weight: 400;
+                  display: block; margin-top: 4px; }}
+  table.detail {{ font-size: 12.5px; }}
+  table.detail th, table.detail td {{ padding: 6px 10px; }}
+  .pos-soft {{ color: #84e1bc; }}
 </style></head><body>
 <h1>{escape(title)}</h1>
 <div class="subtitle">
@@ -174,6 +316,9 @@ def build_backtest_html(res: dict) -> io.BytesIO:
   <img src="data:image/png;base64,{png_b64}" alt="backtest chart"/>
 </div>
 
+{top3_html}
+
+<h2 class="section-h2">전체 거래일</h2>
 <table>
   <thead><tr>
     <th>날짜 (D)</th>

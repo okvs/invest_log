@@ -146,10 +146,45 @@ def _reconstruct_daily_holdings(
     return out
 
 
+def _reconstruct_daily_holdings_with_avg(
+    transactions: list[dict], dates: list[date]
+) -> dict[date, dict[str, tuple[int, float]]]:
+    """각 date 시점 {종목: (qty, avg_price)}.
+
+    매수 시 가중평균으로 평단 갱신, 매도 시 수량만 차감(평단 유지), 0주면 리셋.
+    """
+    ev: dict[str, list[dict]] = defaultdict(list)
+    for t in sorted(transactions, key=lambda x: x.get("date", "")):
+        if t.get("date"):
+            ev[_canon(t.get("name", ""))].append(t)
+    out: dict[date, dict[str, tuple[int, float]]] = {d: {} for d in dates}
+    for name, evs in ev.items():
+        qty = 0
+        avg = 0.0
+        idx = 0
+        for d in dates:
+            while idx < len(evs) and date.fromisoformat(_date_only(evs[idx]["date"])) <= d:
+                e = evs[idx]
+                q = int(e.get("quantity", 0))
+                pr = float(e.get("price", 0))
+                if e.get("type") == "buy":
+                    newq = qty + q
+                    avg = (avg * qty + pr * q) / newq if newq > 0 else 0.0
+                    qty = newq
+                elif e.get("type") == "sell":
+                    qty = max(0, qty - q)
+                    if qty == 0:
+                        avg = 0.0
+                idx += 1
+            if qty > 0:
+                out[d][name] = (qty, avg)
+    return out
+
+
 def _reconstruct_daily_credit(
     transactions: list[dict], dates: list[date]
-) -> dict[date, float]:
-    """각 date 시점의 신용대출 총잔액.
+) -> tuple[dict[date, float], dict[date, dict[str, float]]]:
+    """각 date 시점의 신용대출 (총잔액, 종목별 dict).
 
     매수 시 qty × price × (100 − margin_ratio)/100 만큼 종목 credit 누적.
     margin_ratio 가 None 또는 ≥100 이면 자기자본 100%로 보고 신용 0.
@@ -159,7 +194,7 @@ def _reconstruct_daily_credit(
     for t in sorted(transactions, key=lambda x: x.get("date", "")):
         if t.get("date"):
             ev[_canon(t.get("name", ""))].append(t)
-    per_name_total: dict[date, dict[str, float]] = {d: {} for d in dates}
+    per_name: dict[date, dict[str, float]] = {d: {} for d in dates}
     for name, evs in ev.items():
         qty = 0
         credit = 0.0
@@ -187,9 +222,9 @@ def _reconstruct_daily_credit(
                             credit = 0.0
                 idx += 1
             if credit > 0:
-                per_name_total[d][name] = credit
-    # 합계 dict 반환
-    return {d: sum(v.values()) for d, v in per_name_total.items()}
+                per_name[d][name] = credit
+    totals = {d: sum(v.values()) for d, v in per_name.items()}
+    return totals, per_name
 
 
 def _seed_futures_synthetic_opens(
@@ -458,7 +493,8 @@ def run_backtest() -> dict | None:
     trade_dates = sorted(trade_dates_set)
 
     hold = _reconstruct_daily_holdings(transactions, dates)
-    credit_by_d = _reconstruct_daily_credit(transactions, dates)
+    hold_avg = _reconstruct_daily_holdings_with_avg(transactions, dates)
+    credit_by_d, credit_per_name_by_d = _reconstruct_daily_credit(transactions, dates)
     fut_hold = _reconstruct_daily_futures_positions(futures_tx, dates)
     today_total_cash = (
         float(account.get("cash") or 0) + float(account.get("futures_cash") or 0)
@@ -620,6 +656,75 @@ def run_backtest() -> dict | None:
         })
 
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
+
+    # 상위 3 거래일에 대해 그날 잔고 상세 (현물+선물+신용)
+    top3 = sorted(higher, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
+    top3_details: list[dict] = []
+    for r in top3:
+        d_ = r["date"]
+        spot_items = []
+        for n, (q, avg) in hold_avg.get(d_, {}).items():
+            p_then = _close_for(n, d_)
+            p_now = _today_price_for(n)
+            eval_then = q * p_then if p_then is not None else None
+            eval_now = q * p_now if p_now is not None else None
+            spot_items.append({
+                "name": n,
+                "qty": q,
+                "avg": avg,
+                "price_then": p_then,
+                "price_now": p_now,
+                "eval_then": eval_then,
+                "eval_now": eval_now,
+                "credit_then": credit_per_name_by_d.get(d_, {}).get(n, 0.0),
+            })
+        spot_items.sort(
+            key=lambda x: (x["eval_now"] or 0), reverse=True
+        )
+        fut_items = []
+        for pid, fp in fut_hold.get(d_, {}).items():
+            ctr = int(fp.get("contracts", 0))
+            if ctr <= 0:
+                continue
+            name = fp.get("name", "")
+            avg = float(fp.get("avg_entry", 0))
+            mult = int(fp.get("multiplier", 10))
+            dir_sign = 1 if fp.get("direction") == "long" else -1
+            mgn = float(fp.get("margin", 0))
+            p_then = _close_for(name, d_)
+            p_now = _today_price_for(name)
+            val_then = (
+                mgn + (p_then - avg) * ctr * mult * dir_sign
+                if p_then is not None else None
+            )
+            val_now = (
+                mgn + (p_now - avg) * ctr * mult * dir_sign
+                if p_now is not None else None
+            )
+            fut_items.append({
+                "name": name,
+                "direction": fp.get("direction", "long"),
+                "contracts": ctr,
+                "avg_entry": avg,
+                "multiplier": mult,
+                "margin": mgn,
+                "price_then": p_then,
+                "price_now": p_now,
+                "val_then": val_then,
+                "val_now": val_now,
+            })
+        fut_items.sort(key=lambda x: (x["val_now"] or 0), reverse=True)
+        top3_details.append({
+            "date": d_,
+            "nav_frozen_today": r["nav_frozen_today"],
+            "nav_actual_d": r["nav_actual_d"],
+            "diff": r["nav_frozen_today"] - nav_actual_today,
+            "cash_d": r["cash_d"],
+            "credit_d": r["credit_d"],
+            "spot": spot_items,
+            "futures": fut_items,
+        })
+
     summary_text = (
         f"=== 백테스트: 포트폴리오 동결 시 오늘 순자산 (현물+선물, 신용 제외) ===\n"
         f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)\n"
@@ -712,6 +817,7 @@ def run_backtest() -> dict | None:
         "today_total_cash": today_total_cash,
         "initial": initial,
         "higher": higher,
+        "top3_details": top3_details,
         "png_buf": png_buf,
         "png_path": out,
         "summary_text": summary_text,
