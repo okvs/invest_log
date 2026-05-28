@@ -579,14 +579,83 @@ def run_backtest() -> dict | None:
             p = last_known.get(name)
         return p
 
-    # 현재 실측 NAV (현물 + 선물): 보유×오늘가 + 선물 미실현 + 현재 cash 총합
-    current_holdings = {h.get("name", ""): int(h.get("quantity", 0)) for h in load_holdings()}
+    # 자산그래프와 동일한 회계 식을 백테스트 전체에 적용:
+    #   asset = initial + 누적 입출금 + 누적 실현 + 미실현
+    # 동결-오늘(D) 라인 식:
+    #   = initial + 총 입출금 (동결이라도 입출금은 계속)
+    #     + cum_realized_thru_D (D 까지의 실현)
+    #     + unrealized_today_with_D_qty (D 시점 보유를 오늘 가격으로 평가)
+
+    # 1) 총 입출금
+    total_dep = sum(
+        (-float(e["amount"]) if e.get("type") == "withdraw" else float(e["amount"]))
+        for e in cash_events
+        if e.get("type") != "seed" and e.get("date")
+    )
+
+    # 2) 누적 실현 by date (현물 매도 + 선물 청산)
+    realized_events: list[tuple[date, float]] = []
+    for t in transactions:
+        if t.get("type") == "sell" and t.get("date"):
+            realized_events.append(
+                (date.fromisoformat(_date_only(t["date"])),
+                 float(t.get("profit_loss", 0) or 0))
+            )
+    for t in raw_futures_tx:
+        if t.get("type") in {"close", "roll_close"} and t.get("date"):
+            realized_events.append(
+                (date.fromisoformat(_date_only(t["date"])),
+                 float(t.get("pnl", 0) or 0))
+            )
+    realized_events.sort()
+    cum_realized_by_d: dict[date, float] = {}
+    running = 0.0
+    idx = 0
+    for d_ in dates:
+        while idx < len(realized_events) and realized_events[idx][0] <= d_:
+            running += realized_events[idx][1]
+            idx += 1
+        cum_realized_by_d[d_] = running
+    total_realized = running  # 전체 누적 실현
+
+    # 3) D 시점 보유 → 오늘 가격으로 미실현 평가
+    def _unrealized_frozen(d_: date) -> float:
+        val = 0.0
+        # 현물
+        for n, (q, avg) in hold_avg.get(d_, {}).items():
+            p_now = _today_price_for(n)
+            if p_now is None:
+                continue
+            val += (p_now - avg) * q
+        # 선물 (mark-to-market, margin 은 cash 의 일부라 미실현에 안 들어감)
+        for pid, fp in fut_hold.get(d_, {}).items():
+            ctr = int(fp.get("contracts", 0))
+            if ctr <= 0:
+                continue
+            p_now = _today_price_for(fp.get("name", ""))
+            if p_now is None:
+                continue
+            avg = float(fp.get("avg_entry", 0))
+            mult = int(fp.get("multiplier", 10))
+            dir_sign = 1 if fp.get("direction") == "long" else -1
+            val += (p_now - avg) * ctr * mult * dir_sign
+        return val
+
+    # 4) 오늘 시점 미실현 (실측) — 현재 보유·포지션을 오늘 가격으로
+    current_holdings = {
+        h.get("name", ""): {
+            "qty": int(h.get("quantity", 0)),
+            "avg": float(h.get("avg_price", 0)),
+        } for h in load_holdings()
+    }
     cur_holdings_value = 0.0
-    for n, q in current_holdings.items():
-        p = _today_price_for(n)
-        if p is not None:
-            cur_holdings_value += q * p
-    # 선물 현재 평가
+    cur_unrealized_spot = 0.0
+    for n, info in current_holdings.items():
+        p_now = _today_price_for(n)
+        if p_now is None:
+            continue
+        cur_holdings_value += info["qty"] * p_now
+        cur_unrealized_spot += (p_now - info["avg"]) * info["qty"]
     cur_fut_positions: dict[str, dict] = {}
     for p in _load_futures_positions():
         cur_fut_positions[p.get("id")] = {
@@ -598,65 +667,59 @@ def run_backtest() -> dict | None:
             "margin": float(p.get("initial_margin", 0)),
         }
     cur_futures_value, _ = _futures_value(cur_fut_positions, _today_price_for)
+    cur_unrealized_futures = 0.0
+    for fp in cur_fut_positions.values():
+        ctr = int(fp.get("contracts", 0))
+        if ctr <= 0:
+            continue
+        p_now = _today_price_for(fp.get("name", ""))
+        if p_now is None:
+            continue
+        avg = float(fp.get("avg_entry", 0))
+        mult = int(fp.get("multiplier", 10))
+        dir_sign = 1 if fp.get("direction") == "long" else -1
+        cur_unrealized_futures += (p_now - avg) * ctr * mult * dir_sign
     cur_credit = sum(
         float(h.get("credit_loan", 0) or 0) for h in load_holdings()
     )
+
+    # 5) 자산그래프 식으로 현재 NAV 계산 (cash-based 와 회계적으로 동치)
     nav_actual_today_gross = (
-        cur_holdings_value + cur_futures_value + today_total_cash
+        initial + total_dep + total_realized
+        + cur_unrealized_spot + cur_unrealized_futures
     )
     nav_actual_today = nav_actual_today_gross - cur_credit  # 신용 제외 순자산
 
-    # 자산그래프 (compute_profit_trend) 의 일별 asset 시계열을 가져와
-    # 백테스트 흰점선("실제 그날 NAV") 로 사용. 자산그래프와 동일한 라인이 보이도록.
-    # asset = initial + 누적 입출금 + 누적 실현 + 그날 미실현 (현물만, 신용 미차감 gross)
+    # 6) 흰점선용 — 자산그래프 라인 그대로 (gross, 현물만, 신용 미차감)
     try:
         graph_rows = compute_profit_trend()
         graph_asset_by_d = {r["date"]: float(r["asset"]) for r in graph_rows}
     except Exception:
-        print("[warn] compute_profit_trend 실패 — 흰점선 fallback", file=sys.stderr)
+        print("[warn] compute_profit_trend 실패", file=sys.stderr)
         graph_asset_by_d = {}
 
     # 각 D(거래일만) 에 대해 동결-오늘 NAV
     rows: list[dict] = []
     for d_ in trade_dates:
-        held = hold[d_]
-        # 현물 동결-오늘 평가
-        spot_frozen = 0.0
-        for n, q in held.items():
-            p = _today_price_for(n)
-            if p is None:
-                continue
-            spot_frozen += q * p
-        # 선물 동결-오늘 평가
-        fut_frozen, _ = _futures_value(fut_hold[d_], _today_price_for)
-        # 동결 cash = D 시점 통합 cash + D 이후 net deposits
-        cash_d = cash.get(d_, today_total_cash)
-        net_dep_after = _net_deposits_after(cash_events, d_)
-        # D 시점 신용대출 (동결 시에도 그대로 유지 가정, 이자 무시)
+        unreal_frozen = _unrealized_frozen(d_)
+        cum_real_d = cum_realized_by_d.get(d_, 0.0)
         credit_d = credit_by_d.get(d_, 0.0)
-        nav_frozen_today_gross = spot_frozen + fut_frozen + cash_d + net_dep_after
-        nav_frozen_today = nav_frozen_today_gross - credit_d  # 신용 제외 순자산
+        nav_frozen_today_gross = (
+            initial + total_dep + cum_real_d + unreal_frozen
+        )
+        nav_frozen_today = nav_frozen_today_gross - credit_d
 
-        # 그날 실제 NAV (참고용) — 자산그래프와 동일한 식
-        # asset = initial + 누적 입출금 + 누적 실현 + 그날 미실현 (현물, 신용 미차감)
-        nav_actual_d = graph_asset_by_d.get(d_)
-        if nav_actual_d is None:  # 매핑 누락 시 (이론상 없음) cash-based 폴백
-            spot_actual_d = 0.0
-            for n, q in held.items():
-                p = _close_for(n, d_)
-                if p is not None:
-                    spot_actual_d += q * p
-            nav_actual_d = spot_actual_d + cash_d - credit_d
+        # 그날 실제 NAV (흰점선) — 자산그래프 라인 그대로
+        nav_actual_d = graph_asset_by_d.get(d_, nav_frozen_today_gross)
 
         rows.append({
             "date": d_,
             "nav_frozen_today": nav_frozen_today,
             "nav_frozen_today_gross": nav_frozen_today_gross,
             "nav_actual_d": nav_actual_d,
-            "cash_d": cash_d,
             "credit_d": credit_d,
-            "spot_frozen": spot_frozen,
-            "fut_frozen": fut_frozen,
+            "cum_realized_d": cum_real_d,
+            "unrealized_frozen": unreal_frozen,
         })
 
     higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
@@ -723,7 +786,8 @@ def run_backtest() -> dict | None:
             "nav_frozen_today": r["nav_frozen_today"],
             "nav_actual_d": r["nav_actual_d"],
             "diff": r["nav_frozen_today"] - nav_actual_today,
-            "cash_d": r["cash_d"],
+            "cum_realized_d": r["cum_realized_d"],
+            "unrealized_frozen": r["unrealized_frozen"],
             "credit_d": r["credit_d"],
             "spot": spot_items,
             "futures": fut_items,

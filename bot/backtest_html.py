@@ -128,7 +128,8 @@ def _render_top3(top3: list[dict], nav_now: float) -> str:
             f"<div class='muted-small'>"
             f"동결-오늘 {_fmt_krw(d['nav_frozen_today'])} · "
             f"그날 실제 {_fmt_krw(d['nav_actual_d'])} · "
-            f"현금 {_fmt_krw(d['cash_d'])} · "
+            f"누적 실현(D 까지) {_fmt_krw(d.get('cum_realized_d', 0))} · "
+            f"동결 미실현(오늘) {_fmt_krw(d.get('unrealized_frozen', 0))} · "
             f"신용 {_fmt_krw(d['credit_d'])}"
             f"</div></h3>"
         )
