@@ -261,14 +261,21 @@ def main() -> int:
     code_by_name = _name_to_code()
     last_known = _last_known_price(transactions)
 
-    all_dates = [_date_only(t.get("date", "")) for t in transactions if t.get("date")]
-    start = date.fromisoformat(min(all_dates))
+    # 거래일(매수/매도가 있던 날)만 D 후보로. 그 외 날은 동결 의미가 없음.
+    trade_dates_set = {
+        date.fromisoformat(_date_only(t["date"]))
+        for t in transactions
+        if t.get("date") and t.get("type") in {"buy", "sell"}
+    }
+    start = min(trade_dates_set)
     today = date.today()
+    # holdings/cash 재구성은 전체 캘린더 일자로(다만 평가는 거래일만)
     dates: list[date] = []
     d = start
     while d <= today:
         dates.append(d)
         d += timedelta(days=1)
+    trade_dates = sorted(trade_dates_set)
 
     hold = _reconstruct_daily_holdings(transactions, dates)
     today_cash = float(account.get("cash") or 0)
@@ -363,9 +370,9 @@ def main() -> int:
     cur_cash = float(account.get("cash") or 0)
     nav_actual_today = cur_holdings_value + cur_cash
 
-    # 각 D 에 대해 동결-오늘 NAV
+    # 각 D(거래일만) 에 대해 동결-오늘 NAV
     rows: list[dict] = []
-    for d_ in dates:
+    for d_ in trade_dates:
         held = hold[d_]
         # 보유 0 종목인 날(완전 현금)도 의미 있으니 포함
         frozen_val = 0.0
@@ -404,30 +411,26 @@ def main() -> int:
             "valued_any": valued_any,
         })
 
-    # 텍스트 표
-    higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
-    higher.sort(key=lambda r: r["nav_frozen_today"], reverse=True)
+    # 텍스트 표 — 모든 거래일을 날짜순으로
     print()
     print(f"=== 백테스트: 현물 동결 시 오늘 NAV ===")
-    print(f"기간: {start} ~ {today}  ({len(dates)}일)")
+    print(f"기간: {rows[0]['date']} ~ {rows[-1]['date']}  (거래일 {len(rows)}일)")
     print(f"현재 실측 NAV (현물): {_fmt_krw(nav_actual_today)}  "
           f"(보유 {_fmt_krw(cur_holdings_value)} + 현금 {_fmt_krw(cur_cash)})")
     print(f"초기자본: {_fmt_krw(initial)}")
+    higher = [r for r in rows if r["nav_frozen_today"] > nav_actual_today]
+    print(f"→ 현재 NAV 초과 거래일: {len(higher)}/{len(rows)}건")
     print()
-    if not higher:
-        print(f"→ 현재 NAV 가 모든 과거 동결 시나리오 중 가장 높음. (현재가 ALL-TIME BEST)")
-    else:
-        print(f"→ 현재 NAV 보다 동결-오늘이 더 높은 날: {len(higher)} 건")
-        print()
-        print(f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재 +':>14} {'그날 실제 NAV':>16}")
-        for r in higher[:30]:
-            diff = r["nav_frozen_today"] - nav_actual_today
-            print(f"  {r['date'].isoformat():<12} "
-                  f"{_fmt_krw(r['nav_frozen_today']):>16} "
-                  f"{'+'+_fmt_krw(diff):>14} "
-                  f"{_fmt_krw(r['nav_actual_d']):>16}")
-        if len(higher) > 30:
-            print(f"  ... +{len(higher)-30}건")
+    print(f"  {'날짜':<12} {'동결-오늘 NAV':>16} {'vs 현재':>14} {'그날 실제 NAV':>16}  {'표시'}")
+    for r in rows:
+        diff = r["nav_frozen_today"] - nav_actual_today
+        sign = "+" if diff > 0 else ""
+        marker = " ★ 초과" if diff > 0 else ""
+        print(f"  {r['date'].isoformat():<12} "
+              f"{_fmt_krw(r['nav_frozen_today']):>16} "
+              f"{sign + _fmt_krw(diff):>14} "
+              f"{_fmt_krw(r['nav_actual_d']):>16}"
+              f"{marker}")
 
     # 그래프
     _setup_korean_font()
