@@ -41,17 +41,26 @@ def _pct_span(pct: float | None) -> str:
     return f"<span class='{cls}'>{sign}{pct:.1f}%</span>"
 
 
-def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 · 그날 잔고를 그대로 들고 있었으면", number_prefix: str = "#") -> str:
+def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 · 그날 잔고를 그대로 들고 있었으면", number_prefix: str = "#", show_then_pct: bool = False) -> str:
     sections = []
     for i, d in enumerate(top3):
+        # 평가금 + ±손익 표시 헬퍼 (그날 수량 또는 현재 수량 기준)
+        def _eval_with_pnl(eval_val, qty, price, avg):
+            if eval_val is None or qty is None or price is None or avg is None:
+                return _cell_krw(eval_val)
+            pnl = (price - avg) * qty
+            cls = "pos" if pnl >= 0 else "neg"
+            sign = "+" if pnl >= 0 else ""
+            return (
+                f"{_fmt_krw(eval_val)}"
+                f" <span class='small {cls}'>({sign}{_fmt_krw(pnl)})</span>"
+            )
+
         # 현물 표
         spot_body = []
         for it in d["spot"]:
-            pct_now = (
-                (it["price_now"] / it["avg"] - 1) * 100
-                if it["avg"] and it["price_now"] else None
-            )
-            credit_cell = _fmt_krw(it["credit_then"]) if it["credit_then"] > 0 else "—"
+            pct_now = it.get("pct_now")
+            pct_then = it.get("pct_then")
             # 현재 보유·비중 변화
             cur_q = it.get("cur_qty", 0)
             qty_diff = it.get("qty_diff", 0)
@@ -76,22 +85,49 @@ def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 ·
                     f"{wt:.1f}%→{wn:.1f}%</span> "
                     f"<span class='{cls}'>{arrow}{abs(wd):.1f}pp</span>"
                 )
+            # 차익 표시 (오늘 평가금 − 동결-오늘 평가금)
+            pd = it.get("profit_diff")
+            if pd is None:
+                diff_cell = "—"
+            elif abs(pd) < 1:
+                diff_cell = "0"
+            else:
+                cls = "pos" if pd > 0 else "neg"
+                sign = "+" if pd > 0 else ""
+                diff_cell = f"<span class='{cls}'>{sign}{_fmt_krw(pd)}</span>"
+            then_pct_cell = (
+                f"<td class='num small'>{_pct_span(pct_then)}</td>"
+                if show_then_pct else ""
+            )
+            eval_then_cell = _eval_with_pnl(
+                it["eval_then"], it["qty"], it["price_then"], it["avg"]
+            )
+            eval_frozen_cell = _eval_with_pnl(
+                it["eval_now"], it["qty"], it["price_now"], it["avg"]
+            )
+            eval_cur_cell = _eval_with_pnl(
+                it.get("cur_eval_now"), it.get("cur_qty"), it["price_now"], it["avg"]
+            )
             spot_body.append(
                 "<tr>"
                 f"<td>{escape(it['name'])}</td>"
                 f"<td class='num'>{it['qty']:,}주</td>"
                 f"<td class='num'>{_cell_won(it['avg'])}</td>"
                 f"<td class='num'>{_cell_won(it['price_then'])}</td>"
-                f"<td class='num'>{_cell_krw(it['eval_then'])}</td>"
+                f"<td class='num'>{eval_then_cell}</td>"
                 f"<td class='num'>{_cell_won(it['price_now'])}</td>"
-                f"<td class='num pos-soft'>{_cell_krw(it['eval_now'])}</td>"
+                f"<td class='num pos-soft'>{eval_frozen_cell}</td>"
+                f"<td class='num'>{eval_cur_cell}</td>"
+                f"<td class='num'>{diff_cell}</td>"
                 f"<td class='num small'>{cur_qty_cell}</td>"
                 f"<td class='num small'>{weight_cell}</td>"
+                f"{then_pct_cell}"
                 f"<td class='num small'>{_pct_span(pct_now)}</td>"
                 "</tr>"
             )
         spot_tbl = ""
         if spot_body:
+            then_pct_th = "<th class='num'>그날 매도 수익률</th>" if show_then_pct else ""
             spot_tbl = (
                 "<table class='detail'><thead><tr>"
                 "<th>종목</th>"
@@ -101,21 +137,36 @@ def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 ·
                 "<th class='num'>그날 평가금</th>"
                 "<th class='num'>오늘 종가</th>"
                 "<th class='num'>동결-오늘 평가금</th>"
+                "<th class='num'>오늘 평가금</th>"
+                "<th class='num'>차익</th>"
                 "<th class='num'>현재 수량 (Δ)</th>"
                 "<th class='num'>비중 변화</th>"
+                f"{then_pct_th}"
                 "<th class='num'>오늘 수익률</th>"
                 "</tr></thead>"
                 f"<tbody>{''.join(spot_body)}</tbody></table>"
+            )
+
+        # 선물 평가 + ±손익 표시 헬퍼
+        def _fut_eval_with_pnl(val, ctr, price, avg, mult, direction):
+            if (val is None or price is None or avg is None
+                    or ctr is None or ctr == 0):
+                return _cell_krw(val)
+            dir_sign = 1 if direction == "long" else -1
+            pnl = (price - avg) * ctr * mult * dir_sign
+            cls = "pos" if pnl >= 0 else "neg"
+            sign = "+" if pnl >= 0 else ""
+            return (
+                f"{_fmt_krw(val)}"
+                f" <span class='small {cls}'>({sign}{_fmt_krw(pnl)})</span>"
             )
 
         # 선물 표
         fut_body = []
         for it in d["futures"]:
             ds = "롱" if it["direction"] == "long" else "숏"
-            pct_now = (
-                (it["price_now"] / it["avg_entry"] - 1) * 100
-                if it["avg_entry"] and it["price_now"] else None
-            )
+            pct_now = it.get("pct_now")
+            pct_then = it.get("pct_then")
             cur_ctr = it.get("cur_contracts", 0)
             ctr_diff = it.get("contracts_diff", 0)
             if cur_ctr == 0:
@@ -126,21 +177,53 @@ def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 ·
                 cur_ctr_cell = f"{cur_ctr}계약 <span class='neg'>({ctr_diff})</span>"
             else:
                 cur_ctr_cell = f"{cur_ctr}계약 <span class='muted-small'>(유지)</span>"
+            # 선물 차익 (오늘 평가 − 동결-오늘 평가)
+            pd = it.get("profit_diff")
+            if pd is None:
+                fut_diff_cell = "—"
+            elif abs(pd) < 1:
+                fut_diff_cell = "0"
+            else:
+                cls = "pos" if pd > 0 else "neg"
+                sign = "+" if pd > 0 else ""
+                fut_diff_cell = f"<span class='{cls}'>{sign}{_fmt_krw(pd)}</span>"
+            val_then_cell = _fut_eval_with_pnl(
+                it["val_then"], it["contracts"], it["price_then"],
+                it["avg_entry"], it["multiplier"], it["direction"]
+            )
+            val_frozen_cell = _fut_eval_with_pnl(
+                it["val_now"], it["contracts"], it["price_now"],
+                it["avg_entry"], it["multiplier"], it["direction"]
+            )
+            val_cur_cell = _fut_eval_with_pnl(
+                it.get("cur_val_now"), cur_ctr, it["price_now"],
+                it["avg_entry"], it["multiplier"], it["direction"]
+            )
+            then_pct_fut_cell = (
+                f"<td class='num small'>{_pct_span(pct_then)}</td>"
+                if show_then_pct else ""
+            )
             fut_body.append(
                 "<tr>"
                 f"<td>{escape(it['name'])} ({ds})</td>"
                 f"<td class='num'>{it['contracts']}계약×{it['multiplier']}</td>"
                 f"<td class='num'>{_cell_won(it['avg_entry'])}</td>"
                 f"<td class='num'>{_cell_won(it['price_then'])}</td>"
-                f"<td class='num'>{_cell_krw(it['val_then'])}</td>"
+                f"<td class='num'>{val_then_cell}</td>"
                 f"<td class='num'>{_cell_won(it['price_now'])}</td>"
-                f"<td class='num pos-soft'>{_cell_krw(it['val_now'])}</td>"
+                f"<td class='num pos-soft'>{val_frozen_cell}</td>"
+                f"<td class='num'>{val_cur_cell}</td>"
+                f"<td class='num'>{fut_diff_cell}</td>"
                 f"<td class='num small'>{cur_ctr_cell}</td>"
+                f"{then_pct_fut_cell}"
                 f"<td class='num small'>{_pct_span(pct_now)}</td>"
                 "</tr>"
             )
         fut_tbl = ""
         if fut_body:
+            then_pct_fut_th = (
+                "<th class='num'>그날 청산 수익률</th>" if show_then_pct else ""
+            )
             fut_tbl = (
                 "<h4 class='detail-h4'>선물 포지션</h4>"
                 "<table class='detail'><thead><tr>"
@@ -151,7 +234,10 @@ def _render_top3(top3: list[dict], nav_now: float, title: str = "TOP 3 상세 ·
                 "<th class='num'>그날 평가</th>"
                 "<th class='num'>오늘 기초자산</th>"
                 "<th class='num'>동결-오늘 평가</th>"
+                "<th class='num'>오늘 평가</th>"
+                "<th class='num'>차익</th>"
                 "<th class='num'>현재 계약 (Δ)</th>"
+                f"{then_pct_fut_th}"
                 "<th class='num'>오늘 수익률</th>"
                 "</tr></thead>"
                 f"<tbody>{''.join(fut_body)}</tbody></table>"
@@ -255,6 +341,7 @@ def build_backtest_html(res: dict) -> io.BytesIO:
             bottom3, nav_now,
             title="BOTTOM 3 상세 · 동결-오늘 NAV 최저 3일",
             number_prefix="B",
+            show_then_pct=True,  # 그날 매도/청산 수익률 컬럼 추가
         )
 
     html = f"""<!doctype html>

@@ -746,13 +746,22 @@ def run_backtest() -> dict | None:
             eval_then = q * p_then if p_then is not None else None
             eval_now = q * p_now if p_now is not None else None
             cur_qty = int(current_qty_by_name.get(n, 0))
-            # 그날 비중 (그날 평가금 / 그날 NAV)
+            # 오늘 평가금 (현재 보유 × 오늘가) + 차익 (오늘 평가금 − 동결-오늘 평가금)
+            cur_eval = (cur_qty * p_now) if p_now is not None else None
+            profit_diff = (
+                cur_eval - eval_now
+                if (cur_eval is not None and eval_now is not None) else None
+            )
+            # 그날 / 오늘 비중
             w_then = (eval_then / nav_d * 100) if eval_then and nav_d else None
-            # 현재 비중 (현재 평가금 / 현재 NAV) — 현재 비보유면 0
-            cur_eval = (cur_qty * p_now) if p_now else 0
-            w_now = (cur_eval / nav_actual_today * 100
+            w_now = ((cur_eval or 0) / nav_actual_today * 100
                      if nav_actual_today else None)
             w_diff = (w_now - w_then) if (w_now is not None and w_then is not None) else None
+            # 그날 / 오늘 종목별 수익률 (per share)
+            pct_then = ((p_then / avg - 1) * 100
+                        if avg and p_then is not None else None)
+            pct_now = ((p_now / avg - 1) * 100
+                       if avg and p_now is not None else None)
             spot_items.append({
                 "name": n,
                 "qty": q,
@@ -760,13 +769,17 @@ def run_backtest() -> dict | None:
                 "price_then": p_then,
                 "price_now": p_now,
                 "eval_then": eval_then,
-                "eval_now": eval_now,
+                "eval_now": eval_now,                # 동결-오늘 평가금 (D 수량 × 오늘가)
+                "cur_eval_now": cur_eval,            # 오늘 평가금 (현재 수량 × 오늘가)
+                "profit_diff": profit_diff,          # 차익 = 오늘 − 동결-오늘
                 "credit_then": credit_per_name_by_d.get(d_, {}).get(n, 0.0),
                 "cur_qty": cur_qty,
                 "qty_diff": cur_qty - q,
                 "weight_then": w_then,
                 "weight_now": w_now,
                 "weight_diff": w_diff,
+                "pct_then": pct_then,
+                "pct_now": pct_now,
             })
         spot_items.sort(key=lambda x: (x["eval_now"] or 0), reverse=True)
 
@@ -791,6 +804,19 @@ def run_backtest() -> dict | None:
                 if p_now is not None else None
             )
             cur_ctr = current_fut_by_name.get(_canon(name), 0)
+            # 오늘 평가 (현재 계약 기준) + 차익
+            cur_val_now = (
+                (cur_ctr / ctr) * val_now
+                if (val_now is not None and ctr > 0) else None
+            )
+            profit_diff_fut = (
+                cur_val_now - val_now
+                if (cur_val_now is not None and val_now is not None) else None
+            )
+            pct_then = ((p_then / avg - 1) * 100 * dir_sign
+                        if avg and p_then is not None else None)
+            pct_now_pct = ((p_now / avg - 1) * 100 * dir_sign
+                           if avg and p_now is not None else None)
             fut_items.append({
                 "name": name,
                 "direction": fp.get("direction", "long"),
@@ -802,8 +828,12 @@ def run_backtest() -> dict | None:
                 "price_now": p_now,
                 "val_then": val_then,
                 "val_now": val_now,
+                "cur_val_now": cur_val_now,
+                "profit_diff": profit_diff_fut,
                 "cur_contracts": cur_ctr,
                 "contracts_diff": cur_ctr - ctr,
+                "pct_then": pct_then,
+                "pct_now": pct_now_pct,
             })
         fut_items.sort(key=lambda x: (x["val_now"] or 0), reverse=True)
         return {
@@ -818,11 +848,12 @@ def run_backtest() -> dict | None:
             "futures": fut_items,
         }
 
-    # TOP 3 — 동결-오늘 NAV 가장 큰 3일
-    top3 = sorted(rows, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
+    # TOP / BOTTOM 선정 시 오늘·어제 제외 (D=today/yesterday 면 현재와 거의 동일해 무의미)
+    yesterday = today - timedelta(days=1)
+    filtered_rows = [r for r in rows if r["date"] not in (today, yesterday)]
+    top3 = sorted(filtered_rows, key=lambda r: r["nav_frozen_today"], reverse=True)[:3]
     top3_details = [_build_detail(r) for r in top3]
-    # BOTTOM 3 — 동결-오늘 NAV 가장 작은 3일
-    bottom3 = sorted(rows, key=lambda r: r["nav_frozen_today"])[:3]
+    bottom3 = sorted(filtered_rows, key=lambda r: r["nav_frozen_today"])[:3]
     bottom3_details = [_build_detail(r) for r in bottom3]
 
     summary_text = (
