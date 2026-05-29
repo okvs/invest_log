@@ -746,11 +746,14 @@ def run_backtest() -> dict | None:
             eval_then = q * p_then if p_then is not None else None
             eval_now = q * p_now if p_now is not None else None
             cur_qty = int(current_qty_by_name.get(n, 0))
-            # 오늘 평가금 (현재 보유 × 오늘가) + 차익 (오늘 평가금 − 동결-오늘 평가금)
+            # 오늘 평가금 (현재 보유 × 오늘가)
             cur_eval = (cur_qty * p_now) if p_now is not None else None
+            # 차익 = 오늘 손익 − 동결-오늘 손익 = (p_now − avg) × (cur_qty − q)
+            # 평가금 자체가 아닌 괄호 안 손익끼리 빼야 수량 변동이 손실/이익 방향과
+            # 어긋날 때 부호가 헷갈리지 않음
             profit_diff = (
-                cur_eval - eval_now
-                if (cur_eval is not None and eval_now is not None) else None
+                (p_now - avg) * (cur_qty - q)
+                if (p_now is not None and avg) else None
             )
             # 그날 / 오늘 비중
             w_then = (eval_then / nav_d * 100) if eval_then and nav_d else None
@@ -804,14 +807,15 @@ def run_backtest() -> dict | None:
                 if p_now is not None else None
             )
             cur_ctr = current_fut_by_name.get(_canon(name), 0)
-            # 오늘 평가 (현재 계약 기준) + 차익
+            # 오늘 평가 (현재 계약 기준)
             cur_val_now = (
                 (cur_ctr / ctr) * val_now
                 if (val_now is not None and ctr > 0) else None
             )
+            # 차익 = 오늘 손익 − 동결-오늘 손익 (margin 제외, 괄호 안 P&L 끼리)
             profit_diff_fut = (
-                cur_val_now - val_now
-                if (cur_val_now is not None and val_now is not None) else None
+                (p_now - avg) * (cur_ctr - ctr) * mult * dir_sign
+                if (p_now is not None and avg) else None
             )
             pct_then = ((p_then / avg - 1) * 100 * dir_sign
                         if avg and p_then is not None else None)
