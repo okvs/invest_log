@@ -253,8 +253,30 @@ def load_account() -> dict:
 
 
 def save_account(data: dict) -> None:
-    """계좌 정보 저장."""
+    """계좌 정보 저장(전체 덮어쓰기). 키 삭제가 필요할 때만 쓰고, 부분 갱신은
+    update_account 를 써서 futures_cash·chat_id·maintenance_ratio 손실을 막는다."""
     save(ACCOUNT_FILE, data)
+
+
+def update_account(**kwargs) -> None:
+    """계좌 정보 부분 갱신(merge). 지정한 키만 바꾸고 나머지는 보존한다."""
+    acc = load_account()
+    acc.update(kwargs)
+    save(ACCOUNT_FILE, acc)
+
+
+def adjust_futures_cash(delta: float) -> None:
+    """선물 가용예수금(futures_cash)에 delta 를 더한다(음수=차감).
+
+    선물 진입 시 증거금만큼 차감(-margin), 청산/롤 시 환급증거금+실현손익을
+    가산하기 위한 헬퍼. futures_cash 가 설정돼 있지 않으면(None) no-op —
+    예수금 추적을 쓰지 않는 사용자에게 0 버킷을 만들지 않는다.
+    """
+    acc = load_account()
+    if acc.get("futures_cash") is None:
+        return
+    acc["futures_cash"] = float(acc.get("futures_cash") or 0) + float(delta)
+    save(ACCOUNT_FILE, acc)
 
 
 CASH_EVENTS_FILE = "cash_events.json"

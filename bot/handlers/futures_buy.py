@@ -43,6 +43,7 @@ from parsers.expiry import upcoming_months
 from parsers.futures_input import parse_futures_entry
 from parsers.input_parser import resolve_name, search_stocks
 from storage.json_store import (
+    adjust_futures_cash,
     get_recent_futures_reasons,
     load_futures_positions,
     load_futures_transactions,
@@ -458,6 +459,9 @@ async def _do_save(update, context, *, is_callback: bool) -> int:
         positions.append(pos.to_dict())
 
     save_futures_positions(positions)
+
+    # 선물 진입 — 위탁증거금만큼 선물 가용예수금 차감
+    adjust_futures_cash(-margin)
 
     txs = load_futures_transactions()
     txs.append(tx.to_dict())

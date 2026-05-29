@@ -1,6 +1,16 @@
 # Lessons Learned
 
 ## 2026-05-30
+### 선물 매매가 예수금을 안 건드려 cash가 영구 stale — 회계 전수 감사로 발견
+- **문제**: 사용자가 "선물 1계약 더 샀는데 가용현금이 안 줄었다". 저장 cash 47.18M/futures_cash 23.62M가 실측 16.49M/7.66M보다 크게 부풀려져 있었고, NAV 두 방식이 31M 어긋남.
+- **원인**: 현물 buy/sell(buy.py·sell.py)은 `account["cash"]`를 갱신하는데 **선물 진입/청산/롤·broker 자동파싱(futures_buy/sell/roll, broker)은 account.futures_cash를 전혀 갱신하지 않았다.** 증거금이 한 번도 예수금에서 차감된 적이 없어 futures_cash가 거래와 무관하게 고정 → 증거금 합(56M)이 저장 futures_cash(23.6M)를 초과하는 물리적으로 불가능한 상태. 또 cash.py가 `save_account({initial_capital,cash})`로 account 전체를 덮어써 futures_cash/chat_id를 삭제할 위험까지.
+- **해결**: (1) `update_account(**kwargs)` merge 헬퍼 + `adjust_futures_cash(delta)`(없으면 no-op) 신설. (2) 선물 4핸들러+broker에 진입 `-=margin` / 청산 `+=margin_release+pnl` / 롤 `+=pnl+release−new_margin` 추가. (3) cash.py를 merge로 교체. (4) html_report 현금모델을 '별도 버킷'으로 통일(cash=현물, futures_cash=선물 가용, 둘 다 증거금 차감 안 함 — 예전엔 spot=cash−futures_cash로 이중차감). (5) account.json 실측 정합. → 예수금 카드가 실측 24,152,305와 정확히 일치, NAV 갭 31M→8M.
+- **교훈**:
+  1. **상태를 바꾸는 모든 경로가 같은 장부를 갱신해야 한다.** 현물만 cash를 갱신하고 선물은 빠뜨리면, 한쪽 자산군 거래가 늘수록 잔액이 조용히 틀어진다. 자산군 추가 시 "이 거래가 어떤 잔액을 어떻게 바꾸나"를 체크리스트로.
+  2. **물리적 불변식으로 데이터 의미를 역추론하라**: 증거금(56M) > futures_cash(7.66M)이면 futures_cash는 '총예수금'일 수 없고 '증거금 차감 후 가용분'이다. 매일 헷갈리던 의미를 추측 대신 부등식으로 확정.
+  3. **dict 통째 저장(save_account)은 키 손실 위험** — 부분 갱신은 load-mutate-save(merge)로. 한 명령(예수금)이 다른 기능(선물/푸시)의 설정을 지우면 안 됨.
+  4. 같은 수량을 두 화면이 다른 식으로 계산하면 갈라진다([[2026-05-30 10억 트래커 교훈]]) — 잔액기반 NAV와 P&L기반 NAV는 정의가 다르므로 reconcile 항목(stale cash, 입금 누락, 유령포지션)을 명시적으로 추적.
+
 ### 10억 트래커 — NAV는 새로 계산하지 말고 자산그래프 식을 재사용
 - **문제**: "순자산 10억" 트래커를 만들 때 순자산을 어떻게 정의하느냐가 함정. 직관적으로 `자산 − 신용대출`로 또 빼고 싶지만, 그러면 신용을 이중 차감하게 됨.
 - **원인**: `compute_profit_trend`의 `asset = 초기자본 + 실현 + 미실현`은 각 보유의 평단이 **전체 매입가(신용 포함분까지)** 기준이라, 미실현이 신용으로 산 주식의 손익까지 잡는다. 자기자본(초기자본)에 앵커돼 있어 이 식은 **이미 신용 차감된 순자산과 같다**(매입 시점 항등식으로 검증). 여기서 신용을 또 빼면 음수 쪽으로 틀어진다 — 2026-05-28에 이미 "신용 차감 제거"로 통일해 둔 이유.

@@ -50,6 +50,7 @@ from parsers.input_parser import (
     resolve_name,
 )
 from storage.json_store import (
+    adjust_futures_cash,
     get_recent_futures_reasons,
     get_recent_reasons,
     load_account,
@@ -855,6 +856,10 @@ async def _do_open_save(
         positions.append(pos.to_dict())
 
     save_futures_positions(positions)
+
+    # 선물 진입(신규/추가) — 위탁증거금만큼 선물 가용예수금 차감
+    adjust_futures_cash(-margin)
+
     txs = load_futures_transactions()
     txs.append(tx.to_dict())
     save_futures_transactions(txs)
@@ -946,6 +951,9 @@ async def _do_close_save(
     else:
         positions[pos_idx] = pos.to_dict()
     save_futures_positions(positions)
+
+    # 선물 청산 — 환급 증거금 + 실현손익만큼 선물 가용예수금 가산
+    adjust_futures_cash(margin_release + pnl)
 
     txs = load_futures_transactions()
     txs.append(tx.to_dict())

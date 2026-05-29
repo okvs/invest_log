@@ -35,6 +35,7 @@ from models.futures_transaction import FuturesTransaction
 from parsers.expiry import upcoming_months
 from parsers.futures_input import parse_futures_roll
 from storage.json_store import (
+    adjust_futures_cash,
     get_recent_futures_reasons,
     load_futures_positions,
     load_futures_transactions,
@@ -309,6 +310,9 @@ async def _do_roll(update, context, *, is_callback: bool) -> int:
     open_tx.linked_tx_id = close_tx.id
 
     save_futures_positions(positions)
+
+    # 롤오버 = 당월 청산(환급증거금+실현손익) − 차월 진입증거금. 순변동 반영.
+    adjust_futures_cash(pnl + margin_release - new_margin)
 
     txs = load_futures_transactions()
     txs.append(close_tx.to_dict())

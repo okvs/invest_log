@@ -784,21 +784,18 @@ def build_html_report(
         sector_futures[sector] += notional
         total_margin += float(fp.get("initial_margin", 0))
 
-    # 현금 분할: futures_cash 가 지정되면 현물/선물 cash 를 분리.
-    # - 현물 cash = total cash - futures_cash (≥0 clamp)
-    # - 선물 free cash = futures_cash - total_margin (≥0 clamp, 마진 차감 후 가용분)
+    # 현금 버킷 — cash(=현물 예수금)와 futures_cash(=선물 가용예수금, 이미 증거금
+    # 차감 후 값)는 서로 독립된 별도 계좌다. 빼지 않고 각각 더한다.
+    # (예전엔 cash ⊇ futures_cash 로 가정해 spot_part=cash−futures_cash 로 빼서
+    #  현물현금이 선물예수금만큼 이중차감되고, futures_cash 에서 증거금을 또 빼
+    #  선물현금이 0이 되는 버그가 있었음.)
     futures_cash_val = float(futures_cash) if futures_cash else 0.0
-    if show_cash and cash_remaining > 0:
-        if futures_cash_val > 0:
-            spot_part = max(cash_remaining - futures_cash_val, 0.0)
-            fut_free_part = max(futures_cash_val - total_margin, 0.0)
-            if spot_part > 0:
-                sector_data["현금"] += spot_part
-            if fut_free_part > 0:
-                sector_data["현금"] += fut_free_part
-                sector_futures["현금"] += fut_free_part
-        else:
+    if show_cash:
+        if cash_remaining > 0:
             sector_data["현금"] += cash_remaining
+        if futures_cash_val > 0:
+            sector_data["현금"] += futures_cash_val
+            sector_futures["현금"] += futures_cash_val
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
     sector_total = sum(v for _, v in sector_sorted)
 
@@ -942,7 +939,8 @@ def build_html_report(
     # 선물 청산 회수액 = 위탁증거금(되돌려받음) + 미실현손익.
     total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
     fut_recover = total_margin + total_futures_unrealized        # 선물 청산 회수액
-    _cash = cash_remaining if show_cash else 0.0
+    # 예수금 = 현물 cash + 선물 가용예수금(별도 버킷). 둘 다 청산 시 손에 쥐는 현금.
+    _cash = (cash_remaining + futures_cash_val) if show_cash else 0.0
 
     # 평가금 뷰 (보유자산 평가 — 현금 제외)
     eval_spot = total_eval                                       # 현물만
@@ -997,19 +995,19 @@ def build_html_report(
     else:
         asset_card_html = ""
 
-    # 예수금 / 총투자금 카드
+    # 예수금 / 총투자금 카드 — 현물 cash + 선물 가용예수금(별도 버킷) 합산
     if show_cash and initial_capital:
+        total_cash = cash_remaining + futures_cash_val
         if futures_cash_val > 0:
-            _fc = min(futures_cash_val, cash_remaining)
             cash_sub = (
                 "<div class='sub' style='color:#9ca3af'>현물 "
-                f"{format_number(int(max(cash_remaining - _fc, 0)))} / 선물 {format_number(int(_fc))}</div>"
+                f"{format_number(int(cash_remaining))} / 선물 {format_number(int(futures_cash_val))}</div>"
             )
         else:
             cash_sub = ""
         cash_card_html = (
-            "<div class='card'><div class='label'>예수금</div>"
-            f"<div class='value'>{format_number(int(cash_remaining))}원</div>{cash_sub}</div>"
+            "<div class='card'><div class='label'>예수금 (현물+선물)</div>"
+            f"<div class='value'>{format_number(int(total_cash))}원</div>{cash_sub}</div>"
         )
     else:
         cash_card_html = (
@@ -1208,7 +1206,7 @@ def build_html_report(
 
   {"<div class='warning'>⚠ 종목코드 미등록: " + ", ".join(missing) + "</div>" if missing else ""}
 
-  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining, futures_cash=futures_cash_val, maintenance_ratio=futures_maintenance_ratio)}
+  {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining + futures_cash_val, futures_cash=futures_cash_val, maintenance_ratio=futures_maintenance_ratio)}
 
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{

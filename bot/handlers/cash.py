@@ -24,8 +24,8 @@ from models.portfolio import Holding
 from storage.json_store import (
     load_account,
     load_holdings,
-    save_account,
     save_holdings,
+    update_account,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ async def _capital_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for h in holdings if h.get("quantity", 0) > 0
         )
         cash = capital - total_cash_spent
-        save_account({"initial_capital": capital, "cash": cash})
+        update_account(initial_capital=capital, cash=cash)
         await update.message.reply_text(
             f"초기자본 변경 완료!\n\n"
             f"초기자본: {format_number(capital)}원\n"
@@ -122,8 +122,7 @@ async def _capital_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     active = [h for h in holdings if h.get("quantity", 0) > 0]
 
     if not active:
-        account = {"initial_capital": capital, "cash": capital}
-        save_account(account)
+        update_account(initial_capital=capital, cash=capital)
         await update.message.reply_text(
             f"초기자본 {format_number(capital)}원 설정 완료!\n"
             f"예수금: {format_number(capital)}원"
@@ -194,8 +193,7 @@ async def _holding_margin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     save_holdings(all_holdings)
 
-    account = {"initial_capital": capital, "cash": cash}
-    save_account(account)
+    update_account(initial_capital=capital, cash=cash)
 
     await query.edit_message_text(
         f"설정 완료!\n\n"

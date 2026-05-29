@@ -29,6 +29,7 @@ from models.futures_position import FuturesPosition
 from models.futures_transaction import FuturesTransaction
 from parsers.futures_input import parse_futures_close
 from storage.json_store import (
+    adjust_futures_cash,
     get_recent_futures_reasons,
     load_futures_positions,
     load_futures_transactions,
@@ -198,6 +199,9 @@ async def _do_close(update, context, *, is_callback: bool) -> int:
     else:
         positions[pos_idx] = pos.to_dict()
     save_futures_positions(positions)
+
+    # 선물 청산 — 환급 증거금 + 실현손익만큼 선물 가용예수금 가산
+    adjust_futures_cash(margin_release + pnl)
 
     txs = load_futures_transactions()
     txs.append(tx.to_dict())
