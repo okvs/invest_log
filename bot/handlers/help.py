@@ -7,6 +7,7 @@ HELP_TEXT = """<b>📊 명령어 안내</b>
   <code>현황</code> · <code>잔고</code> — 보유 종목 + 선물 + 현금 HTML 대시보드
   <code>자산그래프</code> — 기록 첫날부터 일별 NAV 추이 PNG
   <code>백테스트</code> — 과거 거래일 동결 시 오늘 순자산 비교 (PNG + HTML)
+  <code>10억</code> — 순자산 10억 진척률·필요수익률(2·5년)·생존선 트래커
   <code>만기점검</code> — 만기 임박 선물 포지션 점검
 
 <b>💰 현물 거래</b>

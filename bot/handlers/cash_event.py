@@ -198,7 +198,7 @@ async def _abort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def _other_command_filter() -> filters.BaseFilter:
     return filters.Regex(
-        r"^(매도|매수|현황|잔고|도움말|help|수정|회고|자산그래프|백테스트|입금|출금|입출금목록|선물진입|선물청산|선물롤오버|선물회고)$"
+        r"^(매도|매수|현황|잔고|도움말|help|수정|회고|자산그래프|백테스트|10억|입금|출금|입출금목록|선물진입|선물청산|선물롤오버|선물회고)$"
     ) | filters.COMMAND
 
 
