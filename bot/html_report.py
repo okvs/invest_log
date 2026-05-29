@@ -318,22 +318,7 @@ def _build_quadrants_svg(
             g["months"].append(cm[4:6])
         # 섹터는 첫 등장값 유지 (대부분 같음)
 
-    fut_rows: list[dict] = []
-    fut_total = 0.0
-    for g in fut_groups.values():
-        fut_total += g["notional"]
-        pnl_pct = (g["pnl"] / g["cost_basis"] * 100) if g["cost_basis"] else 0.0
-        months = sorted(set(g["months"]))
-        months_label = "+".join(months) if months else ""
-        fut_rows.append({
-            "name": g["name"],
-            "sector": g["sector"],
-            "eval": g["notional"],
-            "pnl_pct": pnl_pct,
-            "direction": g["direction"],
-            "months_label": months_label,
-        })
-
+    fut_total = sum(g["notional"] for g in fut_groups.values())
     denom = total_eval + fut_total
 
     def _fmt_krw_short(amt: float) -> str:
@@ -346,33 +331,60 @@ def _build_quadrants_svg(
             return f"{amt / 1e6:.0f}백만"
         return f"{int(amt):,}원"
 
-    points = []
-    for r in rows:
-        weight = r["eval"] / denom * 100
-        tier = _tier_for_weight(weight)
-        points.append({
-            "name": r["name"],
-            "weight": weight,
-            "return": r["pnl_pct"],
-            "tier": tier,
-            "color": sector_colors.get(r["sector"], "#9ca3af"),
-            "is_futures": False,
-            "amount_label": _fmt_krw_short(r["eval"]),
-            "weight_label": f"{weight:.1f}%",
+    # 종목별 현물 + 선물 합산 — 같은 종목의 현물 평가금과 선물 명목금을 한 점으로.
+    #   비중 w = (현물 eval + 선물 notional) / denom × 100  (총 노출 기준)
+    #   수익률 r = (현물 PnL + 선물 PnL) / (현물 원가 + 선물 cost_basis) × 100 (가중)
+    # 현물만/선물만/둘다 모두 처리. 둘 다면 빗금 마커 + 이름에 F 표시.
+    merged: dict[str, dict] = {}
+
+    def _slot(name: str, sector: str) -> dict:
+        return merged.setdefault(name, {
+            "name": name, "sector": sector or "기타",
+            "value": 0.0, "pnl": 0.0, "cost": 0.0,
+            "has_spot": False, "has_fut": False,
+            "fut_months": [], "fut_dir": None,
         })
-    for r in fut_rows:
-        weight = r["eval"] / denom * 100
+
+    for r in rows:
+        m = _slot(r["name"], r["sector"])
+        m["value"] += r["eval"]
+        m["pnl"] += r["pnl"]
+        m["cost"] += r["invested"]
+        m["has_spot"] = True
+        if not m["sector"] or m["sector"] == "기타":
+            m["sector"] = r["sector"]
+    for g in fut_groups.values():
+        m = _slot(g["name"], g["sector"])
+        m["value"] += g["notional"]
+        m["pnl"] += g["pnl"]
+        m["cost"] += g["cost_basis"]
+        m["has_fut"] = True
+        m["fut_months"].extend(g["months"])
+        m["fut_dir"] = g["direction"]
+        if not m["has_spot"] and g["sector"]:
+            m["sector"] = g["sector"]
+
+    points = []
+    for m in merged.values():
+        value = m["value"]
+        weight = value / denom * 100 if denom else 0.0
+        ret = (m["pnl"] / m["cost"] * 100) if m["cost"] else 0.0
         tier = _tier_for_weight(weight)
-        dir_mark = "↑" if r["direction"] == "long" else "↓"
-        months_label = r["months_label"] or "?"
+        if m["has_fut"]:
+            months = "+".join(sorted(set(m["fut_months"]))) or "?"
+            dmark = "↑" if m["fut_dir"] == "long" else "↓"
+            name = (f'{m["name"]}+F{dmark}{months}' if m["has_spot"]
+                    else f'{m["name"]}F{dmark}{months}')
+        else:
+            name = m["name"]
         points.append({
-            "name": f"{r['name']}F{dir_mark}{months_label}",
+            "name": name,
             "weight": weight,
-            "return": r["pnl_pct"],
+            "return": ret,
             "tier": tier,
-            "color": sector_colors.get(r["sector"], "#9ca3af"),
-            "is_futures": True,
-            "amount_label": _fmt_krw_short(r["eval"]),
+            "color": sector_colors.get(m["sector"], "#9ca3af"),
+            "is_futures": m["has_fut"],
+            "amount_label": _fmt_krw_short(value),
             "weight_label": f"{weight:.1f}%",
         })
 
@@ -617,7 +629,7 @@ def _build_quadrants_svg(
             f'<div class="qd-legend-item">{chip}<span>{label}</span></div>'
         )
     # 선물 빗금 범례
-    if fut_rows:
+    if fut_groups:
         size = 36
         fut_chip = (
             f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
@@ -648,8 +660,8 @@ def _build_quadrants_svg(
         "</div>"
     )
 
+    # 섹션 제목은 호출부(build_html_report)에서 토글 버튼과 같은 줄에 렌더한다.
     return (
-        '<div class="section-title" style="margin-top:32px">비중 × 수익률 4사분면</div>'
         '<div class="qd-wrap">'
         + "".join(parts)
         + legend_html
@@ -924,20 +936,102 @@ def build_html_report(
     return_class = "profit" if total_return >= 0 else "loss"
     return_sign = "+" if total_return >= 0 else ""
 
-    # 총 자산(NAV) = 현물 평가금 + 잔여 현금 + 선물 미실현손익
-    total_nav = total_eval + (cash_remaining if show_cash else 0) + total_futures_unrealized
+    # ── 총자산 / 총평가금 분해 (전부 청산 시 손에 쥐는 예수금 관점) ────────────
+    # 멘탈모델: "지금 현재가로 전부 청산하면 남는 예수금" = 총자산.
+    #   현물 매도 → +현물 평가금 / 신용대출 상환 → −신용 / 선물 청산 → +(증거금+미실현)
+    # 선물 청산 회수액 = 위탁증거금(되돌려받음) + 미실현손익.
+    total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
+    fut_recover = total_margin + total_futures_unrealized        # 선물 청산 회수액
+    _cash = cash_remaining if show_cash else 0.0
+
+    # 평가금 뷰 (보유자산 평가 — 현금 제외)
+    eval_spot = total_eval                                       # 현물만
+    eval_credit = total_eval - total_credit                     # 신용 포함(상환 후)
+    eval_fut = total_eval + fut_recover                         # 선물 평가금 포함
+    eval_both = total_eval + fut_recover - total_credit         # 둘다 포함
+
+    # 자산 뷰 (예수금 포함)
+    assets_spot = total_eval + _cash                            # 현물+현금 (선물·신용 전)
+    assets_credit = assets_spot - total_credit                  # 신용 포함
+    assets_fut = assets_spot + fut_recover                      # 선물 포함
+    assets_both = assets_spot + fut_recover - total_credit      # 둘다 = 전부 청산 시 예수금
+
+    # 메인 표기 = 둘다(전부 청산). vs 초기자본 수익률도 이 기준.
+    total_nav = assets_both
     nav_return = total_nav - initial_capital if initial_capital else 0
     nav_return_pct = (nav_return / initial_capital * 100) if initial_capital else 0
     nav_class = "profit" if nav_return >= 0 else "loss"
     nav_sign = "+" if nav_return >= 0 else ""
 
-    # 신용대출 제외 순자산 — 메인 표기는 신용 제외(net_nav), 신용 포함은 sub
-    total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
-    net_nav = total_nav - total_credit
-    net_return = net_nav - initial_capital if initial_capital else 0
-    net_return_pct = (net_return / initial_capital * 100) if initial_capital else 0
-    net_class = "profit" if net_return >= 0 else "loss"
-    net_sign = "+" if net_return >= 0 else ""
+    # ── 카드 HTML 구성 (전부 청산 분해) ───────────────────────────────────
+    def _eok(v: float) -> str:
+        a = abs(v)
+        if a >= 1e8:
+            return f"{v / 1e8:.2f}억"
+        if a >= 1e7:
+            return f"{v / 1e7:.1f}천만"
+        if a >= 1e4:
+            return f"{v / 1e4:.0f}만"
+        return f"{int(v):,}원"
+
+    has_credit = total_credit > 0
+    has_fut = abs(fut_recover) > 1e-9
+
+    # 총자산 카드 (show_cash 일 때만 노출). 전부 청산 시 예수금 + 분해.
+    if show_cash and initial_capital:
+        a_parts = [f"현물+현금: {_eok(assets_spot)}"]
+        if has_credit:
+            a_parts.append(f"신용 포함(−{_eok(total_credit)}): {_eok(assets_credit)}")
+        if has_fut:
+            a_parts.append(f"선물 포함(+{_eok(fut_recover)}): {_eok(assets_fut)}")
+        if has_credit and has_fut:
+            a_parts.append(f"둘다 포함(전부청산): {_eok(assets_both)}")
+        a_brk = ("<div class='sub brk'>" + "<br>".join(a_parts) + "</div>") if (has_credit or has_fut) else ""
+        asset_card_html = (
+            "<div class='card'>"
+            "<div class='label'>총 자산 · 전부 청산 시 예수금</div>"
+            f"<div class='value'>{format_number(int(assets_both))}원</div>"
+            f"<div class='sub {nav_class}'>{nav_sign}{nav_return_pct:.1f}% vs 초기자본</div>"
+            f"{a_brk}</div>"
+        )
+    else:
+        asset_card_html = ""
+
+    # 예수금 / 총투자금 카드
+    if show_cash and initial_capital:
+        if futures_cash_val > 0:
+            _fc = min(futures_cash_val, cash_remaining)
+            cash_sub = (
+                "<div class='sub' style='color:#9ca3af'>현물 "
+                f"{format_number(int(max(cash_remaining - _fc, 0)))} / 선물 {format_number(int(_fc))}</div>"
+            )
+        else:
+            cash_sub = ""
+        cash_card_html = (
+            "<div class='card'><div class='label'>예수금</div>"
+            f"<div class='value'>{format_number(int(cash_remaining))}원</div>{cash_sub}</div>"
+        )
+    else:
+        cash_card_html = (
+            "<div class='card'><div class='label'>총 투자금</div>"
+            f"<div class='value'>{format_number(int(total_invested))}원</div></div>"
+        )
+
+    # 총 평가금 카드 — 현물 평가금 + 신용/선물/둘다 분해
+    e_parts = []
+    if has_credit:
+        e_parts.append(f"신용 포함(−{_eok(total_credit)}): {_eok(eval_credit)}")
+    if has_fut:
+        e_parts.append(f"선물 포함(+{_eok(fut_recover)}): {_eok(eval_fut)}")
+    if has_credit and has_fut:
+        e_parts.append(f"둘다 포함: {_eok(eval_both)}")
+    e_brk = ("<div class='sub brk'>" + "<br>".join(e_parts) + "</div>") if e_parts else ""
+    eval_card_html = (
+        "<div class='card'>"
+        "<div class='label'>총 평가금 (현물)</div>"
+        f"<div class='value'>{format_number(int(eval_spot))}원</div>"
+        f"{e_brk}</div>"
+    )
 
     # 배지 HTML (Claude 리포트 구분용)
     badge_html = ""
@@ -965,6 +1059,8 @@ def build_html_report(
   .card .label {{ font-size:11px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }}
   .card .value {{ font-size:18px; font-weight:700; }}
   .card .sub {{ font-size:12px; margin-top:4px; }}
+  .card .sub.brk {{ color:#9ca3af; font-size:11px; line-height:1.7; margin-top:8px;
+                    text-align:left; display:inline-block; }}
   @media (max-width: 600px) {{
     .cards {{ grid-template-columns:{'repeat(2,1fr)' if show_cash else '1fr'}; max-width:100%; }}
     .card .value {{ font-size:{'16' if show_cash else '20'}px; }}
@@ -1027,10 +1123,14 @@ def build_html_report(
   .qd-legend-item {{ display:flex; align-items:center; gap:6px; font-size:12px; color:#bbb; }}
   .qd-caption {{ text-align:center; font-size:11px; color:#888; margin-top:8px; }}
 
-  /* 4사분면 라벨 토글 — 차트 Q1(잘하는 것) 근처에 오버레이 */
+  /* 4사분면 제목 줄 — 제목(좌) + 금액/비중 토글(우) 한 줄 */
+  .qd-header {{ display:flex; align-items:flex-end; justify-content:space-between;
+               gap:12px; margin-top:32px; margin-bottom:16px;
+               padding-bottom:8px; border-bottom:1px solid #2a2a3a; flex-wrap:wrap; }}
+  .qd-title {{ margin:0; padding:0; border:0; flex:1; min-width:0; }}
+  .qd-title-note {{ font-size:11px; font-weight:400; color:#888; }}
+  .qd-toolbar-inline {{ display:flex; gap:6px; flex-shrink:0; }}
   .qd-chart-wrap {{ position:relative; }}
-  .qd-toolbar {{ position:absolute; top:3%; right:16%;
-                 display:flex; flex-direction:column; gap:6px; z-index:5; }}
   .qd-toggle {{ background:rgba(26,26,36,0.85); color:#888; border:1px solid #333;
                 padding:4px 10px; border-radius:6px; cursor:pointer;
                 font-size:11px; font-family:inherit; backdrop-filter:blur(2px); }}
@@ -1059,13 +1159,9 @@ def build_html_report(
   </div>
 
   <div class="cards">
-    {("<div class='card'><div class='label'>총 자산 (신용 제외)</div><div class='value'>" + format_number(int(net_nav)) + "원</div><div class='sub " + net_class + "'>" + net_sign + f"{net_return_pct:.1f}% vs 초기자본</div>" + ("<div class='sub' style='color:#9ca3af'>신용 포함: " + format_number(int(total_nav)) + "원</div>" if total_credit > 0 else "") + "</div>") if show_cash and initial_capital else ""}
-    {("<div class='card'><div class='label'>예수금</div><div class='value'>" + format_number(int(cash_remaining)) + "원</div>" + ("<div class='sub' style='color:#9ca3af'>현물 " + format_number(int(max(cash_remaining - min(futures_cash_val, cash_remaining), 0))) + " / 선물 " + format_number(int(min(futures_cash_val, cash_remaining))) + "</div>" if futures_cash_val > 0 else "") + "</div>") if show_cash and initial_capital else "<div class='card'><div class='label'>총 투자금</div><div class='value'>" + format_number(int(total_invested)) + "원</div></div>"}
-    <div class="card">
-      <div class="label">총 평가금{" (신용 제외)" if total_credit > 0 else ""}</div>
-      <div class="value">{format_number(int(total_eval - total_credit))}원</div>
-      {("<div class='sub' style='color:#9ca3af'>신용 포함: " + format_number(int(total_eval)) + "원</div>") if total_credit > 0 else ""}
-    </div>
+    {asset_card_html}
+    {cash_card_html}
+    {eval_card_html}
     <div class="card">
       <div class="label">총 수익</div>
       <div class="value {return_class if show_cash else pnl_class}">{(return_sign + format_number(int(total_return)) + '원') if show_cash else (pnl_sign + format_number(int(total_pnl)) + '원')}</div>
@@ -1076,11 +1172,14 @@ def build_html_report(
   <div class="stack">{stack_segments}</div>
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
-  <div class="qd-chart-wrap">
-    <div class="qd-toolbar">
+  <div class="qd-header">
+    <div class="section-title qd-title">비중 × 수익률 4사분면 <span class="qd-title-note">(현물+선물 합산)</span></div>
+    <div class="qd-toolbar-inline">
       <button type="button" class="qd-toggle" data-target="amount">금액 표시</button>
       <button type="button" class="qd-toggle" data-target="weight">비중 표시</button>
     </div>
+  </div>
+  <div class="qd-chart-wrap">
     {_build_quadrants_svg(rows, sector_colors, total_eval, futures_positions, futures_prices)}
   </div>
 
