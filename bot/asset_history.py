@@ -224,15 +224,20 @@ def _reconstruct_daily_futures(
     return out
 
 
-def compute_profit_trend() -> list[dict]:
-    """일별 NAV 추이 — 식: initial + 누적 실현(현물+선물) + 미실현(현물+선물).
+def compute_profit_trend(target_nav: float | None = None) -> list[dict]:
+    """일별 NAV 추이 — 식: initial + 누적 입금 + 누적 실현(현물+선물) + 미실현.
 
     각 row: {date, realized, unrealized, profit, deposits, asset}
       - realized   = 누적 실현 (현물 매도 profit_loss + 선물 청산 pnl)
       - unrealized = 그날 보유 미실현 (현물 종가−평단 + 선물 종가−평균진입)
       - profit     = realized + unrealized
-      - deposits   = 누적 입출금 (참고 표시용. asset 식에는 안 들어감)
-      - asset      = initial + profit  (입출금/신용 무시 — 순수 손익 NAV)
+      - deposits   = 누적 입출금
+      - asset      = initial + 누적입금 + profit  (자기자본/equity)
+
+    target_nav 가 주어지면(실제 잔고 = compute_balance_nav), 오늘 asset 이 그
+    값과 일치하도록 잔차(residual)를 전 구간 asset 에 더해 보정한다. 잔차는
+    pykrx↔실시세 가격차 + 시드/백로딩 포지션의 기록 밖 자본(초기자본+입금+실현
+    으로 설명 안 되는 분)을 흡수한다 — 그래프 끝점을 실제 계좌와 맞추기 위함.
     """
     transactions = load_transactions()
     if not transactions:
@@ -342,8 +347,15 @@ def compute_profit_trend() -> list[dict]:
             "unrealized": unreal,
             "profit": rp + unreal,
             "deposits": dp,
-            "asset": initial + rp + unreal,  # 입출금/신용 무시
+            "asset": initial + dp + rp + unreal,  # 자기자본(초기+입금+손익)
         })
+
+    # 실제 잔고에 끝점 보정 (residual 을 전 구간에 더해 오늘 = target_nav)
+    if target_nav is not None and rows:
+        residual = float(target_nav) - rows[-1]["asset"]
+        for r in rows:
+            r["asset"] += residual
+            r["residual"] = residual
     return rows
 
 
@@ -371,13 +383,14 @@ def _fmt_eok_label(x: float) -> str:
     return f"{x / 1e7:.0f}천만"
 
 
-def render_asset_graph() -> io.BytesIO | None:
+def render_asset_graph(target_nav: float | None = None) -> io.BytesIO | None:
     """수익금·평가금 추이 PNG bytes 반환.
 
-    3선: 평가금(초기자본+실현+미실현) / 실현+미실현 손익 / 누적 실현손익.
+    3선: 평가금(자기자본, 실제 잔고 보정) / 실현+미실현 손익 / 누적 실현손익.
+    target_nav 가 주어지면 평가금 끝점을 실제 잔고와 맞춘다.
     """
     _setup_korean_font()
-    rows = compute_profit_trend()
+    rows = compute_profit_trend(target_nav=target_nav)
     if not rows:
         return None
 

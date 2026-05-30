@@ -13,10 +13,24 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.asset_history import _fmt_eok_label, compute_profit_trend
-from bot.goal_tracker import compute_goal_status, render_goal_graph
-from storage.json_store import load_futures_positions
+from bot.formatters import _resolve_tickers, fetch_current_quotes
+from bot.goal_tracker import compute_balance_nav, compute_goal_status, render_goal_graph
+from storage.json_store import load_futures_positions, load_holdings
 
 logger = logging.getLogger(__name__)
+
+
+def _fetch_spot_quotes(holdings: list[dict]) -> dict:
+    active = [h for h in holdings if h.get("quantity", 0) > 0]
+    if not active:
+        return {}
+    try:
+        name_to_ticker, _ = _resolve_tickers(active)
+        tickers = list(set(name_to_ticker.values()))
+        return fetch_current_quotes(tickers) if tickers else {}
+    except Exception:
+        logger.warning("현물 시세 조회 실패 (원가 폴백)", exc_info=True)
+        return {}
 
 
 def _won(x: float) -> str:
@@ -111,8 +125,19 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         chat_id=chat_id, text="10억 트래커 계산 중... (시세 조회 포함)",
     )
 
+    # 실제 잔고(잔고 대시보드와 동일) 를 single source 로 — 시세 조회 후 계산
+    holdings = load_holdings()
+    futures_positions = load_futures_positions()
+    futures_prices = await _fetch_futures_prices(futures_positions)
+    spot_quotes = await asyncio.to_thread(_fetch_spot_quotes, holdings)
+    balance = compute_balance_nav(
+        spot_quotes, futures_prices,
+        holdings=holdings, futures_positions=futures_positions,
+    )
+
     try:
-        rows = await asyncio.to_thread(compute_profit_trend)
+        # P&L 시계열을 실제 잔고에 끝점 보정해 그래프·진척률이 실잔고와 일치
+        rows = await asyncio.to_thread(compute_profit_trend, balance["nav"])
     except Exception:
         logger.exception("NAV 추이 계산 실패")
         await context.bot.send_message(chat_id=chat_id, text="10억 트래커 계산 실패")
@@ -123,8 +148,6 @@ async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             chat_id=chat_id, text="거래 내역이 없습니다. 거래를 먼저 입력해주세요.",
         )
         return
-
-    futures_prices = await _fetch_futures_prices(load_futures_positions())
 
     try:
         status = compute_goal_status(rows, futures_prices)

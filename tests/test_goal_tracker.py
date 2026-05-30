@@ -8,6 +8,7 @@ import pytest
 from bot.goal_tracker import (
     GOAL_KRW,
     annual_to_monthly,
+    compute_balance_nav,
     compute_margin_call,
     drawdown_from_peak,
     margin_call_move,
@@ -165,3 +166,53 @@ def test_compute_margin_call_no_positions_none():
 
 def test_goal_constant():
     assert GOAL_KRW == 1_000_000_000
+
+
+# ── compute_balance_nav (실제 잔고 = 잔고 대시보드 식) ────────────────────
+
+def test_compute_balance_nav_full_formula():
+    holdings = [{"name": "A", "ticker": "000001.KS", "quantity": 10,
+                 "total_invested": 1000, "credit_loan": 200}]
+    futs = [{"symbol": "005930", "contract_month": "202607", "direction": "long",
+             "contracts": 2, "avg_entry_price": 100, "multiplier": 10,
+             "initial_margin": 500}]
+    acc = {"cash": 300, "futures_cash": 150}
+    spot_q = {"000001.KS": {"price": 120}}           # 평가 1200
+    fut_p = {"005930|202607": {"price": 110}}         # 미실현 (110-100)*2*10 = 200
+    bal = compute_balance_nav(spot_q, fut_p, holdings=holdings,
+                              futures_positions=futs, account=acc)
+    # 1200(현물) + 300(현금) + 150(선물현금) + 500(증거금) + 200(미실현) - 200(신용) = 2150
+    assert bal["nav"] == 2150
+    assert bal["spot_eval"] == 1200
+    assert bal["margin"] == 500
+    assert bal["fut_unreal"] == 200
+    assert bal["credit"] == 200
+
+
+def test_compute_balance_nav_price_fallback_to_cost():
+    holdings = [{"name": "A", "ticker": "X", "quantity": 10, "total_invested": 999}]
+    bal = compute_balance_nav({}, {}, holdings=holdings,
+                              futures_positions=[], account={"cash": 0})
+    assert bal["spot_eval"] == 999          # 시세 없으면 원가로 폴백
+    assert bal["nav"] == 999
+
+
+def test_compute_balance_nav_short_futures_sign():
+    futs = [{"symbol": "S", "contract_month": "202607", "direction": "short",
+             "contracts": 1, "avg_entry_price": 100, "multiplier": 10,
+             "initial_margin": 50}]
+    fut_p = {"S|202607": {"price": 90}}      # 숏: (90-100)*1*10*(-1) = +100
+    bal = compute_balance_nav({}, fut_p, holdings=[], futures_positions=futs,
+                              account={"cash": 0, "futures_cash": 0})
+    assert bal["fut_unreal"] == 100
+    assert bal["nav"] == 50 + 100            # 증거금 50 + 미실현 100
+
+
+def test_compute_balance_nav_futures_margin_added_even_unpriced():
+    futs = [{"symbol": "S", "contract_month": "202607", "direction": "long",
+             "contracts": 1, "avg_entry_price": 100, "multiplier": 10,
+             "initial_margin": 50}]
+    bal = compute_balance_nav({}, {}, holdings=[], futures_positions=futs,
+                              account={"cash": 0})
+    # 시세 없어도 증거금은 자산(청산 시 환급). 미실현만 0.
+    assert bal["margin"] == 50 and bal["fut_unreal"] == 0 and bal["nav"] == 50

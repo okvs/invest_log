@@ -177,6 +177,73 @@ def compute_margin_call(
 
 
 # ---------------------------------------------------------------------------
+# 실제 잔고 기반 순자산 (잔고 대시보드와 동일 식 — single source of truth)
+# ---------------------------------------------------------------------------
+
+def compute_balance_nav(
+    spot_quotes: dict | None,
+    futures_prices: dict | None,
+    *,
+    holdings: list[dict] | None = None,
+    futures_positions: list[dict] | None = None,
+    account: dict | None = None,
+) -> dict:
+    """실제 잔고 기준 순자산(전부 청산 시 예수금). 잔고 대시보드 assets_both 와 동일 식.
+
+    nav = 현물평가 + 현물예수금 + 선물가용예수금 + 위탁증거금 + 선물미실현 − 신용대출.
+    (선물 청산 시 증거금을 되돌려받으므로 margin 을 자산으로 더한다.)
+    가격을 못 구한 종목/선물은 원가·진입가로 폴백.
+
+    spot_quotes: {ticker: {"price": ...}} (fetch_current_quotes 포맷)
+    futures_prices: {"<sym>|<YYYYMM>": {"price": ...}} (fetch_futures_quotes 포맷)
+    """
+    from storage.json_store import (
+        load_account, load_futures_positions, load_holdings,
+    )
+    if holdings is None:
+        holdings = load_holdings()
+    if futures_positions is None:
+        futures_positions = load_futures_positions()
+    if account is None:
+        account = load_account()
+    spot_quotes = spot_quotes or {}
+    futures_prices = futures_prices or {}
+
+    active = [h for h in holdings if h.get("quantity", 0) > 0]
+    spot_eval = 0.0
+    for h in active:
+        q = spot_quotes.get(h.get("ticker", "")) or {}
+        p = q.get("price") if isinstance(q, dict) else q
+        spot_eval += (float(p) * h["quantity"]) if p else float(h.get("total_invested", 0))
+    credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
+
+    margin = 0.0
+    fut_unreal = 0.0
+    for fp in futures_positions:
+        if fp.get("contracts", 0) <= 0:
+            continue
+        sym = fp.get("symbol", "")
+        cm = fp.get("contract_month", "")
+        e = futures_prices.get(f"{sym}|{cm}") or futures_prices.get(sym)
+        cur = e.get("price") if isinstance(e, dict) else e
+        margin += float(fp.get("initial_margin", 0) or 0)
+        if cur is not None:
+            s = 1 if fp.get("direction") == "long" else -1
+            fut_unreal += (
+                (float(cur) - float(fp.get("avg_entry_price", 0)))
+                * int(fp.get("contracts", 0)) * int(fp.get("multiplier", 10)) * s
+            )
+
+    cash = float(account.get("cash") or 0)
+    fcash = float(account.get("futures_cash") or 0)
+    nav = spot_eval + cash + fcash + margin + fut_unreal - credit
+    return {
+        "nav": nav, "spot_eval": spot_eval, "cash": cash, "futures_cash": fcash,
+        "margin": margin, "fut_unreal": fut_unreal, "credit": credit,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 상태 집계
 # ---------------------------------------------------------------------------
 
@@ -200,7 +267,9 @@ def compute_goal_status(
 
     series = [r["asset"] for r in rows]
     dates = [r["date"] for r in rows]
-    start_nav = series[0]
+    # '초기자본 대비' 는 기록된 초기자본 기준 (잔고 대시보드의 'vs 초기자본'과 일치).
+    # 시계열 보정(residual)으로 series[0] 가 초기자본보다 커지므로 series[0] 대신 initial 사용.
+    start_nav = initial if initial > 0 else series[0]
     start_date = dates[0]
     current = series[-1]
     today = dates[-1]
