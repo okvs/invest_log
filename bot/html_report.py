@@ -955,11 +955,9 @@ def build_html_report(
     spot_net = total_eval - total_credit                         # 현물 순(평가 − 신용상환)
     assets_both = spot_net + fut_recover + _cash                 # = 전부청산 자산(NAV)
 
-    # 총평가금(레버리지 포함 gross, 예수금 제외) — 빚을 빼면 포지션 순자산
+    # 총평가금(레버리지 포함 gross, 예수금 제외) — 신용·선물 차입을 모두 빼면 포지션 순자산
     gross_eval = total_eval + fut_notional
-    gross_minus_credit = gross_eval - total_credit               # 신용 차입만 제외
-    gross_minus_fut = gross_eval - fut_financing                 # 선물 차입만 제외
-    pos_equity = gross_eval - total_credit - fut_financing       # 둘다 제외 = 포지션 순자산
+    pos_equity = gross_eval - total_credit - fut_financing       # 차입 전액 제외 = 포지션 순자산
 
     # 메인 표기(총자산) = 전부 청산 순자산. vs 초기자본 수익률도 이 기준.
     total_nav = assets_both
@@ -1022,14 +1020,17 @@ def build_html_report(
             f"<div class='value'>{format_number(int(total_invested))}원</div></div>"
         )
 
-    # 총 평가금 카드 — 레버리지(신용+선물) 포함 gross. 빚을 빼면 포지션 순자산, +예수금=자산.
+    # 총 평가금 카드 — 레버리지(신용+선물) 포함 gross. 차입 전액을 빼면 포지션 순자산, +예수금=자산.
+    # 중간(신용만/선물만) 줄은 생략하고, 둘다 뺀 줄 하나에 각 차감액을 괄호로 표기.
     e_parts = []
+    deduct_bits = []
     if has_credit:
-        e_parts.append(f"신용 차입 제외(−{_eok(total_credit)}): {_eok(gross_minus_credit)}")
+        deduct_bits.append(f"신용 −{_eok(total_credit)}")
     if has_fut:
-        e_parts.append(f"선물 차입 제외(−{_eok(fut_financing)}): {_eok(gross_minus_fut)}")
-    if has_credit or has_fut:
-        e_parts.append(f"둘다 제외 = 포지션 순자산: {_eok(pos_equity)}")
+        deduct_bits.append(f"선물 −{_eok(fut_financing)}")
+    if deduct_bits:
+        detail = "(" + ", ".join(deduct_bits) + ")"
+        e_parts.append(f"차입 제외{detail} = 포지션 순자산: {_eok(pos_equity)}")
     if show_cash and _cash > 1e-9:
         e_parts.append(f"＋예수금({_eok(_cash)}) = 전부청산 자산: {_eok(pos_equity + _cash)}")
     e_brk = ("<div class='sub brk'>" + "<br>".join(e_parts) + "</div>") if e_parts else ""
