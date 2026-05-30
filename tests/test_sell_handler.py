@@ -112,6 +112,29 @@ async def test_select_holding():
     assert "10주" in edit_text
 
 
+@pytest.mark.asyncio
+async def test_select_holding_shows_buy_thesis():
+    """매도 종목 선택 시 매수사유를 함께 표시 (왜 샀는지 상기)."""
+    _seed_holding(quantity=10)  # buy_thesis="테스트 근거"
+    update, context = _make_callback_update(f"{SELL_SELECT_PREFIX}삼성전자")
+    await _select_holding(update, context)
+    edit_text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "매수사유" in edit_text
+    assert "테스트 근거" in edit_text
+
+
+@pytest.mark.asyncio
+async def test_reason_step_shows_buy_thesis():
+    """매도 사유 입력 단계에서도 매수사유를 표시."""
+    _seed_holding(quantity=10, avg_price=72000)
+    update, context = _make_update_and_context("5주\n85000원")
+    context.user_data["sell_name"] = "삼성전자"
+    result = await _receive_sell_input(update, context)
+    assert result == REASON
+    msg = update.message.reply_text.call_args[0][0]
+    assert "매수사유" in msg and "테스트 근거" in msg
+
+
 # ── 매도 파싱 실패 (종목 선택 후 3줄 미만) ──
 
 

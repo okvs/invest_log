@@ -131,8 +131,12 @@ async def _receive_broker_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["broker_sell"] = msg
         reasons = get_recent_reasons("sell", pinned=SELL_PINNED_REASONS)
         context.user_data["recent_reasons"] = reasons
+        existing = _find_existing_holding("", msg.name)
+        buy_thesis = (existing or {}).get("buy_thesis", "")
+        thesis_line = f"📌 매수사유: {buy_thesis}\n\n" if buy_thesis else ""
         prompt = (
             f"{msg.name} {msg.quantity}주 {int(msg.price):,}원 매도 체결 확인.\n\n"
+            f"{thesis_line}"
             "매도사유를 입력해주세요.\n\n"
             "최근 사유를 선택하거나 직접 입력하세요."
         )

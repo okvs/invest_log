@@ -66,16 +66,22 @@ async def _select_holding(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     name = query.data.removeprefix(SELL_SELECT_PREFIX)
     context.user_data["sell_name"] = name
 
-    # 선택한 종목의 보유량 표시
+    # 선택한 종목의 보유량 + 평단 + 매수사유 표시 (왜 샀는지 상기)
     holdings = load_holdings()
     qty = 0
+    avg = 0
+    buy_thesis = ""
     for h in holdings:
         if h["name"] == name:
             qty = h["quantity"]
+            avg = h.get("avg_price", 0)
+            buy_thesis = h.get("buy_thesis", "")
             break
 
+    thesis_line = f"\n📌 매수사유: {buy_thesis}\n" if buy_thesis else ""
     await query.edit_message_text(
-        f"[{name}] {qty}주 보유 중\n\n"
+        f"[{name}] {qty}주 보유 중 · 평단 {int(avg):,}원\n"
+        f"{thesis_line}\n"
         "수량 / 매도가\n"
         "를 줄바꿈으로 입력해주세요.\n"
         "(사유는 다음 단계에서 선택하거나 입력합니다 — 한 메시지에 사유까지 함께 적어도 됩니다)"
@@ -205,8 +211,17 @@ async def _receive_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     reasons = get_recent_reasons("sell", pinned=SELL_PINNED_REASONS)
     context.user_data["recent_reasons"] = reasons
 
+    # 매수사유 상기 — 왜 샀는지 보고 매도 사유를 적도록
+    buy_thesis = ""
+    for h in load_holdings():
+        if h["name"].lower() == sell_input.name.lower():
+            buy_thesis = h.get("buy_thesis", "")
+            break
+    thesis_line = f"📌 매수사유: {buy_thesis}\n\n" if buy_thesis else ""
+
     msg = (
         f"[{sell_input.name}] {sell_input.quantity}주 / {int(sell_input.price):,}원\n\n"
+        f"{thesis_line}"
         "매도 사유를 입력해주세요.\n\n"
         "최근 사유를 선택하거나 직접 입력하세요."
     )
