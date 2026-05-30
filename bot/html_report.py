@@ -762,6 +762,8 @@ def build_html_report(
     # 선물 포지션을 섹터에 합산 + 미실현 손익 누적
     total_margin = 0.0
     total_futures_unrealized = 0.0
+    total_futures_notional = 0.0        # 현재가 기준 명목금(레버리지 포함, gross)
+    total_futures_entry_notional = 0.0  # 진입가 기준 명목금(선물 차입금 산정용)
     for fp in futures_positions or []:
         if fp.get("contracts", 0) <= 0:
             continue
@@ -783,6 +785,8 @@ def build_html_report(
         sector_data[sector] += notional
         sector_futures[sector] += notional
         total_margin += float(fp.get("initial_margin", 0))
+        total_futures_notional += notional
+        total_futures_entry_notional += avg * contracts * mult
 
     # 현금 버킷 — cash(=현물 예수금)와 futures_cash(=선물 가용예수금, 이미 증거금
     # 차감 후 값)는 서로 독립된 별도 계좌다. 빼지 않고 각각 더한다.
@@ -933,35 +937,38 @@ def build_html_report(
     return_class = "profit" if total_return >= 0 else "loss"
     return_sign = "+" if total_return >= 0 else ""
 
-    # ── 총자산 / 총평가금 분해 (전부 청산 시 손에 쥐는 예수금 관점) ────────────
-    # 멘탈모델: "지금 현재가로 전부 청산하면 남는 예수금" = 총자산.
-    #   현물 매도 → +현물 평가금 / 신용대출 상환 → −신용 / 선물 청산 → +(증거금+미실현)
-    # 선물 청산 회수액 = 위탁증거금(되돌려받음) + 미실현손익.
+    # ── 총평가금(레버리지 포함 gross) ↔ 총자산(전부청산 순) 분해 ───────────────
+    # 두 카드는 같은 잔고를 양방향에서 본다:
+    #   총평가금(평가금, 레버리지 포함) − 신용차입 − 선물차입 = 포지션 순자산
+    #   포지션 순자산 + 예수금(현+선) = 총자산(전부청산 시 예수금)
+    # · 신용·선물 둘 다 '빚(차입금)'이라 둘 다 빼는 게 맞다(대칭).
+    # · 선물 차입금 = 진입 명목금 − 증거금 (빌린 노출, 가격과 무관한 고정값).
+    #   "현재 평가금 − 증거금"으로 빼면 선물 미실현손익이 함께 사라져 틀린다.
     total_credit = sum(float(h.get("credit_loan", 0) or 0) for h in active)
-    fut_recover = total_margin + total_futures_unrealized        # 선물 청산 회수액
+    fut_recover = total_margin + total_futures_unrealized        # 선물 청산 회수액(증거금+미실현)
+    fut_financing = total_futures_entry_notional - total_margin  # 선물 차입(빌린 노출, 고정)
+    fut_notional = total_futures_notional                        # 선물 현재 명목금(레버리지 포함)
     # 예수금 = 현물 cash + 선물 가용예수금(별도 버킷). 둘 다 청산 시 손에 쥐는 현금.
     _cash = (cash_remaining + futures_cash_val) if show_cash else 0.0
 
-    # 평가금 뷰 (보유자산 평가 — 현금 제외)
-    eval_spot = total_eval                                       # 현물만
-    eval_credit = total_eval - total_credit                     # 신용 포함(상환 후)
-    eval_fut = total_eval + fut_recover                         # 선물 평가금 포함
-    eval_both = total_eval + fut_recover - total_credit         # 둘다 포함
+    # 총자산(전부청산 순자산) = 순 구성요소의 합 (전부 +, 부호 혼동 없음)
+    spot_net = total_eval - total_credit                         # 현물 순(평가 − 신용상환)
+    assets_both = spot_net + fut_recover + _cash                 # = 전부청산 자산(NAV)
 
-    # 자산 뷰 (예수금 포함)
-    assets_spot = total_eval + _cash                            # 현물+현금 (선물·신용 전)
-    assets_credit = assets_spot - total_credit                  # 신용 포함
-    assets_fut = assets_spot + fut_recover                      # 선물 포함
-    assets_both = assets_spot + fut_recover - total_credit      # 둘다 = 전부 청산 시 예수금
+    # 총평가금(레버리지 포함 gross, 예수금 제외) — 빚을 빼면 포지션 순자산
+    gross_eval = total_eval + fut_notional
+    gross_minus_credit = gross_eval - total_credit               # 신용 차입만 제외
+    gross_minus_fut = gross_eval - fut_financing                 # 선물 차입만 제외
+    pos_equity = gross_eval - total_credit - fut_financing       # 둘다 제외 = 포지션 순자산
 
-    # 메인 표기 = 둘다(전부 청산). vs 초기자본 수익률도 이 기준.
+    # 메인 표기(총자산) = 전부 청산 순자산. vs 초기자본 수익률도 이 기준.
     total_nav = assets_both
     nav_return = total_nav - initial_capital if initial_capital else 0
     nav_return_pct = (nav_return / initial_capital * 100) if initial_capital else 0
     nav_class = "profit" if nav_return >= 0 else "loss"
     nav_sign = "+" if nav_return >= 0 else ""
 
-    # ── 카드 HTML 구성 (전부 청산 분해) ───────────────────────────────────
+    # ── 카드 HTML 구성 ───────────────────────────────────────────────────
     def _eok(v: float) -> str:
         a = abs(v)
         if a >= 1e8:
@@ -972,19 +979,19 @@ def build_html_report(
             return f"{v / 1e4:.0f}만"
         return f"{int(v):,}원"
 
-    has_credit = total_credit > 0
-    has_fut = abs(fut_recover) > 1e-9
+    has_credit = total_credit > 1e-9
+    has_fut = abs(fut_recover) > 1e-9 or abs(fut_notional) > 1e-9
 
-    # 총자산 카드 (show_cash 일 때만 노출). 전부 청산 시 예수금 + 분해.
+    # 총자산 카드 (show_cash 일 때만 노출). 전부청산 = 순 구성요소의 합 (전부 +).
     if show_cash and initial_capital:
-        a_parts = [f"현물+현금: {_eok(assets_spot)}"]
-        if has_credit:
-            a_parts.append(f"신용 포함(−{_eok(total_credit)}): {_eok(assets_credit)}")
+        a_parts = [
+            f"현물 순(평가−신용): {_eok(spot_net)}" if has_credit
+            else f"현물 평가: {_eok(total_eval)}"
+        ]
         if has_fut:
-            a_parts.append(f"선물 포함(+{_eok(fut_recover)}): {_eok(assets_fut)}")
-        if has_credit and has_fut:
-            a_parts.append(f"둘다 포함(전부청산): {_eok(assets_both)}")
-        a_brk = ("<div class='sub brk'>" + "<br>".join(a_parts) + "</div>") if (has_credit or has_fut) else ""
+            a_parts.append(f"선물 청산(증거금+미실현): {_eok(fut_recover)}")
+        a_parts.append(f"예수금(현물+선물): {_eok(_cash)}")
+        a_brk = "<div class='sub brk'>" + "<br>".join(a_parts) + "</div>"
         asset_card_html = (
             "<div class='card'>"
             "<div class='label'>총 자산 · 전부 청산 시 예수금</div>"
@@ -1015,19 +1022,22 @@ def build_html_report(
             f"<div class='value'>{format_number(int(total_invested))}원</div></div>"
         )
 
-    # 총 평가금 카드 — 현물 평가금 + 신용/선물/둘다 분해
+    # 총 평가금 카드 — 레버리지(신용+선물) 포함 gross. 빚을 빼면 포지션 순자산, +예수금=자산.
     e_parts = []
     if has_credit:
-        e_parts.append(f"신용 포함(−{_eok(total_credit)}): {_eok(eval_credit)}")
+        e_parts.append(f"신용 차입 제외(−{_eok(total_credit)}): {_eok(gross_minus_credit)}")
     if has_fut:
-        e_parts.append(f"선물 포함(+{_eok(fut_recover)}): {_eok(eval_fut)}")
-    if has_credit and has_fut:
-        e_parts.append(f"둘다 포함: {_eok(eval_both)}")
+        e_parts.append(f"선물 차입 제외(−{_eok(fut_financing)}): {_eok(gross_minus_fut)}")
+    if has_credit or has_fut:
+        e_parts.append(f"둘다 제외 = 포지션 순자산: {_eok(pos_equity)}")
+    if show_cash and _cash > 1e-9:
+        e_parts.append(f"＋예수금({_eok(_cash)}) = 전부청산 자산: {_eok(pos_equity + _cash)}")
     e_brk = ("<div class='sub brk'>" + "<br>".join(e_parts) + "</div>") if e_parts else ""
+    eval_label = "총 평가금 · 레버리지 포함" if (has_credit or has_fut) else "총 평가금"
     eval_card_html = (
         "<div class='card'>"
-        "<div class='label'>총 평가금 (현물)</div>"
-        f"<div class='value'>{format_number(int(eval_spot))}원</div>"
+        f"<div class='label'>{eval_label}</div>"
+        f"<div class='value'>{format_number(int(gross_eval))}원</div>"
         f"{e_brk}</div>"
     )
 
