@@ -34,7 +34,7 @@ from bot.keyboards import (
     review_nav_keyboard,
     review_select_keyboard,
 )
-from bot.trade_review import build_trade_chart, summarize_review
+from bot.trade_review import build_trade_chart, build_trade_review_html, summarize_review
 from storage.json_store import load_holdings, load_ticker_map, load_transactions
 
 logger = logging.getLogger(__name__)
@@ -138,24 +138,37 @@ async def _send_chart(context: ContextTypes.DEFAULT_TYPE, chat_id: int, idx: int
         h, txs, cur_price=h.get("cur"), change_pct=h.get("change_pct"),
         position=(idx + 1, len(order)),
     )
+    # 1순위: 인터랙티브 HTML(마우스 오버 상승률·≥10% 급등봉). 실패 시 PNG 폴백.
+    html_buf = None
     try:
-        chart = await asyncio.to_thread(
-            build_trade_chart, h["name"], h["ticker"], txs, h["avg_price"], h.get("cur"),
+        html_buf = await asyncio.to_thread(
+            build_trade_review_html, h["name"], h["ticker"], txs, h["avg_price"], h.get("cur"),
         )
     except Exception:
-        logger.warning("%s 복기 차트 생성 실패", h["name"], exc_info=True)
-        chart = None
+        logger.warning("%s 복기 HTML 생성 실패 — PNG 폴백", h["name"], exc_info=True)
 
-    if chart is not None:
-        await context.bot.send_photo(
-            chat_id=chat_id, photo=chart, caption=caption, parse_mode=ParseMode.HTML,
+    if html_buf is not None:
+        await context.bot.send_document(
+            chat_id=chat_id, document=html_buf, caption=caption, parse_mode=ParseMode.HTML,
         )
     else:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=caption + "\n\n⚠️ 일봉 시세를 불러오지 못해 차트는 생략했습니다.",
-            parse_mode=ParseMode.HTML,
-        )
+        try:
+            chart = await asyncio.to_thread(
+                build_trade_chart, h["name"], h["ticker"], txs, h["avg_price"], h.get("cur"),
+            )
+        except Exception:
+            logger.warning("%s 복기 차트 생성 실패", h["name"], exc_info=True)
+            chart = None
+        if chart is not None:
+            await context.bot.send_photo(
+                chat_id=chat_id, photo=chart, caption=caption, parse_mode=ParseMode.HTML,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=caption + "\n\n⚠️ 일봉 시세를 불러오지 못해 차트는 생략했습니다.",
+                parse_mode=ParseMode.HTML,
+            )
 
     nav = await context.bot.send_message(
         chat_id=chat_id,

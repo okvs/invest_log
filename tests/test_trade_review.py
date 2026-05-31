@@ -11,7 +11,12 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from bot.trade_review import aggregate_trades, build_trade_chart, summarize_review
+from bot.trade_review import (
+    aggregate_trades,
+    build_trade_chart,
+    build_trade_review_html,
+    summarize_review,
+)
 
 
 def _tx(date, ty, qty, price):
@@ -189,6 +194,45 @@ def test_chart_handles_future_dated_trade():
         buf = build_trade_chart("테스트", "005930.KS",
                                 [_tx("2026-12-31", "buy", 10, 120)], 120.0, cur_price=125.0)
     assert buf is not None  # 미래일 거래도 우측 여백에 분리 표시, 크래시 없음
+
+
+# ── build_trade_review_html (인터랙티브) ─────────────────────────────────────
+def test_html_none_without_ticker_or_trades():
+    assert build_trade_review_html("삼성전자", "", [_tx("2026-05-01", "buy", 10, 100)], 100) is None
+    assert build_trade_review_html("삼성전자", "005930.KS", [], 100) is None
+
+
+def test_html_returns_interactive_with_hover_changepct():
+    txs = [_tx("2026-04-05", "buy", 100, 103), _tx("2026-04-20", "sell", 50, 118)]
+    fake = MagicMock()
+    fake.history.return_value = _fake_hist()
+    with patch("bot.trade_review.yf.Ticker", return_value=fake):
+        buf = build_trade_review_html("테스트", "005930.KS", txs, 105.0, cur_price=128.0)
+    assert buf is not None
+    html = buf.getvalue().decode()
+    assert buf.name.endswith(".html")
+    assert "상승률" in html       # 마우스 오버 등락률
+    assert "Plotly" in html        # 인터랙티브 plotly 차트
+    assert "매수" in html and "매도" in html
+
+
+def test_html_marks_surge_candles():
+    """일간 상승률 ≥10% 봉이 있으면 '급등' 표식이 들어간다."""
+    idx = pd.date_range("2026-04-01", periods=8, freq="D")
+    closes = [100, 101, 102, 120, 121, 122, 123, 124]  # 4번째 봉 +17.6%
+    hist = pd.DataFrame({
+        "Open": [c - 1 for c in closes],
+        "High": [c + 1 for c in closes],
+        "Low": [c - 2 for c in closes],
+        "Close": closes,
+        "Volume": [1_000_000] * 8,
+    }, index=idx)
+    fake = MagicMock()
+    fake.history.return_value = hist
+    with patch("bot.trade_review.yf.Ticker", return_value=fake):
+        buf = build_trade_review_html("테스트", "005930.KS",
+                                      [_tx("2026-04-02", "buy", 10, 101)], 101.0)
+    assert "급등" in buf.getvalue().decode()
 
 
 def test_chart_handles_trade_on_nontrading_day():

@@ -3,5 +3,6 @@ python-dotenv>=1.0.0
 filelock>=3.12.0
 yfinance>=0.2.0
 matplotlib>=3.7.0
+plotly>=6.0.0
 playwright>=1.40.0
 pykrx>=1.2.8

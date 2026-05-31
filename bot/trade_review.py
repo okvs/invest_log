@@ -283,6 +283,202 @@ def build_trade_chart(
     return buf
 
 
+# 급등봉 기준: 전일 종가 대비 일간 상승률(%)
+SURGE_PCT = 10.0
+
+
+def _build_review_figure(
+    name: str,
+    ticker: str,
+    transactions: list[dict],
+    avg_price: float,
+    cur_price: float | None = None,
+):
+    """plotly 인터랙티브 figure 생성 (마우스 오버 시 상승률·OHLC·거래량).
+
+    실패 시 None. plotly 미설치면 ImportError 를 그대로 올린다(호출부에서 PNG 폴백).
+    """
+    if not ticker:
+        return None
+    trades = aggregate_trades(transactions)
+    if not trades:
+        return None
+
+    first_date = min(t["date"] for t in trades)
+    start_dt = datetime.strptime(first_date, "%Y-%m-%d") - timedelta(days=14)
+    try:
+        hist = yf.Ticker(ticker).history(
+            start=start_dt.strftime("%Y-%m-%d"), interval="1d"
+        )
+    except Exception as e:
+        logger.warning("%s(%s) 일봉 조회 실패: %s", name, ticker, e)
+        return None
+    if hist is None or hist.empty:
+        return None
+    hist = hist.dropna(subset=["Open", "High", "Low", "Close"])
+    if hist.empty:
+        return None
+
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    dates = [d.strftime("%Y-%m-%d") for d in hist.index]
+    O = [float(v) for v in hist["Open"]]
+    Hi = [float(v) for v in hist["High"]]
+    Lo = [float(v) for v in hist["Low"]]
+    Cl = [float(v) for v in hist["Close"]]
+    V = ([float(v) for v in hist["Volume"].fillna(0)]
+         if "Volume" in hist.columns else [0.0] * len(dates))
+    n = len(dates)
+    pos = {d: i for i, d in enumerate(dates)}
+
+    def snap(ds: str) -> str:
+        if ds in pos:
+            return ds
+        if ds > dates[-1]:
+            return dates[-1]
+        earlier = [d for d in dates if d <= ds]
+        return earlier[-1] if earlier else dates[0]
+
+    # 상승률 = 전일 종가 대비(%) (첫 봉은 시가 대비)
+    chg = []
+    for i in range(n):
+        base = O[i] if i == 0 else Cl[i - 1]
+        chg.append(((Cl[i] - base) / base * 100) if base else 0.0)
+
+    span = (max(Hi) - min(Lo)) or 1.0
+    gap = span * 0.06
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.04, row_heights=[0.74, 0.26])
+
+    # 캔들 (한국식 빨강/파랑) — hover 는 아래 투명 scatter 가 담당
+    fig.add_trace(go.Candlestick(
+        x=dates, open=O, high=Hi, low=Lo, close=Cl,
+        increasing=dict(line=dict(color=UP_C, width=1), fillcolor=UP_C),
+        decreasing=dict(line=dict(color=DOWN_C, width=1), fillcolor=DOWN_C),
+        whiskerwidth=0.4, hoverinfo="skip", showlegend=False, name=""), row=1, col=1)
+
+    # 상승률·OHLC·거래량 통합 hover (x unified)
+    customdata = list(zip(O, Hi, Lo, Cl, chg, V))
+    fig.add_trace(go.Scatter(
+        x=dates, y=Cl, mode="markers",
+        marker=dict(size=4, color="rgba(0,0,0,0)"),
+        customdata=customdata, name="",
+        hovertemplate=(
+            "시 %{customdata[0]:,.0f} · 고 %{customdata[1]:,.0f} · "
+            "저 %{customdata[2]:,.0f} · 종 %{customdata[3]:,.0f}<br>"
+            "<b>상승률 %{customdata[4]:+.2f}%</b> · 거래량 %{customdata[5]:,.0f}"
+            "<extra></extra>"),
+        showlegend=False), row=1, col=1)
+
+    # 상승률 ≥10% 급등봉 — 별 + 라벨
+    surge = [(dates[i], Hi[i], chg[i]) for i in range(n) if chg[i] >= SURGE_PCT]
+    if surge:
+        fig.add_trace(go.Scatter(
+            x=[s[0] for s in surge], y=[s[1] + gap * 0.7 for s in surge],
+            mode="markers+text",
+            marker=dict(symbol="star", size=13, color="#fbbf24",
+                        line=dict(color="white", width=0.6)),
+            text=[f"+{s[2]:.0f}%" for s in surge], textposition="top center",
+            textfont=dict(color="#fbbf24", size=9),
+            customdata=[s[2] for s in surge],
+            hovertemplate="급등봉 +%{customdata:.2f}%<extra></extra>",
+            name=f"급등(≥{SURGE_PCT:.0f}%)", showlegend=True), row=1, col=1)
+
+    # 체결가 노란 가로 틱
+    fig.add_trace(go.Scatter(
+        x=[snap(t["date"]) for t in trades], y=[t["price"] for t in trades],
+        mode="markers",
+        marker=dict(symbol="line-ew", size=22,
+                    line=dict(color=EXEC_C, width=1.4), color=EXEC_C),
+        hoverinfo="skip", name="체결가", showlegend=False), row=1, col=1)
+
+    # 매수▲(봉 아래) / 매도▼(봉 위)
+    def _add_side(side: str, color: str, sym: str, label: str, below: bool) -> None:
+        items = [t for t in trades if t["type"] == side]
+        if not items:
+            return
+        xs = [snap(t["date"]) for t in items]
+        ys = [(Lo[pos[x]] - gap) if below else (Hi[pos[x]] + gap) for x in xs]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers+text",
+            marker=dict(symbol=sym, size=14, color=color,
+                        line=dict(color="white", width=1.2)),
+            text=[f"{label} {t['qty']}" for t in items],
+            textposition="bottom center" if below else "top center",
+            textfont=dict(color="white", size=9),
+            customdata=[[t["qty"], t["price"]] for t in items],
+            hovertemplate=(label + " %{customdata[0]}주<br>단가 %{customdata[1]:,.0f}"
+                           "<extra></extra>"),
+            name=label, showlegend=True), row=1, col=1)
+
+    _add_side("buy", BUY_C, "triangle-up", "매수", below=True)
+    _add_side("sell", SELL_C, "triangle-down", "매도", below=False)
+
+    # 평단선
+    if avg_price and avg_price > 0:
+        fig.add_hline(y=avg_price, line=dict(color=AVG_C, dash="dash", width=1),
+                      annotation_text=f"평단 {avg_price:,.0f}",
+                      annotation_position="top left",
+                      annotation_font=dict(color=AVG_C, size=10), row=1, col=1)
+
+    # 현재가(또는 최근종가) 마커
+    has_live = bool(cur_price and cur_price > 0)
+    cur = float(cur_price) if has_live else Cl[-1]
+    fig.add_trace(go.Scatter(
+        x=[dates[-1]], y=[cur], mode="markers+text",
+        marker=dict(color=CUR_C, size=9),
+        text=[f"  {'현재' if has_live else '최근종가'} {cur:,.0f}"],
+        textposition="middle right", textfont=dict(color=CUR_C, size=10),
+        hoverinfo="skip", showlegend=False), row=1, col=1)
+
+    # 거래량 (상승일=빨강 / 하락일=파랑)
+    vcolors = [UP_C if Cl[i] >= O[i] else DOWN_C for i in range(n)]
+    fig.add_trace(go.Bar(x=dates, y=V, marker=dict(color=vcolors), opacity=0.55,
+                         hoverinfo="skip", showlegend=False, name="거래량"),
+                  row=2, col=1)
+
+    fig.update_layout(
+        title=dict(text=f"{name} ({ticker}) · 매매 복기 · {dates[0]}~",
+                   font=dict(color="#fff", size=15), x=0.01),
+        template="plotly_dark", paper_bgcolor="#0f0f14", plot_bgcolor="#0f0f14",
+        hovermode="x unified", dragmode="pan",
+        margin=dict(l=64, r=92, t=70, b=28),
+        legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center",
+                    bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc", size=10)),
+        xaxis_rangeslider_visible=False, height=640,
+    )
+    # 우측에 여백을 둬 '현재' 라벨이 잘리지 않게 (category 축은 0..n-1 인덱스)
+    fig.update_xaxes(showgrid=False, color="#888", nticks=10, range=[-0.7, n + 1.5])
+    fig.update_yaxes(showgrid=True, gridcolor="#1f2430", color="#888", row=1, col=1)
+    fig.update_yaxes(showgrid=False, color="#888", title_text="거래량", row=2, col=1)
+    return fig
+
+
+def build_trade_review_html(
+    name: str,
+    ticker: str,
+    transactions: list[dict],
+    avg_price: float,
+    cur_price: float | None = None,
+) -> io.BytesIO | None:
+    """매매 복기 인터랙티브 HTML (마우스 오버 시 상승률·OHLC·거래량, ≥10% 급등봉 별표시).
+
+    plotly.js 는 CDN 으로 로드(파일 경량). 실패 시 None.
+    """
+    fig = _build_review_figure(name, ticker, transactions, avg_price, cur_price)
+    if fig is None:
+        return None
+    import plotly.io as pio
+    html = pio.to_html(fig, include_plotlyjs="cdn", full_html=True,
+                       config={"displayModeBar": True, "scrollZoom": True,
+                               "displaylogo": False})
+    buf = io.BytesIO(html.encode("utf-8"))
+    buf.name = f"review_{ticker}.html"
+    return buf
+
+
 def _eok(v: float) -> str:
     """KRW 금액을 억/천만/만 단위로 축약."""
     sign = "-" if v < 0 else ""
