@@ -369,16 +369,22 @@ def _build_review_figure(
         whiskerwidth=0, hoverinfo="skip", showlegend=False, name=""), row=1, col=1)
 
     # 상승률·OHLC·거래량 통합 hover (x unified)
-    customdata = list(zip(O, Hi, Lo, Cl, chg, V))
+    # plotly hovertemplate 의 d3 포맷(:+.1f 등)이 환경에 따라 무시돼 원시 float 가
+    # 그대로 나오는 일이 있어, 파이썬에서 미리 문자열로 포맷해 넣는다(확실하게 1자리).
+    customdata = [
+        [f"{O[i]:,.0f}", f"{Hi[i]:,.0f}", f"{Lo[i]:,.0f}", f"{Cl[i]:,.0f}",
+         f"{chg[i]:+.1f}", f"{V[i]:,.0f}"]
+        for i in range(n)
+    ]
     fig.add_trace(go.Scatter(
         x=dates, y=Cl, mode="markers",
         marker=dict(size=4, color="rgba(0,0,0,0)"),
         customdata=customdata, name="",
         hovertemplate=(
-            "시 %{customdata[0]:,.0f} · 고 %{customdata[1]:,.0f} · "
-            "저 %{customdata[2]:,.0f} · 종 %{customdata[3]:,.0f}<br>"
-            "<b>상승률(전일대비) %{customdata[4]:+.1f}%</b> · "
-            "거래량 %{customdata[5]:,.0f}"
+            "시 %{customdata[0]} · 고 %{customdata[1]} · "
+            "저 %{customdata[2]} · 종 %{customdata[3]}<br>"
+            "<b>상승률(전일대비) %{customdata[4]}%</b> · "
+            "거래량 %{customdata[5]}"
             "<extra></extra>"),
         showlegend=False), row=1, col=1)
 
