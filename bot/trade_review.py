@@ -198,8 +198,9 @@ def build_trade_chart(
         price = t["price"]
         is_buy = t["type"] == "buy"
         bx = int(round(x))
-        # 체결가 노란 가로줄 (봉 폭에 맞춰)
-        ax.hlines(price, x - 0.45, x + 0.45, color=EXEC_C, linewidth=2.4, zorder=6)
+        # 체결가 노란 가로줄 (봉 폭에 맞춰, 얇은 점선)
+        ax.hlines(price, x - 0.45, x + 0.45, color=EXEC_C,
+                  linewidth=1.0, linestyle=(0, (2, 1.5)), zorder=6)
         color = BUY_C if is_buy else SELL_C
         bar_lo = lows[bx] if 0 <= bx < n else price
         bar_hi = highs[bx] if 0 <= bx < n else price
