@@ -392,14 +392,11 @@ def _build_review_figure(
     surge = [(dates[i], Hi[i], chg[i]) for i in range(n) if chg[i] >= SURGE_PCT]
     if surge:
         fig.add_trace(go.Scatter(
-            x=[s[0] for s in surge], y=[s[1] + gap * 0.7 for s in surge],
-            mode="markers+text",
-            marker=dict(symbol="star", size=13, color="#fbbf24",
-                        line=dict(color="white", width=0.6)),
+            x=[s[0] for s in surge], y=[s[1] + gap * 0.5 for s in surge],
+            mode="text",  # 별 제거 — 노란 +N% 숫자만으로 급등봉 표시
             text=[f"+{s[2]:.1f}%" for s in surge], textposition="top center",
-            textfont=dict(color="#fbbf24", size=9),
-            hoverinfo="skip",  # ⭐+라벨로 충분 — hover 는 봉의 통합 툴팁(상승률)만 쓰게
-            name=f"급등(≥{SURGE_PCT:.0f}%)", showlegend=True), row=1, col=1)
+            textfont=dict(color="#fbbf24", size=10),
+            hoverinfo="skip", showlegend=False), row=1, col=1)
 
     surge_dates = {s[0] for s in surge}
 
@@ -461,7 +458,7 @@ def _build_review_figure(
         margin=dict(l=64, r=92, t=70, b=28),
         legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center",
                     bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc", size=10)),
-        xaxis_rangeslider_visible=False, height=860,
+        xaxis_rangeslider_visible=False, height=1000,
     )
     # x를 category 로 고정: (1) 날짜문자열이 date축으로 자동인식돼 숫자 range 가
     # 1970년으로 튀던 버그 방지, (2) 주말/휴장 갭 제거. range 는 category 인덱스(0..n-1).

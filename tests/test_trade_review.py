@@ -233,7 +233,8 @@ def test_html_marks_surge_candles():
     with patch("bot.trade_review.yf.Ticker", return_value=fake):
         buf = build_trade_review_html("테스트", "005930.KS",
                                       [_tx("2026-04-02", "buy", 10, 101)], 101.0)
-    assert "급등" in buf.getvalue().decode()
+    # ≥10% 급등봉은 ⭐ 없이 노란 +N% 숫자 라벨로 표시 (4번째 봉 120 vs 102 = +17.6%)
+    assert "17.6" in buf.getvalue().decode()
 
 
 # ── build_review_tabs_html (한 파일·종목별 탭) ───────────────────────────────
