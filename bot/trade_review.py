@@ -449,8 +449,10 @@ def _build_review_figure(
                     bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc", size=10)),
         xaxis_rangeslider_visible=False, height=640,
     )
-    # 우측에 여백을 둬 '현재' 라벨이 잘리지 않게 (category 축은 0..n-1 인덱스)
-    fig.update_xaxes(showgrid=False, color="#888", nticks=10, range=[-0.7, n + 1.5])
+    # x를 category 로 고정: (1) 날짜문자열이 date축으로 자동인식돼 숫자 range 가
+    # 1970년으로 튀던 버그 방지, (2) 주말/휴장 갭 제거. range 는 category 인덱스(0..n-1).
+    fig.update_xaxes(type="category", showgrid=False, color="#888", nticks=10,
+                     range=[-0.7, n + 4.5])
     fig.update_yaxes(showgrid=True, gridcolor="#1f2430", color="#888", row=1, col=1)
     fig.update_yaxes(showgrid=False, color="#888", title_text="거래량", row=2, col=1)
     return fig
