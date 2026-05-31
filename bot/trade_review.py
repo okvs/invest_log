@@ -366,7 +366,7 @@ def _build_review_figure(
         x=dates, open=O, high=Hi, low=Lo, close=Cl,
         increasing=dict(line=dict(color=UP_C, width=1), fillcolor=UP_C),
         decreasing=dict(line=dict(color=DOWN_C, width=1), fillcolor=DOWN_C),
-        whiskerwidth=0.4, hoverinfo="skip", showlegend=False, name=""), row=1, col=1)
+        whiskerwidth=0, hoverinfo="skip", showlegend=False, name=""), row=1, col=1)
 
     # 상승률·OHLC·거래량 통합 hover (x unified)
     customdata = list(zip(O, Hi, Lo, Cl, chg, V))
