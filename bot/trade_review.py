@@ -352,12 +352,12 @@ def _build_review_figure(
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         vertical_spacing=0.04, row_heights=[0.8, 0.2])
 
-    # 체결가 노란 가로 틱 — 캔들보다 *먼저* 그려 봉 뒤로 보낸다(봉을 안 가림,
-    # 노란줄이 봉보다 가로로 길어 양옆으로만 삐져나옴).
+    # 체결가 노란 가로 틱 — 캔들보다 *먼저* 그려 봉 뒤로 보낸다(봉을 안 가림).
+    # size 는 픽셀 폭: 봉(캔들 몸통)보다 아주 약간만 길게 양옆으로 삐져나오는 정도.
     fig.add_trace(go.Scatter(
         x=[snap(t["date"]) for t in trades], y=[t["price"] for t in trades],
         mode="markers",
-        marker=dict(symbol="line-ew", size=13,
+        marker=dict(symbol="line-ew", size=8,
                     line=dict(color=EXEC_C, width=1.4), color=EXEC_C),
         hoverinfo="skip", name="체결가", showlegend=False), row=1, col=1)
 
