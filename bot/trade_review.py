@@ -340,11 +340,13 @@ def _build_review_figure(
         earlier = [d for d in dates if d <= ds]
         return earlier[-1] if earlier else dates[0]
 
-    # 상승률 = 전일 종가 대비(%) (첫 봉은 시가 대비)
+    # 상승률 = 전일 종가 대비(%) (첫 봉은 시가 대비). 봉 몸통은 시가→종가라 둘은 다르다
+    # (갭상승 시 전일대비는 크지만 몸통은 짧을 수 있음) → hover 에 둘 다 보여 혼동 방지.
     chg = []
     for i in range(n):
         base = O[i] if i == 0 else Cl[i - 1]
         chg.append(((Cl[i] - base) / base * 100) if base else 0.0)
+    intraday = [((Cl[i] - O[i]) / O[i] * 100) if O[i] else 0.0 for i in range(n)]
 
     span = (max(Hi) - min(Lo)) or 1.0
     gap = span * 0.06
@@ -369,7 +371,7 @@ def _build_review_figure(
         whiskerwidth=0, hoverinfo="skip", showlegend=False, name=""), row=1, col=1)
 
     # 상승률·OHLC·거래량 통합 hover (x unified)
-    customdata = list(zip(O, Hi, Lo, Cl, chg, V))
+    customdata = list(zip(O, Hi, Lo, Cl, chg, V, intraday))
     fig.add_trace(go.Scatter(
         x=dates, y=Cl, mode="markers",
         marker=dict(size=4, color="rgba(0,0,0,0)"),
@@ -377,7 +379,9 @@ def _build_review_figure(
         hovertemplate=(
             "시 %{customdata[0]:,.0f} · 고 %{customdata[1]:,.0f} · "
             "저 %{customdata[2]:,.0f} · 종 %{customdata[3]:,.0f}<br>"
-            "<b>상승률 %{customdata[4]:+.2f}%</b> · 거래량 %{customdata[5]:,.0f}"
+            "<b>상승률(전일대비) %{customdata[4]:+.2f}%</b> · "
+            "시가대비(몸통) %{customdata[6]:+.2f}%<br>"
+            "거래량 %{customdata[5]:,.0f}"
             "<extra></extra>"),
         showlegend=False), row=1, col=1)
 
