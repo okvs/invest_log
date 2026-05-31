@@ -35,6 +35,7 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 from bot.formatters import _resolve_tickers, fetch_current_quotes
+from bot.pyramiding import PYRAMID_AMOUNT, detect_opportunities
 from storage.json_store import load_holdings
 
 logger = logging.getLogger(__name__)
@@ -338,6 +339,30 @@ async def _send_ma_alerts(bot: Bot, alerts: list[dict]) -> None:
             )
 
 
+def _find_pyramiding() -> list[dict]:
+    """오늘 피라미딩각(강한 돌파 + 보유·수익 중) 보유 종목."""
+    try:
+        return detect_opportunities(load_holdings())
+    except Exception as e:
+        logger.warning("피라미딩 점검 실패: %s", e)
+        return []
+
+
+async def _send_pyramiding_alerts(bot: Bot, opps: list[dict]) -> None:
+    amt = f"{PYRAMID_AMOUNT // 10000:,}만원"
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=f"📈 피라미딩각 {len(opps)}종목  ·  오늘 강한 돌파(보유·수익 중)  ·  15:30 점검",
+    )
+    for o in opps:
+        text = (
+            f"<b>{o['name']}</b>  ·  {o['kind']} <b>{o['chg']:+.1f}%</b>\n"
+            f"현재가 {o['cur']:,.0f}원 · 평단대비 <b>{o['pnl_pct']:+.1f}%</b>\n"
+            f"국룰 {amt} ≈ <b>{o['suggested_shares']}주</b> 추가 검토"
+        )
+        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode=ParseMode.HTML)
+
+
 async def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -352,9 +377,10 @@ async def main() -> int:
 
     stop_loss_alerts = _find_at_risk_positions()
     ma_alerts = _find_ma_breakdown_positions()
+    pyramiding_alerts = _find_pyramiding()
 
-    if not stop_loss_alerts and not ma_alerts:
-        logger.info("위태/이평선깨짐 모두 0건 — 무발송")
+    if not stop_loss_alerts and not ma_alerts and not pyramiding_alerts:
+        logger.info("위태/이평선깨짐/피라미딩 모두 0건 — 무발송")
         return 0
 
     bot = Bot(token=token)
@@ -365,7 +391,11 @@ async def main() -> int:
         if ma_alerts:
             logger.info("이평선 깨짐 %d건 발송", len(ma_alerts))
             await _send_ma_alerts(bot, ma_alerts)
-    logger.info("발송 완료 (자동손절 %d / MA깨짐 %d)", len(stop_loss_alerts), len(ma_alerts))
+        if pyramiding_alerts:
+            logger.info("피라미딩각 %d건 발송", len(pyramiding_alerts))
+            await _send_pyramiding_alerts(bot, pyramiding_alerts)
+    logger.info("발송 완료 (자동손절 %d / MA깨짐 %d / 피라미딩 %d)",
+                len(stop_loss_alerts), len(ma_alerts), len(pyramiding_alerts))
     return 0
 
 

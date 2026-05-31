@@ -38,6 +38,7 @@ from bot.handlers.futures_roll import futures_roll_conversation
 from bot.handlers.futures_sell import futures_close_conversation
 from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
+from bot.handlers.pyramiding import pyramiding_handler
 from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
 from bot.handlers.trade_review import review_handler
@@ -104,6 +105,7 @@ async def start(update: Update, context) -> None:
         "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
         "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
         "복기 - 보유 현물별 매매기록 차트로 한 종목씩 되짚기\n"
+        "피라미딩 - 오늘 강한 돌파(신고가/갭상승) 보유종목 추가매수 검토\n"
         "10억 - 순자산 10억 목표 진척률·필요수익률·생존선 트래커\n"
         "입금 - 입금 이벤트 등록 (날짜+금액+메모)\n"
         "출금 - 출금 이벤트 등록\n"
@@ -152,6 +154,7 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("10억"), goal_handler))
     app.add_handler(MessageHandler(_korean_command("복기"), review_handler))
     app.add_handler(CommandHandler("review", review_handler))
+    app.add_handler(MessageHandler(_korean_command("피라미딩"), pyramiding_handler))
     app.add_handler(MessageHandler(_korean_command("입출금목록"), list_cash_events))
     app.add_handler(MessageHandler(filters.Regex(r"^입출금삭제"), delete_cash_event))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
