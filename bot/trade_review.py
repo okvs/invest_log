@@ -31,10 +31,12 @@ UP_C = "#ef4444"
 DOWN_C = "#3b82f6"
 CANDLE_ALPHA = 0.55
 # 거래 마커: 매수=빨강▲ / 매도=파랑▼ (한국식 매수/매도 직관). 봉을 가리지 않게
-# 봉 밖(매수 아래·매도 위)에 두고 연결선으로 체결가를 가리킨다.
+# 봉에서 충분히 떨어진 위치(매수 아래·매도 위)에 두고, 연결선은 쓰지 않는다
+# (윗꼬리처럼 보임). 체결가는 봉 위 노란 가로줄로 따로 표시한다.
 BUY_C = "#ff3b30"
 SELL_C = "#0a84ff"
-AVG_C = "#f5c542"
+AVG_C = "#cbd5e1"   # 평단선 — 중립 회색(체결가 노란줄과 구분)
+EXEC_C = "#ffd60a"  # 체결가 — 봉 위 노란 가로줄
 CUR_C = "#ffffff"
 
 _KO_FONT_CANDIDATES = [
@@ -113,7 +115,8 @@ def build_trade_chart(
     _setup_korean_font()
 
     first_date = min(t["date"] for t in trades)
-    start_dt = datetime.strptime(first_date, "%Y-%m-%d") - timedelta(days=7)
+    # 첫 매매 이전 맥락을 ~10거래일(약 14캘린더일) 보여준다.
+    start_dt = datetime.strptime(first_date, "%Y-%m-%d") - timedelta(days=14)
     try:
         hist = yf.Ticker(ticker).history(
             start=start_dt.strftime("%Y-%m-%d"), interval="1d"
@@ -186,25 +189,28 @@ def build_trade_chart(
         ax.text(0, avg_price, f" 평단 {avg_price:,.0f}", color=AVG_C,
                 fontsize=8, va="bottom", fontweight="bold")
 
-    # ── 매수(빨강▲)/매도(파랑▼) 마커 — 봉 밖(매수 아래·매도 위)에 두고 연결선으로 체결가 표시 ──
+    # ── 체결가: 봉 위 노란 가로줄 / 매수(빨강▲)·매도(파랑▼) 마커는 봉에서 충분히 떨어뜨려 ──
+    # (연결선은 윗꼬리처럼 보여 제거. 마커는 날짜·방향·수량만 전달, 가격은 노란줄이 전달.)
+    gap = span * 0.12
     lo_extent, hi_extent = p_lo, p_hi
     for t in trades:
         x = to_x(t["date"])
         price = t["price"]
         is_buy = t["type"] == "buy"
         bx = int(round(x))
+        # 체결가 노란 가로줄 (봉 폭에 맞춰)
+        ax.hlines(price, x - 0.45, x + 0.45, color=EXEC_C, linewidth=2.4, zorder=6)
+        color = BUY_C if is_buy else SELL_C
         bar_lo = lows[bx] if 0 <= bx < n else price
         bar_hi = highs[bx] if 0 <= bx < n else price
-        color = BUY_C if is_buy else SELL_C
         if is_buy:
-            anchor = min(price, bar_lo) - span * 0.07
+            anchor = min(price, bar_lo) - gap
             marker, va, dy, label = "^", "top", -11, f"매수 {t['qty']}"
             lo_extent = min(lo_extent, anchor)
         else:
-            anchor = max(price, bar_hi) + span * 0.07
+            anchor = max(price, bar_hi) + gap
             marker, va, dy, label = "v", "bottom", 11, f"매도 {t['qty']}"
             hi_extent = max(hi_extent, anchor)
-        ax.plot([x, x], [price, anchor], color=color, linewidth=0.9, alpha=0.7, zorder=5)
         ax.scatter(x, anchor, marker=marker, s=190, facecolor=color,
                    edgecolor="white", linewidth=1.3, zorder=7)
         ax.annotate(label, (x, anchor), color="white", fontsize=7, ha="center", va=va,
