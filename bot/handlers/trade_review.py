@@ -1,45 +1,30 @@
-"""매매 복기 ConversationHandler.
+"""매매 복기 — `복기` 명령.
 
-플로우:
-  복기 → 보유 현물 목록(손익률) → 종목 선택 →
-  일봉 캔들 + 내 ▲매수/▼매도 마커 차트 + 요약 캡션 →
-  [◀ 이전 / 다음 ▶ / 📋 목록 / 종료] 로 한 종목씩 되짚기.
+보유 현물 전체를 *한 HTML 파일*의 종목별 탭으로 묶어 보낸다. 각 탭은 일봉 캔들 +
+내 ▲매수/▼매도 마커 + 체결가 노란선 + 거래량 + ⭐급등(≥10%)봉, 마우스 오버 시
+상승률(전일대비)을 보여주는 인터랙티브 plotly 차트.
 
 차트의 거래 마커는 yfinance 일봉과 동일한 스케일된 가격우주라 그대로 정렬된다.
+거래 매칭은 같은 티커를 공유하는 모든 종목명(과거명/별칭 포함)으로 한다.
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from telegram import Update
-from telegram.error import TelegramError
-from telegram.ext import (
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
-)
-from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
 
 from bot.formatters import _resolve_tickers, fetch_current_quotes
-from bot.keyboards import (
-    REVIEW_PICK_PREFIX,
-    RV_DONE,
-    RV_LIST,
-    RV_NEXT,
-    RV_PREV,
-    review_nav_keyboard,
-    review_select_keyboard,
-)
-from bot.trade_review import build_trade_chart, build_trade_review_html, summarize_review
+from bot.trade_review import build_review_tabs_html
 from storage.json_store import load_holdings, load_ticker_map, load_transactions
 
 logger = logging.getLogger(__name__)
 
-SELECT, VIEWING = range(2)
+REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
 
 
 def _build_order() -> list[dict]:
@@ -86,190 +71,68 @@ def _build_order() -> list[dict]:
     return order
 
 
-async def _start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    order = await asyncio.to_thread(_build_order)
+def _build_tabs_file() -> io.BytesIO | None:
+    """보유 현물 전체 → 한 파일 탭 HTML (블로킹: 시세조회 + plotly)."""
+    order = _build_order()
     if not order:
-        await update.message.reply_text("복기할 보유 현물이 없습니다.")
-        return ConversationHandler.END
+        return None
+    alltx = load_transactions()
+    tmap = load_ticker_map()
+    items: list[dict] = []
+    for o in order:
+        ticker = o.get("ticker")
+        alias = {o["name"]}
+        if ticker:
+            alias |= {nm for nm, tk in tmap.items() if tk == ticker}
+        txs = [
+            t for t in alltx
+            if t.get("name") in alias and t.get("type") in ("buy", "sell")
+        ]
+        items.append({"holding": o, "transactions": txs})
+    return build_review_tabs_html(items)
 
-    context.user_data["review_order"] = order
-    context.user_data.pop("review_nav_msg_id", None)
-    items = [{"name": o["name"], "qty": o["quantity"], "pct": o["pct"]} for o in order]
-    await update.message.reply_text(
-        f"📈 매매 복기 — 보유 현물 {len(order)}종목\n복기할 종목을 선택하세요:",
-        reply_markup=review_select_keyboard(items),
-    )
-    return SELECT
 
-
-async def _clear_prev_nav(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
-    """직전 차트의 네비 버튼을 제거해 오작동(옛 버튼 클릭) 방지."""
-    msg_id = context.user_data.pop("review_nav_msg_id", None)
-    if not msg_id:
-        return
+def _save_locally(buf: io.BytesIO) -> io.BytesIO:
+    """reports/ 에 저장하고 전송용 새 BytesIO 반환."""
     try:
-        await context.bot.edit_message_reply_markup(
-            chat_id=chat_id, message_id=msg_id, reply_markup=None
-        )
-    except TelegramError:
-        pass
-
-
-async def _send_chart(context: ContextTypes.DEFAULT_TYPE, chat_id: int, idx: int) -> None:
-    """현재 인덱스 종목의 복기 차트 + 캡션 + 네비를 전송."""
-    order: list[dict] = context.user_data["review_order"]
-    idx = max(0, min(idx, len(order) - 1))
-    context.user_data["review_idx"] = idx
-    h = order[idx]
-
-    await _clear_prev_nav(context, chat_id)
-
-    # 거래 매칭: 종목명 + 같은 티커를 공유하는 모든 이름(과거명/별칭) → rename·alias 에도
-    # 전체 매매 여정을 보존한다. transaction_ids 는 현재 보유분만 담겨 일부 누락되므로 안 씀.
-    alias_names = {h["name"]}
-    ticker = h.get("ticker")
-    if ticker:
-        alias_names |= {nm for nm, tk in load_ticker_map().items() if tk == ticker}
-    txs = [
-        t for t in load_transactions()
-        if t.get("name") in alias_names and t.get("type") in ("buy", "sell")
-    ]
-    caption = summarize_review(
-        h, txs, cur_price=h.get("cur"), change_pct=h.get("change_pct"),
-        position=(idx + 1, len(order)),
-    )
-    # 1순위: 인터랙티브 HTML(마우스 오버 상승률·≥10% 급등봉). 실패 시 PNG 폴백.
-    html_buf = None
-    try:
-        html_buf = await asyncio.to_thread(
-            build_trade_review_html, h["name"], h["ticker"], txs, h["avg_price"], h.get("cur"),
-        )
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fp = REPORTS_DIR / f"trade_review_{ts}.html"
+        fp.write_bytes(buf.getvalue())
+        logger.info("복기 리포트 저장: %s", fp)
+        out = io.BytesIO(buf.getvalue())
+        out.name = fp.name
+        return out
     except Exception:
-        logger.warning("%s 복기 HTML 생성 실패 — PNG 폴백", h["name"], exc_info=True)
+        logger.warning("복기 리포트 로컬 저장 실패", exc_info=True)
+        buf.seek(0)
+        return buf
 
-    if html_buf is not None:
-        await context.bot.send_document(
-            chat_id=chat_id, document=html_buf, caption=caption, parse_mode=ParseMode.HTML,
-        )
-    else:
-        try:
-            chart = await asyncio.to_thread(
-                build_trade_chart, h["name"], h["ticker"], txs, h["avg_price"], h.get("cur"),
-            )
-        except Exception:
-            logger.warning("%s 복기 차트 생성 실패", h["name"], exc_info=True)
-            chart = None
-        if chart is not None:
-            await context.bot.send_photo(
-                chat_id=chat_id, photo=chart, caption=caption, parse_mode=ParseMode.HTML,
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=caption + "\n\n⚠️ 일봉 시세를 불러오지 못해 차트는 생략했습니다.",
-                parse_mode=ParseMode.HTML,
-            )
 
-    nav = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"[{idx + 1}/{len(order)}] {h['name']} 복기 중",
-        reply_markup=review_nav_keyboard(idx, len(order)),
+async def review_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`복기` — 보유 현물 전체를 종목별 탭 하나의 HTML 로 전송."""
+    active = [h for h in load_holdings() if h.get("quantity", 0) > 0]
+    if not active:
+        await update.message.reply_text("복기할 보유 현물이 없습니다.")
+        return
+
+    await update.message.reply_text(
+        f"📈 매매 복기 — 보유 현물 {len(active)}종목 차트를 만드는 중… (잠시만요)"
     )
-    context.user_data["review_nav_msg_id"] = nav.message_id
-
-
-async def _pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if "review_order" not in context.user_data:
-        await query.edit_message_text("세션이 만료됐어요. '복기'를 다시 입력해주세요.")
-        return ConversationHandler.END
     try:
-        idx = int(query.data.removeprefix(REVIEW_PICK_PREFIX))
-    except ValueError:
-        return SELECT
-    await _send_chart(context, update.effective_chat.id, idx)
-    return VIEWING
+        buf = await asyncio.to_thread(_build_tabs_file)
+    except Exception:
+        logger.warning("복기 HTML 생성 실패", exc_info=True)
+        buf = None
 
-
-async def _nav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if "review_order" not in context.user_data:
-        await query.edit_message_text("세션이 만료됐어요. '복기'를 다시 입력해주세요.")
-        return ConversationHandler.END
-
-    data = query.data
-    chat_id = update.effective_chat.id
-    order = context.user_data["review_order"]
-    idx = context.user_data.get("review_idx", 0)
-
-    if data == RV_DONE:
-        await _clear_prev_nav(context, chat_id)
-        await context.bot.send_message(chat_id=chat_id, text="복기를 마쳤습니다. 👍")
-        _cleanup(context)
-        return ConversationHandler.END
-
-    if data == RV_LIST:
-        await _clear_prev_nav(context, chat_id)
-        items = [{"name": o["name"], "qty": o["quantity"], "pct": o["pct"]} for o in order]
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="복기할 종목을 선택하세요:",
-            reply_markup=review_select_keyboard(items),
+    if buf is None:
+        await update.message.reply_text(
+            "차트를 만들지 못했어요(시세 조회 실패 등). 잠시 후 다시 시도해주세요."
         )
-        return SELECT
+        return
 
-    if data == RV_NEXT:
-        idx += 1
-    elif data == RV_PREV:
-        idx -= 1
-    await _send_chart(context, chat_id, idx)
-    return VIEWING
-
-
-async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("복기가 취소되었습니다.")
-    _cleanup(context)
-    return ConversationHandler.END
-
-
-def _cleanup(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for k in ("review_order", "review_idx", "review_nav_msg_id"):
-        context.user_data.pop(k, None)
-
-
-def _other_command_filter() -> filters.BaseFilter:
-    return filters.Regex(
-        r"^(매도|매수|현황|잔고|도움말|help|수정|회고|자산그래프|백테스트|10억|입금|출금|입출금목록|선물진입|선물청산|선물롤오버|선물회고|복기)$"
-    ) | filters.COMMAND
-
-
-def trade_review_conversation() -> ConversationHandler:
-    other_cmd = _other_command_filter()
-    return ConversationHandler(
-        entry_points=[
-            CommandHandler("review", _start),
-            MessageHandler(filters.Regex(r"^복기$"), _start),
-        ],
-        states={
-            SELECT: [
-                CallbackQueryHandler(_pick, pattern=f"^{REVIEW_PICK_PREFIX}"),
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-            VIEWING: [
-                CallbackQueryHandler(_nav, pattern=r"^rv_nav:"),
-                # 위로 스크롤해 옛 목록 버튼(rv_pick)을 눌러도 바로 그 종목으로 점프 가능하게.
-                CallbackQueryHandler(_pick, pattern=f"^{REVIEW_PICK_PREFIX}"),
-                MessageHandler(other_cmd, _cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _cancel),
-            ],
-        },
-        fallbacks=[
-            MessageHandler(other_cmd, _cancel),
-            CommandHandler("cancel", _cancel),
-        ],
-        name="trade_review",
-        allow_reentry=True,
+    buf = _save_locally(buf)
+    await update.message.reply_document(
+        document=buf,
+        caption="매매 복기 — 상단 탭으로 종목 전환 · 봉에 마우스 올리면 상승률 · ⭐는 +10% 급등봉",
     )

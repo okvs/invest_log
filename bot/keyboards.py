@@ -381,53 +381,6 @@ def futures_retro_select_keyboard(transactions: list[dict]) -> InlineKeyboardMar
     return InlineKeyboardMarkup(buttons)
 
 
-# --- 매매 복기: 종목 선택 + 네비게이션 ---
-REVIEW_PICK_PREFIX = "rv_pick:"
-RV_PREV = "rv_nav:prev"
-RV_NEXT = "rv_nav:next"
-RV_LIST = "rv_nav:list"
-RV_DONE = "rv_nav:done"
-
-
-def review_select_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    """복기할 보유 종목 선택 키보드.
-
-    items: [{"name", "qty", "pct"(손익률|None)}] 순서대로.
-    callback_data: rv_pick:<idx> (인덱스로 종목명 특수문자 회피).
-    """
-    buttons = []
-    for idx, it in enumerate(items):
-        name = it.get("name", "")
-        qty = it.get("qty", 0)
-        pct = it.get("pct")
-        if pct is None:
-            label = f"{name}  |  {qty}주"
-        else:
-            sign = "+" if pct >= 0 else ""
-            label = f"{name}  |  {qty}주  |  {sign}{pct:.1f}%"
-        buttons.append([
-            InlineKeyboardButton(label, callback_data=f"{REVIEW_PICK_PREFIX}{idx}")
-        ])
-    return InlineKeyboardMarkup(buttons)
-
-
-def review_nav_keyboard(idx: int, total: int) -> InlineKeyboardMarkup:
-    """복기 차트 아래 네비게이션. 양끝에서는 해당 방향 버튼 생략."""
-    nav_row = []
-    if idx > 0:
-        nav_row.append(InlineKeyboardButton("◀ 이전", callback_data=RV_PREV))
-    if idx < total - 1:
-        nav_row.append(InlineKeyboardButton("다음 ▶", callback_data=RV_NEXT))
-    rows = []
-    if nav_row:
-        rows.append(nav_row)
-    rows.append([
-        InlineKeyboardButton("📋 목록", callback_data=RV_LIST),
-        InlineKeyboardButton("종료", callback_data=RV_DONE),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
 # --- 매도 확인 ---
 CONFIRM_SELL = "confirm_sell"
 CANCEL_SELL = "cancel_sell"

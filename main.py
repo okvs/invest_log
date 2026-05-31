@@ -40,7 +40,7 @@ from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
 from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
-from bot.handlers.trade_review import trade_review_conversation
+from bot.handlers.trade_review import review_handler
 from storage.json_store import load_futures_positions, save_chat_id
 
 load_dotenv()
@@ -150,6 +150,8 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("자산그래프"), asset_graph_handler))
     app.add_handler(MessageHandler(_korean_command("백테스트"), backtest_handler))
     app.add_handler(MessageHandler(_korean_command("10억"), goal_handler))
+    app.add_handler(MessageHandler(_korean_command("복기"), review_handler))
+    app.add_handler(CommandHandler("review", review_handler))
     app.add_handler(MessageHandler(_korean_command("입출금목록"), list_cash_events))
     app.add_handler(MessageHandler(filters.Regex(r"^입출금삭제"), delete_cash_event))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
@@ -162,7 +164,6 @@ def main() -> None:
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
     app.add_handler(retro_conversation())
-    app.add_handler(trade_review_conversation())
     app.add_handler(edit_conversation())
     app.add_handler(futures_entry_conversation())
     app.add_handler(futures_close_conversation())

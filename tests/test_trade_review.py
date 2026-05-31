@@ -13,6 +13,7 @@ import pytest
 
 from bot.trade_review import (
     aggregate_trades,
+    build_review_tabs_html,
     build_trade_chart,
     build_trade_review_html,
     summarize_review,
@@ -233,6 +234,43 @@ def test_html_marks_surge_candles():
         buf = build_trade_review_html("테스트", "005930.KS",
                                       [_tx("2026-04-02", "buy", 10, 101)], 101.0)
     assert "급등" in buf.getvalue().decode()
+
+
+# ── build_review_tabs_html (한 파일·종목별 탭) ───────────────────────────────
+def _hold(name, ticker, pct):
+    return {"name": name, "ticker": ticker, "sector": "반도체", "quantity": 100,
+            "avg_price": 105.0, "total_invested": 10500.0, "cur": 128.0,
+            "change_pct": 1.0, "pct": pct}
+
+
+def test_tabs_html_combines_multiple_stocks_one_file():
+    fake = MagicMock()
+    fake.history.return_value = _fake_hist()
+    items = [
+        {"holding": _hold("삼성전자", "005930.KS", 16.4),
+         "transactions": [_tx("2026-04-05", "buy", 100, 103)]},
+        {"holding": _hold("SK하이닉스", "000660.KS", 15.0),
+         "transactions": [_tx("2026-04-10", "sell", 50, 118)]},
+    ]
+    with patch("bot.trade_review.yf.Ticker", return_value=fake):
+        buf = build_review_tabs_html(items)
+    assert buf is not None
+    html = buf.getvalue().decode()
+    assert buf.name.endswith(".html")
+    assert "삼성전자" in html and "SK하이닉스" in html      # 두 탭
+    assert html.count("plotly-graph-div") >= 2              # 차트 2개 한 파일에
+    assert "rvShow(" in html                                # 탭 토글 JS
+    assert "상승률" in html
+    assert html.count("cdn.plot.ly") == 1                   # plotly.js 1회만 로드
+
+
+def test_tabs_html_none_when_nothing_drawable():
+    fake = MagicMock()
+    fake.history.return_value = pd.DataFrame()  # 빈 시세 → fig None
+    items = [{"holding": _hold("X", "000000.KS", 0.0),
+              "transactions": [_tx("2026-04-05", "buy", 1, 1)]}]
+    with patch("bot.trade_review.yf.Ticker", return_value=fake):
+        assert build_review_tabs_html(items) is None
 
 
 def test_chart_handles_trade_on_nontrading_day():

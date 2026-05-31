@@ -357,8 +357,8 @@ def _build_review_figure(
     fig.add_trace(go.Scatter(
         x=[snap(t["date"]) for t in trades], y=[t["price"] for t in trades],
         mode="markers",
-        marker=dict(symbol="line-ew", size=28,
-                    line=dict(color=EXEC_C, width=1.5), color=EXEC_C),
+        marker=dict(symbol="line-ew", size=13,
+                    line=dict(color=EXEC_C, width=1.4), color=EXEC_C),
         hoverinfo="skip", name="체결가", showlegend=False), row=1, col=1)
 
     # 캔들 (한국식 빨강/파랑) — hover 는 아래 투명 scatter 가 담당
@@ -392,8 +392,7 @@ def _build_review_figure(
                         line=dict(color="white", width=0.6)),
             text=[f"+{s[2]:.1f}%" for s in surge], textposition="top center",
             textfont=dict(color="#fbbf24", size=9),
-            customdata=[s[2] for s in surge],
-            hovertemplate="급등봉 +%{customdata:.1f}%<extra></extra>",
+            hoverinfo="skip",  # ⭐+라벨로 충분 — hover 는 봉의 통합 툴팁(상승률)만 쓰게
             name=f"급등(≥{SURGE_PCT:.0f}%)", showlegend=True), row=1, col=1)
 
     surge_dates = {s[0] for s in surge}
@@ -419,9 +418,7 @@ def _build_review_figure(
             text=[f"{label} {t['qty']}" for t in items],
             textposition="bottom center" if below else "top center",
             textfont=dict(color="white", size=9),
-            customdata=[[t["qty"], t["price"]] for t in items],
-            hovertemplate=(label + " %{customdata[0]}주<br>단가 %{customdata[1]:,.0f}"
-                           "<extra></extra>"),
+            hoverinfo="skip",  # 라벨로 수량 표시 — hover 는 봉 통합 툴팁만(번짐/잡음 방지)
             name=label, showlegend=True), row=1, col=1)
 
     _add_side("buy", BUY_C, "triangle-up", "매수", below=True)
@@ -491,6 +488,87 @@ def build_trade_review_html(
                                "displaylogo": False})
     buf = io.BytesIO(html.encode("utf-8"))
     buf.name = f"review_{ticker}.html"
+    return buf
+
+
+_PLOTLY_CFG = {"displayModeBar": True, "scrollZoom": True,
+               "displaylogo": False, "responsive": True}
+
+
+def build_review_tabs_html(items: list[dict]) -> io.BytesIO | None:
+    """여러 종목을 *한 파일* 안의 탭으로 묶은 인터랙티브 복기 HTML.
+
+    items: [{"holding": dict, "transactions": [...]}, ...] (평가금 큰 순 등 호출부 정렬).
+    plotly.js 는 CDN 1회만 로드, 종목별 차트는 div 로 이어붙이고 탭으로 토글한다.
+    그릴 수 있는 종목이 하나도 없으면 None.
+    """
+    import html as _html
+
+    import plotly.io as pio
+
+    panes, btns = [], []
+    drawn = 0
+    for it in items:
+        h = it["holding"]
+        fig = _build_review_figure(
+            h["name"], h.get("ticker", ""), it["transactions"],
+            h.get("avg_price", 0), h.get("cur"),
+        )
+        if fig is None:
+            continue
+        i = drawn
+        div = pio.to_html(
+            fig, include_plotlyjs=("cdn" if i == 0 else False),
+            full_html=False, div_id=f"chart{i}", config=_PLOTLY_CFG,
+        )
+        summ = summarize_review(
+            h, it["transactions"], cur_price=h.get("cur"),
+            change_pct=h.get("change_pct"),
+        ).replace("\n", "<br>")
+        hidden = "" if i == 0 else ' style="display:none"'
+        panes.append(
+            f'<div class="pane" id="pane{i}"{hidden}>'
+            f'<div class="summary">{summ}</div>{div}</div>'
+        )
+        pct = h.get("pct")
+        tag = "" if pct is None else f' <span class="pct">{"+" if pct >= 0 else ""}{pct:.1f}%</span>'
+        btns.append(
+            f'<button class="tabbtn{" active" if i == 0 else ""}" '
+            f'onclick="rvShow({i})">{_html.escape(h["name"])}{tag}</button>'
+        )
+        drawn += 1
+
+    if drawn == 0:
+        return None
+
+    page = (
+        "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>매매 복기</title><style>"
+        "body{margin:0;background:#0f0f14;color:#ddd;"
+        "font-family:'Apple SD Gothic Neo',-apple-system,sans-serif}"
+        ".tabbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:6px;"
+        "padding:10px;background:#15151c;border-bottom:1px solid #2a2a35}"
+        ".tabbtn{background:#1f1f29;color:#cbd5e1;border:1px solid #2a2a35;border-radius:8px;"
+        "padding:6px 12px;font-size:13px;cursor:pointer}"
+        ".tabbtn.active{background:#2563eb;color:#fff;border-color:#2563eb}"
+        ".tabbtn .pct{opacity:.8;font-size:12px}"
+        ".pane{padding:6px 10px 20px}"
+        ".summary{padding:10px 4px;font-size:14px;line-height:1.5;color:#e2e8f0}"
+        "</style></head><body>"
+        f"<div class='tabbar'>{''.join(btns)}</div>"
+        f"{''.join(panes)}"
+        "<script>"
+        "function rvShow(i){"
+        "document.querySelectorAll('.pane').forEach(function(p,idx){p.style.display=idx===i?'block':'none';});"
+        "document.querySelectorAll('.tabbtn').forEach(function(b,idx){b.classList.toggle('active',idx===i);});"
+        "var d=document.getElementById('chart'+i);"
+        "if(window.Plotly&&d){Plotly.Plots.resize(d);}}"
+        "window.addEventListener('load',function(){rvShow(0);});"
+        "</script></body></html>"
+    )
+    buf = io.BytesIO(page.encode("utf-8"))
+    buf.name = "매매복기.html"
     return buf
 
 
