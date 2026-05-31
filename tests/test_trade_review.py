@@ -122,6 +122,7 @@ def _fake_hist(start_close=100.0, days=30):
         "High": [c + 2 for c in closes],
         "Low": [c - 2 for c in closes],
         "Close": closes,
+        "Volume": [1_000_000 + i * 10_000 for i in range(days)],
     }, index=idx)
 
 

@@ -26,14 +26,16 @@ from matplotlib.patches import Rectangle  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# 한국식 캔들: 상승=빨강 / 하락=파랑
+# 한국식 캔들: 상승=빨강 / 하락=파랑 (마커가 튀도록 살짝 투명하게 그린다)
 UP_C = "#ef4444"
 DOWN_C = "#3b82f6"
-# 거래 마커: 캔들색과 헷갈리지 않게 매수=초록▲ / 매도=주황▼
-BUY_C = "#22c55e"
-SELL_C = "#f59e0b"
-AVG_C = "#a78bfa"
-CUR_C = "#fbbf24"
+CANDLE_ALPHA = 0.55
+# 거래 마커: 매수=빨강▲ / 매도=파랑▼ (한국식 매수/매도 직관). 봉을 가리지 않게
+# 봉 밖(매수 아래·매도 위)에 두고 연결선으로 체결가를 가리킨다.
+BUY_C = "#ff3b30"
+SELL_C = "#0a84ff"
+AVG_C = "#f5c542"
+CUR_C = "#ffffff"
 
 _KO_FONT_CANDIDATES = [
     "/System/Library/Fonts/AppleSDGothicNeo.ttc",
@@ -82,12 +84,13 @@ def aggregate_trades(transactions: list[dict]) -> list[dict]:
     return out
 
 
-def _marker_size(qty: int, max_qty: int) -> float:
-    """수량 비례 마커 크기 (제곱근 스케일, 60~320 clamp)."""
-    if max_qty <= 0:
-        return 120.0
-    frac = (qty / max_qty) ** 0.5
-    return 70.0 + frac * 250.0
+def _vol_fmt(v: float, _pos=None) -> str:
+    """거래량 축 라벨 (만/억 주 단위 축약)."""
+    if v >= 1e8:
+        return f"{v / 1e8:.1f}억"
+    if v >= 1e4:
+        return f"{v / 1e4:.0f}만"
+    return f"{int(v)}"
 
 
 def build_trade_chart(
@@ -148,31 +151,34 @@ def build_trade_chart(
     highs = hist["High"].to_numpy()
     lows = hist["Low"].to_numpy()
     closes = hist["Close"].to_numpy()
+    vols = hist["Volume"].fillna(0).to_numpy() if "Volume" in hist.columns else None
 
-    fig, ax = plt.subplots(figsize=(9.2, 4.6), dpi=120)
+    # 위: 가격(캔들+마커), 아래: 거래량 (x축 공유)
+    fig, (ax, axv) = plt.subplots(
+        2, 1, figsize=(9.2, 5.4), dpi=120, sharex=True,
+        gridspec_kw={"height_ratios": [3.2, 1.0], "hspace": 0.06},
+    )
+
+    # ── 가격 캔들 (한국식 빨강/파랑, 마커가 튀도록 살짝 투명) ──
     body_w = 0.6
     for i in range(n):
         o, h, l, c = opens[i], highs[i], lows[i], closes[i]
         color = UP_C if c >= o else DOWN_C
-        ax.vlines(i, l, h, color=color, linewidth=1.0, zorder=2)
+        ax.vlines(i, l, h, color=color, linewidth=1.0, alpha=CANDLE_ALPHA, zorder=2)
         lo, hi = min(o, c), max(o, c)
         if hi - lo <= 0:
-            ax.hlines(o, i - body_w / 2, i + body_w / 2, color=color, linewidth=1.2, zorder=3)
+            ax.hlines(o, i - body_w / 2, i + body_w / 2, color=color,
+                      linewidth=1.2, alpha=CANDLE_ALPHA, zorder=3)
         else:
             ax.add_patch(Rectangle(
                 (i - body_w / 2, lo), body_w, hi - lo,
-                facecolor=color, edgecolor=color, linewidth=0.6, zorder=3,
+                facecolor=color, edgecolor=color, linewidth=0.6,
+                alpha=CANDLE_ALPHA, zorder=3,
             ))
 
-    # 기간 고점/저점 참고선 (비중 축소/추가 기회 가늠용)
     p_hi = float(highs.max())
     p_lo = float(lows.min())
-    ax.axhline(p_hi, color="#64748b", linewidth=0.8, linestyle=":", alpha=0.6, zorder=1)
-    ax.axhline(p_lo, color="#64748b", linewidth=0.8, linestyle=":", alpha=0.6, zorder=1)
-    ax.text(n - 0.4, p_hi, f" 기간고점 {p_hi:,.0f}", color="#94a3b8",
-            fontsize=7, va="bottom", ha="right")
-    ax.text(n - 0.4, p_lo, f" 기간저점 {p_lo:,.0f}", color="#94a3b8",
-            fontsize=7, va="top", ha="right")
+    span = (p_hi - p_lo) or 1.0
 
     # 평단선
     if avg_price and avg_price > 0:
@@ -180,73 +186,87 @@ def build_trade_chart(
         ax.text(0, avg_price, f" 평단 {avg_price:,.0f}", color=AVG_C,
                 fontsize=8, va="bottom", fontweight="bold")
 
-    # 매수▲ / 매도▼ 마커
-    max_qty = max((t["qty"] for t in trades), default=1)
-    span = float(highs.max() - lows.min()) or 1.0
+    # ── 매수(빨강▲)/매도(파랑▼) 마커 — 봉 밖(매수 아래·매도 위)에 두고 연결선으로 체결가 표시 ──
+    lo_extent, hi_extent = p_lo, p_hi
     for t in trades:
         x = to_x(t["date"])
         price = t["price"]
         is_buy = t["type"] == "buy"
-        ax.scatter(
-            x, price,
-            marker="^" if is_buy else "v",
-            s=_marker_size(t["qty"], max_qty),
-            facecolor=BUY_C if is_buy else SELL_C,
-            edgecolor="#0f0f14", linewidth=0.8,
-            zorder=6,
-        )
-        off = span * 0.025
-        ax.text(
-            x, price + (off if is_buy else -off),
-            f"{t['qty']}",
-            color=BUY_C if is_buy else SELL_C,
-            fontsize=6.5, ha="center",
-            va="bottom" if is_buy else "top",
-            zorder=7,
-        )
+        bx = int(round(x))
+        bar_lo = lows[bx] if 0 <= bx < n else price
+        bar_hi = highs[bx] if 0 <= bx < n else price
+        color = BUY_C if is_buy else SELL_C
+        if is_buy:
+            anchor = min(price, bar_lo) - span * 0.07
+            marker, va, dy, label = "^", "top", -11, f"매수 {t['qty']}"
+            lo_extent = min(lo_extent, anchor)
+        else:
+            anchor = max(price, bar_hi) + span * 0.07
+            marker, va, dy, label = "v", "bottom", 11, f"매도 {t['qty']}"
+            hi_extent = max(hi_extent, anchor)
+        ax.plot([x, x], [price, anchor], color=color, linewidth=0.9, alpha=0.7, zorder=5)
+        ax.scatter(x, anchor, marker=marker, s=190, facecolor=color,
+                   edgecolor="white", linewidth=1.3, zorder=7)
+        ax.annotate(label, (x, anchor), color="white", fontsize=7, ha="center", va=va,
+                    xytext=(0, dy), textcoords="offset points", zorder=8,
+                    bbox=dict(boxstyle="round,pad=0.2", fc=color, ec="none", alpha=0.92))
 
     # 현재가(또는 시세 실패 시 최근 종가) 마커 — 라벨을 캡션과 일치시킨다.
     last_x = n - 1
     has_live = bool(cur_price and cur_price > 0)
     cur = cur_price if has_live else float(closes[-1])
     cur_label = "현재" if has_live else "최근종가"
-    ax.scatter(last_x, cur, color=CUR_C, s=46, zorder=8, edgecolor="#0f0f14", linewidth=0.8)
+    ax.scatter(last_x, cur, color=CUR_C, s=44, zorder=9, edgecolor="#0f0f14", linewidth=0.8)
     ax.text(last_x, cur, f"  {cur_label} {cur:,.0f}", color=CUR_C, fontsize=8, va="center")
 
-    # 축 범위 (NaN/inf 가 새어들면 set_ylim 이 죽으므로 유한성 가드)
+    # ── 거래량 패널 (상승일=빨강 / 하락일=파랑) ──
+    if vols is not None:
+        vcolors = [UP_C if closes[i] >= opens[i] else DOWN_C for i in range(n)]
+        axv.bar(range(n), vols, width=body_w, color=vcolors, alpha=0.55, zorder=2)
+        axv.set_ylabel("거래량", color="#888", fontsize=8)
+        axv.set_ylim(0, (float(vols.max()) or 1.0) * 1.15)
+        axv.yaxis.set_major_formatter(plt.FuncFormatter(_vol_fmt))
+    else:
+        axv.set_visible(False)
+
+    # 가격축 범위 (마커 봉 밖 위치까지 포함, NaN/inf 가드)
     ax.set_xlim(-0.8, n + 1.5)
-    y_min = min(p_lo, avg_price or p_lo, cur)
-    y_max = max(p_hi, avg_price or p_hi, cur)
+    y_min = min(lo_extent, avg_price or lo_extent, cur)
+    y_max = max(hi_extent, avg_price or hi_extent, cur)
     if not (math.isfinite(y_min) and math.isfinite(y_max)):
         plt.close(fig)
         return None
     pad = (y_max - y_min) * 0.06 or 1.0
     ax.set_ylim(y_min - pad, y_max + pad)
 
-    # x 눈금 = 날짜 라벨 (주말 갭 없이 균등 6개)
+    # x 눈금 = 날짜 라벨 (주말 갭 없이 균등 6개) — 공유축이라 하단 패널에만 표기
     tick_count = min(6, n)
     if n > 1:
         tick_idx = [int(round(i * (n - 1) / (tick_count - 1))) for i in range(tick_count)]
     else:
         tick_idx = [0]
-    ax.set_xticks(tick_idx)
-    ax.set_xticklabels([idx_dates[i][5:] for i in tick_idx])
+    bottom_ax = axv if vols is not None else ax
+    bottom_ax.set_xticks(tick_idx)
+    bottom_ax.set_xticklabels([idx_dates[i][5:] for i in tick_idx])
+    if vols is None:
+        ax.tick_params(labelbottom=True)
 
     # 다크 테마
-    ax.set_facecolor("#0f0f14")
     fig.patch.set_facecolor("#0f0f14")
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
-    for spine in ("bottom", "left"):
-        ax.spines[spine].set_color("#444")
-    ax.tick_params(colors="#888", labelsize=8)
+    for a in (ax, axv):
+        a.set_facecolor("#0f0f14")
+        for spine in ("top", "right"):
+            a.spines[spine].set_visible(False)
+        for spine in ("bottom", "left"):
+            a.spines[spine].set_color("#444")
+        a.tick_params(colors="#888", labelsize=8)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
 
     ax.set_title(
         f"{name}  ({ticker})  ·  ▲매수 ▼매도 복기  ·  {idx_dates[0]}~",
         color="#fff", fontsize=11, loc="left", pad=10,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.085, right=0.97, top=0.91, bottom=0.08)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
