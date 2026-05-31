@@ -247,7 +247,7 @@ async def _receive_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 def _other_command_filter() -> filters.BaseFilter:
     """다른 명령어 필터 — 대화 중 다른 명령 입력 시 대화 종료용."""
     return filters.Regex(
-        r"^(매도|매수|현황|잔고|도움말|help|수정|회고|자산그래프|백테스트|10억|입금|출금|입출금목록|선물진입|선물청산|선물롤오버|선물회고)$"
+        r"^(매도|매수|현황|잔고|도움말|help|수정|회고|자산그래프|백테스트|10억|입금|출금|입출금목록|선물진입|선물청산|선물롤오버|선물회고|복기)$"
     ) | filters.COMMAND
 
 

@@ -40,6 +40,7 @@ from bot.handlers.help import help_handler
 from bot.handlers.nickname import nickname_handler
 from bot.handlers.retro import retro_conversation
 from bot.handlers.sell import sell_conversation
+from bot.handlers.trade_review import trade_review_conversation
 from storage.json_store import load_futures_positions, save_chat_id
 
 load_dotenv()
@@ -102,6 +103,7 @@ async def start(update: Update, context) -> None:
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
         "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
         "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
+        "복기 - 보유 현물별 매매기록 차트로 한 종목씩 되짚기\n"
         "10억 - 순자산 10억 목표 진척률·필요수익률·생존선 트래커\n"
         "입금 - 입금 이벤트 등록 (날짜+금액+메모)\n"
         "출금 - 출금 이벤트 등록\n"
@@ -160,6 +162,7 @@ def main() -> None:
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
     app.add_handler(retro_conversation())
+    app.add_handler(trade_review_conversation())
     app.add_handler(edit_conversation())
     app.add_handler(futures_entry_conversation())
     app.add_handler(futures_close_conversation())
