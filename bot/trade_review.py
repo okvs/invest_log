@@ -350,7 +350,16 @@ def _build_review_figure(
     gap = span * 0.06
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.04, row_heights=[0.74, 0.26])
+                        vertical_spacing=0.04, row_heights=[0.8, 0.2])
+
+    # 체결가 노란 가로 틱 — 캔들보다 *먼저* 그려 봉 뒤로 보낸다(봉을 안 가림,
+    # 노란줄이 봉보다 가로로 길어 양옆으로만 삐져나옴).
+    fig.add_trace(go.Scatter(
+        x=[snap(t["date"]) for t in trades], y=[t["price"] for t in trades],
+        mode="markers",
+        marker=dict(symbol="line-ew", size=28,
+                    line=dict(color=EXEC_C, width=1.5), color=EXEC_C),
+        hoverinfo="skip", name="체결가", showlegend=False), row=1, col=1)
 
     # 캔들 (한국식 빨강/파랑) — hover 는 아래 투명 scatter 가 담당
     fig.add_trace(go.Candlestick(
@@ -386,21 +395,22 @@ def _build_review_figure(
             hovertemplate="급등봉 +%{customdata:.2f}%<extra></extra>",
             name=f"급등(≥{SURGE_PCT:.0f}%)", showlegend=True), row=1, col=1)
 
-    # 체결가 노란 가로 틱
-    fig.add_trace(go.Scatter(
-        x=[snap(t["date"]) for t in trades], y=[t["price"] for t in trades],
-        mode="markers",
-        marker=dict(symbol="line-ew", size=22,
-                    line=dict(color=EXEC_C, width=1.4), color=EXEC_C),
-        hoverinfo="skip", name="체결가", showlegend=False), row=1, col=1)
+    surge_dates = {s[0] for s in surge}
 
-    # 매수▲(봉 아래) / 매도▼(봉 위)
+    # 매수▲(봉 아래) / 매도▼(봉 위). 급등봉(별) 위에 찍히는 매도는 별과 겹치지 않게 위로 확 올림.
     def _add_side(side: str, color: str, sym: str, label: str, below: bool) -> None:
         items = [t for t in trades if t["type"] == side]
         if not items:
             return
         xs = [snap(t["date"]) for t in items]
-        ys = [(Lo[pos[x]] - gap) if below else (Hi[pos[x]] + gap) for x in xs]
+        ys = []
+        for x in xs:
+            if below:
+                ys.append(Lo[pos[x]] - gap)
+            else:
+                # 급등봉(별+라벨)이 위에 있는 칸이면 그 위로 올려 안 겹치게.
+                y = Hi[pos[x]] + (span * 0.13 if x in surge_dates else gap)
+                ys.append(y)
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers+text",
             marker=dict(symbol=sym, size=14, color=color,
@@ -447,12 +457,14 @@ def _build_review_figure(
         margin=dict(l=64, r=92, t=70, b=28),
         legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center",
                     bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc", size=10)),
-        xaxis_rangeslider_visible=False, height=640,
+        xaxis_rangeslider_visible=False, height=860,
     )
     # x를 category 로 고정: (1) 날짜문자열이 date축으로 자동인식돼 숫자 range 가
     # 1970년으로 튀던 버그 방지, (2) 주말/휴장 갭 제거. range 는 category 인덱스(0..n-1).
-    fig.update_xaxes(type="category", showgrid=False, color="#888", nticks=10,
-                     range=[-0.7, n + 4.5])
+    # categoryarray 로 순서를 날짜순으로 고정 — 트레이스 추가 순서(체결틱이 첫 트레이스)
+    # 때문에 category 순서가 뒤섞이는 것을 방지.
+    fig.update_xaxes(type="category", categoryorder="array", categoryarray=dates,
+                     showgrid=False, color="#888", nticks=10, range=[-0.7, n + 4.5])
     fig.update_yaxes(showgrid=True, gridcolor="#1f2430", color="#888", row=1, col=1)
     fig.update_yaxes(showgrid=False, color="#888", title_text="거래량", row=2, col=1)
     return fig
