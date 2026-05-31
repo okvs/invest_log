@@ -263,7 +263,10 @@ def compute_goal_status(
 
     account = load_account()
     initial = float(account.get("initial_capital") or 0)
+    # goal = 현재 활성 목표(예: 1차 5억), final_goal = 최종 목표(10억).
+    # 진척률·필요수익률·궤적·그래프는 모두 활성 goal 기준으로 계산한다.
     goal = float(account.get("goal_target") or GOAL_KRW)
+    final_goal = float(account.get("goal_final") or GOAL_KRW)
 
     series = [r["asset"] for r in rows]
     dates = [r["date"] for r in rows]
@@ -307,6 +310,7 @@ def compute_goal_status(
 
     return {
         "goal": goal,
+        "final_goal": final_goal,
         "current": current,
         "start_nav": start_nav,
         "initial": initial,
@@ -348,6 +352,7 @@ def render_goal_graph(status: dict) -> io.BytesIO | None:
         return None
 
     goal = status["goal"]
+    final_goal = status.get("final_goal", goal)
     current = status["current"]
     today = status["today"]
     dates = [r["date"] for r in rows]
@@ -410,9 +415,16 @@ def render_goal_graph(status: dict) -> io.BytesIO | None:
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
     ax.legend(loc="upper left", facecolor="#16161e", edgecolor="#333",
               labelcolor="#ddd", fontsize=9)
+    # 활성 목표(goal)와 최종 목표(final_goal)가 다르면 "1차 목표 N억 (최종 M억)" 표기.
+    if final_goal > goal:
+        goal_title = (f"1차 목표 {_format_krw_short(goal, None)} "
+                      f"(최종 {_format_krw_short(final_goal, None)})")
+    else:
+        goal_title = f"목표 {_format_krw_short(goal, None)}"
     ax.set_title(
-        f"순자산 10억 프로젝트 — 현재 {_format_krw_short(current, None)} "
-        f"/ 목표 {_format_krw_short(goal, None)} ({status['progress_pct']:.0f}%)",
+        f"순자산 {_format_krw_short(final_goal, None)} 프로젝트 — "
+        f"현재 {_format_krw_short(current, None)} / {goal_title} "
+        f"({status['progress_pct']:.0f}%)",
         color="#fff", fontsize=12, loc="left", pad=12,
     )
     fig.tight_layout()

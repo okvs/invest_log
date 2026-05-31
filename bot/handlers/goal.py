@@ -12,7 +12,11 @@ import math
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.asset_history import _fmt_eok_label, compute_profit_trend
+from bot.asset_history import (
+    _fmt_eok_label,
+    _format_krw_short,
+    compute_profit_trend,
+)
 from bot.formatters import _resolve_tickers, fetch_current_quotes
 from bot.goal_tracker import compute_balance_nav, compute_goal_status, render_goal_graph
 from storage.json_store import load_futures_positions, load_holdings
@@ -57,8 +61,16 @@ async def _fetch_futures_prices(positions: list[dict]) -> dict:
 
 def _build_caption(s: dict) -> str:
     goal = s["goal"]
+    final = s.get("final_goal", goal)
+    goal_lbl = _format_krw_short(goal, None)
+    # 1차 목표가 최종 목표와 다르면 헤더에 둘 다 표기.
+    if final > goal:
+        header = (f"<b>🎯 순자산 {_format_krw_short(final, None)} 프로젝트</b> "
+                  f"· 1차 목표 <b>{goal_lbl}</b>")
+    else:
+        header = f"<b>🎯 순자산 {goal_lbl} 프로젝트</b>"
     lines = [
-        "<b>🎯 순자산 10억 프로젝트</b>",
+        header,
         f"현재 순자산 <b>{_fmt_eok_label(s['current'])}</b> "
         f"· 진척률 <b>{s['progress_pct']:.1f}%</b> · 남은 {_fmt_eok_label(s['remaining'])}",
         f"초기자본 {_fmt_eok_label(s['initial'])} 대비 {_pct(s['period_return'])} "
@@ -86,7 +98,7 @@ def _build_caption(s: dict) -> str:
     else:
         lines.append(f"  실현 연복리 {_pct(s['realized_cagr'])}")
     if s["proj_date"] is not None:
-        lines.append(f"  이 속도면 10억 도달 예상 ~{s['proj_date']:%Y-%m}")
+        lines.append(f"  이 속도면 {goal_lbl} 도달 예상 ~{s['proj_date']:%Y-%m}")
     else:
         lines.append("  현재 페이스로는 도달 예상 산출 불가 (수익률 ≤ 0)")
 
