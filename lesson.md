@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-06-02
+### `import html` 이 함수 내 지역변수 `html` 과 충돌 — NameError
+- **문제**: html_report.py 상단에 `import html` 추가 후 `html.escape(...)` 에서 `NameError: cannot access free variable 'html' where it is not associated with a value`.
+- **원인**: `build_html_report` 함수 안에서 최종 렌더 문자열을 `html = f"""..."""` 로 **지역변수**에 담고 있었음. 함수 본문 어딘가에 `html =` 대입이 있으면 파이썬은 그 함수 스코프 전체에서 `html` 을 지역으로 간주 → 대입 이전 줄에서 모듈 `html` 을 참조하면 free-variable 에러.
+- **해결**: 모듈 통째 import 대신 `from html import escape as _html_escape` 로 충돌 없는 이름만 가져와 사용.
+- **교훈**: 표준 모듈명(`html`, `io`, `time`, `json` 등)을 이미 함수 내 지역변수로 쓰는 코드에 그 모듈을 import 할 땐 `as _alias` 나 `from mod import fn as _fn` 으로 우회한다. 모듈 추가 전 `grep -n '\bhtml *='` 로 지역변수 충돌을 먼저 확인.
+
 ## 2026-05-31
 ### 복기 차트 — PNG에서 인터랙티브 HTML(plotly)로, 그리고 시각 디자인은 사용자가 보고 고르게
 - **문제**: 차트 마커 색·겹침·두께·과거 범위 등 시각 피드백이 5번 연속 왔고, 마지막엔 "마우스 올리면 상승률 보이게, PNG 말고 HTML"까지.

@@ -5,6 +5,7 @@ import io
 import math
 from collections import defaultdict
 from datetime import datetime
+from html import escape as _html_escape  # 모듈명 html 은 함수 내 지역변수와 충돌
 
 from bot.formatters import fetch_current_quotes, format_number, _resolve_tickers
 from bot.futures_report import build_futures_section
@@ -913,18 +914,26 @@ def build_html_report(
         if spot_pct > 0:
             spot_in = spot_pct / pct * 100
             group_inner += (
-                f'<div class="stack-seg" style="width:{spot_in}%;background:{color}" '
-                f'title="{sector} 현물 {spot_pct:.1f}%"></div>'
+                f'<div class="stack-seg" style="width:{spot_in}%;background:{color}"></div>'
             )
         if fut_pct > 0:
             fut_in = fut_pct / pct * 100
             group_inner += (
                 f'<div class="stack-seg futures-stripe" '
-                f'style="width:{fut_in}%;background-color:{color}" '
-                f'title="{sector} 선물 {fut_pct:.1f}%"></div>'
+                f'style="width:{fut_in}%;background-color:{color}"></div>'
             )
+
+        # 호버 툴팁 — 너무 짧아 라벨이 숨겨진 조각도 마우스오버로 전체 내용 확인.
+        # (네이티브 title 대신 4사분면과 동일한 커스텀 툴팁 JS 가 data-tip 을 읽음)
+        head = f"{sector}(선물)" if spot_pct <= 0 else sector
+        tip_lines = [f"{head} {pct:.1f}% · {format_number(int(round(val)))}원"]
+        if spot_pct > 0 and fut_pct > 0:
+            tip_lines.append(f"· 현물 {spot_pct:.1f}% · {format_number(int(round(spot_val)))}원")
+            tip_lines.append(f"· 선물 {fut_pct:.1f}% · {format_number(int(round(fut_val)))}원")
+        tip_attr = "&#10;".join(_html_escape(line, quote=True) for line in tip_lines)
+
         stack_segments += (
-            f'<div class="stack-group" style="width:{pct}%">'
+            f'<div class="stack-group" style="width:{pct}%" data-tip="{tip_attr}">'
             + group_inner + label_html + '</div>'
         )
 
@@ -1262,14 +1271,16 @@ document.querySelectorAll('.qd-toggle').forEach(btn => {{
   }});
 }});
 
-// 4사분면 종목명 호버 툴팁 (커스텀)
+// 호버 툴팁 (커스텀) — 4사분면 종목명 + 상단 섹터 스택바
 (function() {{
   const tip = document.createElement('div');
   tip.className = 'qd-tip';
   document.body.appendChild(tip);
-  document.querySelectorAll('.qd-pt-label').forEach(el => {{
-    el.addEventListener('mouseenter', e => {{
-      tip.textContent = el.getAttribute('data-tip') || '';
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  document.querySelectorAll('.qd-pt-label, .stack-group').forEach(el => {{
+    el.addEventListener('mouseenter', () => {{
+      const raw = el.getAttribute('data-tip') || '';
+      tip.innerHTML = raw.split('\\n').map(esc).join('<br>');
       tip.style.display = 'block';
     }});
     el.addEventListener('mousemove', e => {{
