@@ -42,6 +42,10 @@ from storage.json_store import (
 # ConversationHandler states
 SELECT, INPUT, REASON = range(3)
 
+# 매도 비용(수수료+증권거래세) 근사 — 매도 시 예수금에서 차감.
+# 실제 증권사 예수금과의 누적 괴리를 줄이려는 단순 보정(정밀 계산 X).
+SELL_FEE_RATE = 0.002  # 0.2%
+
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """매도 시작 → 보유 종목 카드 표시."""
@@ -138,11 +142,12 @@ async def _process_sell(
             new_holdings.append(h)
     save_holdings(new_holdings)
 
-    # 예수금 가산 (매도금액 - 대출상환)
+    # 예수금 가산 (매도금액 - 매도비용 0.2% - 대출상환)
+    sell_cost = round(total * SELL_FEE_RATE)
     account = load_account()
     if account.get("initial_capital"):
         cash = account.get("cash", account["initial_capital"])
-        account["cash"] = cash + total - loan_repay
+        account["cash"] = cash + total - sell_cost - loan_repay
         save_account(account)
 
     # Transaction 생성 및 저장
