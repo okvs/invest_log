@@ -1,6 +1,6 @@
 """현선물 괴리(베이시스) 장중 알림.
 
-장중(평일 09:05~15:30 KST) JobQueue로 ~8분마다 호출되어, 보유 선물 포지션의
+평일 08:00~20:00 KST JobQueue로 10분마다 호출되어, 보유 선물 포지션의
 **당일 변동률 괴리**(선물 등락% − 현물 등락%)가 임계(기본 3%p) 이상이면 푸시한다.
 
 선물 시세가 KIS 실시간(source=='kis')일 때만 유효하다. yfinance 폴백
@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
-from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -37,9 +36,9 @@ KST = ZoneInfo("Asia/Seoul")
 DIVERGENCE_THRESHOLD_PP = 3.0   # |선물% − 현물%| 알림 임계 (%p)
 REARM_WIDEN_PP = 1.5            # 직전 알림보다 이만큼 더 벌어지면 재알림 (%p)
 COOLDOWN_MIN = 120             # 재알림 쿨다운 (분)
-CHECK_INTERVAL_SEC = 480       # 장중 점검 간격 (8분)
-MARKET_OPEN = dtime(9, 5)
-MARKET_CLOSE = dtime(15, 30)
+CHECK_INTERVAL_SEC = 600       # 점검 간격 (10분)
+MONITOR_OPEN = dtime(8, 0)     # 감시 시작 (오전 8시)
+MONITOR_CLOSE = dtime(20, 0)   # 감시 종료 (오후 8시)
 _STATE_FILE = "basis_alert_state.json"
 
 
@@ -183,20 +182,20 @@ def save_basis_alert_state(state: dict) -> None:
     _save_json(_STATE_FILE, state)
 
 
-def in_market_hours(now: datetime) -> bool:
-    """평일 장중(09:05~15:30) 여부."""
-    if now.weekday() >= 5:  # 토(5)·일(6)
+def in_monitor_window(now: datetime) -> bool:
+    """감시 시간대(평일 08:00~20:00) 여부."""
+    if now.weekday() >= 5:  # 토(5)·일(6) — 휴장
         return False
-    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
+    return MONITOR_OPEN <= now.time() <= MONITOR_CLOSE
 
 
 async def run_basis_check(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """JobQueue 콜백 — 장중 ~8분마다 현선물 괴리 점검·푸시."""
+    """JobQueue 콜백 — 평일 08:00~20:00, 10분마다 현선물 괴리 점검·푸시."""
     chat_id = load_chat_id()
     if chat_id is None:
         return
     now = datetime.now(KST)
-    if not in_market_hours(now):
+    if not in_monitor_window(now):
         return
     positions = [p for p in load_futures_positions() if p.get("contracts", 0) > 0]
     if not positions:
@@ -231,49 +230,4 @@ def schedule_basis_check(application) -> None:
         run_basis_check, interval=CHECK_INTERVAL_SEC, first=30,
         name="basis_divergence_check",
     )
-    logger.info("현선물 괴리 알림 등록: %d초 간격 (장중만)", CHECK_INTERVAL_SEC)
-
-
-async def basis_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`괴리` 즉시 명령 — 보유 선물 전 종목의 현선물 괴리 스냅샷."""
-    positions = [p for p in load_futures_positions() if p.get("contracts", 0) > 0]
-    if not positions:
-        await update.message.reply_text("보유 선물 포지션이 없습니다.")
-        return
-    try:
-        quotes = await fetch_futures_quotes(positions)
-    except Exception:
-        logger.exception("괴리 조회 실패")
-        await update.message.reply_text("선물 시세 조회에 실패했어요. 잠시 후 다시 시도해주세요.")
-        return
-
-    lines: list[str] = []
-    for p in sorted(
-        positions,
-        key=lambda q: _abs_div(quotes, q),
-        reverse=True,
-    ):
-        e = _entry_for(quotes, p) or {}
-        nm = html.escape(p.get("name", ""))
-        if e.get("source") != "kis" or e.get("change_pct") is None or e.get("underlying_change_pct") is None:
-            lines.append(f"• {nm}: 선물 실시간 시세 없음 — 괴리 측정 불가(폴백)")
-            continue
-        d = float(e["change_pct"]) - float(e["underlying_change_pct"])
-        basis = ((float(e["price"]) - float(e["underlying_price"])) / float(e["underlying_price"]) * 100
-                 if e.get("underlying_price") else 0.0)
-        flag = " ⚠️" if abs(d) >= DIVERGENCE_THRESHOLD_PP else ""
-        lines.append(
-            f"• <b>{nm}</b>: 선물 {float(e['change_pct']):+.1f}% / 현물 "
-            f"{float(e['underlying_change_pct']):+.1f}% → 괴리 <b>{d:+.1f}%p</b> · "
-            f"베이시스 {basis:+.2f}%{flag}"
-        )
-    header = f"📐 현선물 괴리 현황 (임계 {DIVERGENCE_THRESHOLD_PP:.0f}%p)\n\n"
-    await update.message.reply_text(header + "\n".join(lines), parse_mode=ParseMode.HTML)
-
-
-def _abs_div(quotes: dict, p: dict) -> float:
-    e = _entry_for(quotes, p) or {}
-    fc, uc = e.get("change_pct"), e.get("underlying_change_pct")
-    if e.get("source") != "kis" or fc is None or uc is None:
-        return -1.0
-    return abs(float(fc) - float(uc))
+    logger.info("현선물 괴리 알림 등록: %d초 간격 (평일 08:00~20:00)", CHECK_INTERVAL_SEC)

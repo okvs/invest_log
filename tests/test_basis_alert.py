@@ -7,7 +7,7 @@ from bot.basis_alert import (
     build_basis_alert_message,
     filter_new_alerts,
     find_divergence_alerts,
-    in_market_hours,
+    in_monitor_window,
 )
 
 
@@ -128,8 +128,10 @@ def test_message_contains_key_fields():
     assert "현선물 괴리" in msg and "하닉" in msg and "%p" in msg
 
 
-def test_in_market_hours():
-    assert in_market_hours(datetime(2026, 6, 5, 10, 0))      # 금 장중
-    assert not in_market_hours(datetime(2026, 6, 5, 8, 0))   # 금 개장 전
-    assert not in_market_hours(datetime(2026, 6, 5, 16, 0))  # 금 마감 후
-    assert not in_market_hours(datetime(2026, 6, 6, 11, 0))  # 토요일
+def test_in_monitor_window():
+    assert in_monitor_window(datetime(2026, 6, 5, 8, 0))       # 금 08:00 (경계 포함)
+    assert in_monitor_window(datetime(2026, 6, 5, 13, 0))      # 금 낮
+    assert in_monitor_window(datetime(2026, 6, 5, 20, 0))      # 금 20:00 (경계 포함)
+    assert not in_monitor_window(datetime(2026, 6, 5, 7, 59))  # 08시 이전
+    assert not in_monitor_window(datetime(2026, 6, 5, 20, 1))  # 20시 이후
+    assert not in_monitor_window(datetime(2026, 6, 6, 11, 0))  # 토요일
