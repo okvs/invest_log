@@ -19,6 +19,7 @@ from bot.futures_alerts import (
     schedule_daily_expiry_check,
 )
 from bot.basis_alert import schedule_basis_check
+from bot.collateral import collateral_handler
 from bot.handlers.broker import broker_conversation
 from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
@@ -103,6 +104,7 @@ async def start(update: Update, context) -> None:
         "선물회고 - 선물 청산 회고\n"
         "선물시세 - 정확한 선물가 수동 입력 (6시간 유효)\n"
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
+        "담보 - 신용 담보비율 시뮬레이션(하락률별 반대매매) HTML\n"
         "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
         "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
         "복기 - 보유 현물별 매매기록 차트로 한 종목씩 되짚기\n"
@@ -159,6 +161,7 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("입출금목록"), list_cash_events))
     app.add_handler(MessageHandler(filters.Regex(r"^입출금삭제"), delete_cash_event))
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
+    app.add_handler(MessageHandler(_korean_command("담보"), collateral_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
 
     # ConversationHandler — 증권사 메시지가 먼저 매칭되도록 순서 중요
