@@ -86,7 +86,8 @@ def search_stocks(query: str, max_results: int = 3) -> list[StockCandidate]:
     """네이버 금융 검색창 자동완성으로 종목 후보 목록 반환.
 
     별도 subprocess에서 Playwright를 실행하여 봇 이벤트 루프와 충돌 방지.
-    6자리 숫자 코드를 가진 일반 주식만 필터링하여 최대 max_results개 반환.
+    6자리 단축코드(숫자 또는 영문 혼합 — 예: 0195R0 신형 ETF, 00088K 우선주)를
+    가진 종목만 필터링하여 최대 max_results개 반환.
     """
     import json
     import subprocess
@@ -155,7 +156,7 @@ with sync_playwright() as p:
                 code = code_el.inner_text().strip()
                 name = name_el.inner_text().strip()
                 market_text = market_el.inner_text().strip() if market_el else ""
-                if code.isdigit() and len(code) == 6:
+                if len(code) == 6 and code.isalnum() and code[0].isdigit():
                     market = "KOSDAQ" if "코스닥" in market_text else "KOSPI"
                     print(f"{name}|{code}|{market}")
                     count += 1
@@ -168,11 +169,20 @@ with sync_playwright() as p:
 '''
 
 
+def norm_stock_name(s: str) -> str:
+    """종목명 비교용 정규화 — 공백 제거 + casefold.
+
+    상장명에는 공백이 있지만("TIGER 삼성전자단일종목레버리지") 사용자는
+    공백 없이 입력하는 경우가 많아, 정확일치 판정은 이 정규화 기준으로 한다.
+    """
+    return s.replace(" ", "").casefold()
+
+
 def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     """종목명으로 종목코드(Yahoo Finance 형식)를 조회.
 
     1. ticker_map 캐시에서 먼저 확인
-    2. search_stocks로 검색 후 정확히 일치하는 종목 반환
+    2. search_stocks로 검색 후 정확히 일치(공백 무시)하는 종목 반환
     조회 실패 시 빈 문자열 반환.
     """
     if ticker_map:
@@ -183,7 +193,7 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
     try:
         candidates = search_stocks(name)
         for c in candidates:
-            if c.name == name:
+            if norm_stock_name(c.name) == norm_stock_name(name):
                 suffix = ".KQ" if c.market == "KOSDAQ" else ".KS"
                 return c.code + suffix
     except Exception:

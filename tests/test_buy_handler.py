@@ -138,6 +138,38 @@ async def test_receive_input_search_exact_match(mock_search):
     assert holdings[0]["ticker"] == "005930.KS"
 
 
+# ── 신규 매수 — 공백 무시 정확일치 + 영문 혼합 단축코드 (단일종목레버리지 ETF) ──
+
+
+@pytest.mark.asyncio
+@patch(
+    "bot.handlers.buy.search_stocks",
+    return_value=[
+        StockCandidate("TIGER 삼성전자단일종목레버리지", "0195R0", "KOSPI"),
+        StockCandidate("KODEX 삼성전자단일종목레버리지", "0193W0", "KOSPI"),
+    ],
+)
+async def test_receive_input_alnum_code_spaceless_exact_match(mock_search):
+    """상장명엔 공백, 입력엔 공백 없음 + 0195R0 같은 영문 혼합 코드도 매칭."""
+    text = "TIGER삼성전자단일종목레버리지\n100주\n17705원"
+    update, context = _make_update_and_context(text)
+
+    result = await _receive_input(update, context)
+    assert result == SECTOR_INPUT  # 정확일치 1개 → 신규 매수 플로우
+
+    sector_update, _ = _make_update_and_context("반도체")
+    result = await _sector_input(sector_update, context)
+    assert result == THESIS_INPUT
+
+    thesis_update, _ = _make_update_and_context("테스트")
+    result = await _thesis_input(thesis_update, context)
+    assert result == -1
+
+    holdings = load_holdings()
+    assert len(holdings) == 1
+    assert holdings[0]["ticker"] == "0195R0.KS"
+
+
 # ── 검색 결과 여러 개 → PICK_STOCK 상태 ──
 
 

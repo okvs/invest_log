@@ -38,6 +38,7 @@ from models.portfolio import Holding
 from models.transaction import Transaction
 from parsers.input_parser import (
     lookup_ticker,
+    norm_stock_name,
     parse_buy_input,
     resolve_name,
     search_stocks,
@@ -150,7 +151,10 @@ async def _receive_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return await _after_ticker_resolved(update, context, buy_input)
 
-        exact = [c for c in candidates if c.name == buy_input.name]
+        exact = [
+            c for c in candidates
+            if norm_stock_name(c.name) == norm_stock_name(buy_input.name)
+        ]
         if len(exact) == 1:
             suffix = ".KQ" if exact[0].market == "KOSDAQ" else ".KS"
             buy_input.ticker = exact[0].code + suffix

@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-06-11
+### KRX 종목코드는 더 이상 "6자리 숫자"가 아니다 — isdigit() 필터가 신규 ETF를 통째로 누락
+- **문제**: 사용자가 단일종목레버리지 ETF(TIGER 삼성전자단일종목레버리지 등) 매수 기록 시 봇이 "종목코드를 찾지 못했습니다"로 일관 실패, 보유 2종목이 ticker 없이 저장돼 현황에서 현재가 조회 불가.
+- **원인**: 네이버 자동완성 스크래핑 결과 필터가 `code.isdigit() and len(code)==6`. KRX가 숫자 코드 고갈로 2025년부터 신규 상장(특히 ETF)에 **영문 혼합 단축코드**(`0195R0`, `0193W0` 등)를 발급하는데, 이 필터가 전부 silent drop → 검색은 성공했는데 후보 0개로 보임. 우선주(`00088K` 류)도 같은 이유로 원래부터 누락이었음. 부차 원인: 상장명에는 공백이 있고("TIGER 삼성전자단일종목레버리지") 사용자 입력엔 없어 exact match 실패.
+- **해결**: 필터를 `len==6 and isalnum() and code[0].isdigit()` 로 완화, 종목명 비교는 `norm_stock_name`(공백제거+casefold) 기준으로 통일. yfinance(`0195R0.KS`)·pykrx(`0195R0`) 모두 영문 혼합 코드를 그대로 지원함을 실측 확인 후 적용. 기존 보유 2종목은 데이터 백필.
+- **교훈**: (1) **외부 식별자 형식 가정(6자리 숫자 등)은 발급기관이 언제든 바꾼다** — 검증 필터는 화이트리스트가 아니라 최소 형식(길이+영숫자)으로. (2) **silent drop 필터는 "검색 실패"와 구분이 안 된다** — 필터로 떨어뜨릴 땐 디버그 로그를 남겨야 원인 추적이 빠르다. (3) 사용자 입력과 공식 명칭 비교는 항상 정규화(공백·대소문자) 후에.
+
 ## 2026-06-02
 ### `import html` 이 함수 내 지역변수 `html` 과 충돌 — NameError
 - **문제**: html_report.py 상단에 `import html` 추가 후 `html.escape(...)` 에서 `NameError: cannot access free variable 'html' where it is not associated with a value`.
