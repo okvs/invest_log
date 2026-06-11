@@ -360,6 +360,21 @@ def compute_profit_trend(target_nav: float | None = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# 최근 N일 윈도우
+# ---------------------------------------------------------------------------
+
+def slice_recent_rows(rows: list[dict], days: int | None) -> list[dict]:
+    """rows(일별 연속)에서 마지막 날 기준 최근 days일만 반환.
+
+    days 가 None/0 이거나 데이터가 더 짧으면 전체 반환.
+    """
+    if not rows or not days or days <= 0:
+        return rows
+    cutoff = rows[-1]["date"] - timedelta(days=days - 1)
+    return [r for r in rows if r["date"] >= cutoff]
+
+
+# ---------------------------------------------------------------------------
 # 그래프 렌더
 # ---------------------------------------------------------------------------
 
@@ -383,16 +398,112 @@ def _fmt_eok_label(x: float) -> str:
     return f"{x / 1e7:.0f}천만"
 
 
-def render_asset_graph(target_nav: float | None = None) -> io.BytesIO | None:
+def _render_window_graph(rows: list[dict], days: int) -> io.BytesIO | None:
+    """최근 N일 총자산(전부 청산 시 예수금) 단일 라인 그래프.
+
+    전체 그래프와 달리 y축을 윈도우 내 자산 범위로 줌해 한 달간의
+    등락이 또렷이 보이게 한다. 기준선은 윈도우 첫날 자산.
+    """
+    if len(rows) < 2:
+        return None
+    dates = [r["date"] for r in rows]
+    asset = [r["asset"] for r in rows]
+    base = asset[0]
+
+    fig, ax = plt.subplots(figsize=(10, 5.8), dpi=120)
+
+    # 윈도우 첫날 기준선
+    ax.axhline(base, color="#9ca3af", linewidth=0.8, linestyle=":", alpha=0.6, zorder=1)
+    ax.annotate(
+        f"{dates[0]:%m-%d} {_fmt_eok_label(base)}", xy=(dates[0], base),
+        xytext=(0, 6), textcoords="offset points",
+        color="#9ca3af", fontsize=8, va="bottom", ha="left",
+    )
+
+    ax.plot(dates, asset, color="#3b82f6", linewidth=2.4, zorder=5, label="총자산 (전부 청산 시 예수금)")
+    ax.fill_between(dates, base, asset, where=[a >= base for a in asset],
+                    color="#3b82f6", alpha=0.10, zorder=2, interpolate=True)
+    ax.fill_between(dates, base, asset, where=[a < base for a in asset],
+                    color="#ef4444", alpha=0.10, zorder=2, interpolate=True)
+
+    # 기간 고점/저점 마커 (끝점과 겹치면 생략)
+    hi_i = max(range(len(asset)), key=lambda i: asset[i])
+    lo_i = min(range(len(asset)), key=lambda i: asset[i])
+    last_i = len(asset) - 1
+    if hi_i != last_i:
+        ax.scatter(dates[hi_i], asset[hi_i], color="#ef4444", s=30, zorder=6)
+        ax.annotate(
+            f"고점 {_fmt_eok_label(asset[hi_i])}", xy=(dates[hi_i], asset[hi_i]),
+            xytext=(0, 8), textcoords="offset points",
+            color="#f87171", fontsize=8, va="bottom", ha="center",
+        )
+    if lo_i != last_i:
+        ax.scatter(dates[lo_i], asset[lo_i], color="#22c55e", s=30, zorder=6)
+        ax.annotate(
+            f"저점 {_fmt_eok_label(asset[lo_i])}", xy=(dates[lo_i], asset[lo_i]),
+            xytext=(0, -10), textcoords="offset points",
+            color="#4ade80", fontsize=8, va="top", ha="center",
+        )
+
+    # 끝점 라벨: 현재값 + 윈도우 시작 대비
+    delta = asset[-1] - base
+    pct = (delta / base * 100) if base else 0.0
+    ax.scatter(dates[-1], asset[-1], color="#3b82f6", s=44, zorder=6)
+    ax.annotate(
+        f"{_fmt_eok_label(asset[-1])}\n({delta / 1e4:+,.0f}만 · {pct:+.1f}%)",
+        xy=(dates[-1], asset[-1]), xytext=(10, 0), textcoords="offset points",
+        color="#60a5fa", fontsize=9, va="center", ha="left",
+    )
+
+    # y축 줌 (윈도우 범위 + 6% 패딩)
+    lo, hi = min(asset), max(asset)
+    pad = max((hi - lo) * 0.06, hi * 0.002, 1.0)
+    ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlim(dates[0], dates[-1] + timedelta(days=4))
+
+    ax.yaxis.set_major_formatter(FuncFormatter(_format_krw_short))
+    ax.set_facecolor("#0f0f14")
+    fig.patch.set_facecolor("#0f0f14")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("bottom", "left"):
+        ax.spines[spine].set_color("#444")
+    ax.tick_params(colors="#9ca3af", labelsize=10)
+    ax.set_ylabel("총자산 (KRW)", color="#9ca3af", fontsize=9)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=10))
+    ax.legend(loc="upper left", facecolor="#16161e", edgecolor="#333",
+              labelcolor="#ddd", fontsize=9)
+    ax.set_title(
+        f"총자산 추이 (전부 청산 시 예수금) — 최근 {days}일 "
+        f"({dates[0]:%Y-%m-%d} ~ {dates[-1]:%Y-%m-%d})",
+        color="#fff", fontsize=12, loc="left", pad=12,
+    )
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def render_asset_graph(
+    target_nav: float | None = None, days: int | None = None,
+) -> io.BytesIO | None:
     """수익금·평가금 추이 PNG bytes 반환.
 
     3선: 평가금(자기자본, 실제 잔고 보정) / 실현+미실현 손익 / 누적 실현손익.
     target_nav 가 주어지면 평가금 끝점을 실제 잔고와 맞춘다.
+    days 가 주어지면 최근 N일 총자산 단일 라인(윈도우 줌) 그래프로 렌더.
     """
     _setup_korean_font()
     rows = compute_profit_trend(target_nav=target_nav)
     if not rows:
         return None
+
+    if days:
+        return _render_window_graph(slice_recent_rows(rows, days), days)
 
     account = load_account()
     initial = float(account.get("initial_capital") or 0)

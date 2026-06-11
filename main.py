@@ -105,7 +105,7 @@ async def start(update: Update, context) -> None:
         "선물시세 - 정확한 선물가 수동 입력 (6시간 유효)\n"
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
         "담보 - 신용 담보비율 시뮬레이션(하락률별 반대매매) HTML\n"
-        "자산그래프 - 기록 첫날부터 일별 NAV 추이 그래프\n"
+        "자산그래프 [1개월|N일] - 일별 NAV 추이 그래프 (기간 지정 시 총자산 윈도우)\n"
         "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
         "복기 - 보유 현물별 매매기록 차트로 한 종목씩 되짚기\n"
         "피라미딩 - 오늘 강한 돌파(신고가/갭상승) 보유종목 추가매수 검토\n"
@@ -152,7 +152,9 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex(r"(?i)^help$"), help_handler))
     app.add_handler(MessageHandler(_korean_command("현황"), dashboard_handler))
     app.add_handler(MessageHandler(_korean_command("잔고"), dashboard_handler))
-    app.add_handler(MessageHandler(_korean_command("자산그래프"), asset_graph_handler))
+    app.add_handler(MessageHandler(
+        filters.Regex(r"^자산그래프(\s+\S.*)?$"), asset_graph_handler,
+    ))
     app.add_handler(MessageHandler(_korean_command("백테스트"), backtest_handler))
     app.add_handler(MessageHandler(_korean_command("10억"), goal_handler))
     app.add_handler(MessageHandler(_korean_command("복기"), review_handler))
