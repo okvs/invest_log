@@ -25,6 +25,7 @@ from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
 from bot.handlers.asset_graph import asset_graph_handler
 from bot.handlers.backtest import backtest_handler
+from bot.handlers.credit_sync import credit_sync_conversation
 from bot.handlers.cash_event import (
     delete_cash_event,
     deposit_conversation,
@@ -106,6 +107,7 @@ async def start(update: Update, context) -> None:
         "만기점검 - 만기 임박 선물 포지션 즉시 점검\n"
         "담보 - 신용 담보비율 시뮬레이션(하락률별 반대매매) HTML\n"
         "자산그래프 [1개월|N일] - 일별 NAV 추이 그래프 (기간 지정 시 총자산 윈도우)\n"
+        "융자 - 종목별 신용융자 잔액 동기화 (앱 잔고 붙여넣기)\n"
         "백테스트 - 과거 거래일을 동결했으면 오늘 NAV 가 어땠을지 비교\n"
         "복기 - 보유 현물별 매매기록 차트로 한 종목씩 되짚기\n"
         "피라미딩 - 오늘 강한 돌파(신고가/갭상승) 보유종목 추가매수 검토\n"
@@ -170,6 +172,7 @@ def main() -> None:
     app.add_handler(broker_conversation())
     app.add_handler(cash_conversation())
     app.add_handler(deposit_conversation())
+    app.add_handler(credit_sync_conversation())
     app.add_handler(buy_conversation())
     app.add_handler(sell_conversation())
     app.add_handler(retro_conversation())
