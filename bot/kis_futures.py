@@ -180,6 +180,68 @@ def _parse_float(s) -> Optional[float]:
         return None
 
 
+def fetch_kis_spot_quote(
+    code: str, *, force_refresh: bool = False,
+) -> Optional[dict]:
+    """KIS 국내주식 현재가 (FHKST01010100) — 실시간 현물 시세.
+
+    yfinance .KS 가 장 시작 후에도 전일 데이터를 주는 staleness 가 있어
+    현선물 괴리 측정 등 '당일 등락률'이 중요한 곳은 이 함수를 우선 사용.
+    반환: {"price": float, "change_pct": float|None, "prev_close": float|None}.
+    """
+    code = (code or "").strip().split(".")[0]
+    if not code:
+        return None
+
+    cache_key = f"spot:{code}"
+    if not force_refresh:
+        cached = _PRICE_CACHE.get(cache_key)
+        if cached and time.time() - cached[1] < PRICE_CACHE_TTL:
+            return cached[0]
+
+    output = None
+    backoff = _RATE_LIMIT_BACKOFF
+    for attempt in range(_RATE_LIMIT_RETRIES + 1):
+        try:
+            client = _build_client()
+            _throttle()
+            output = client.current_price(code)
+            break
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < _RATE_LIMIT_RETRIES:
+                logger.info("KIS 레이트리밋 — %.1fs 후 재시도 (현물 %s, %d/%d)",
+                            backoff, code, attempt + 1, _RATE_LIMIT_RETRIES)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            logger.warning("KIS 현물 시세 조회 실패 (%s): %s", code, e)
+            return None
+
+    if not output:
+        return None
+
+    price = _parse_float(output.get("stck_prpr"))
+    if price is None or price <= 0:
+        return None
+
+    change_pct = _parse_float(output.get("prdy_ctrt"))
+    sign = (output.get("prdy_vrss_sign") or "").strip()
+    if change_pct is not None and sign in ("4", "5"):
+        change_pct = -abs(change_pct)
+    elif change_pct is not None and sign in ("1", "2", "3"):
+        change_pct = abs(change_pct)
+
+    prev_close = _parse_float(output.get("stck_prdy_clpr"))
+
+    result = {
+        "price": price,
+        "change_pct": change_pct,
+        "prev_close": prev_close,
+    }
+    _PRICE_CACHE[cache_key] = (result, time.time())
+    return result
+
+
 def fetch_kis_futures_quote(
     symbol: str, contract_month: str, *, force_refresh: bool = False,
 ) -> Optional[dict]:

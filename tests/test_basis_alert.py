@@ -129,9 +129,30 @@ def test_message_contains_key_fields():
 
 
 def test_in_monitor_window():
-    assert in_monitor_window(datetime(2026, 6, 5, 8, 0))       # 금 08:00 (경계 포함)
+    assert in_monitor_window(datetime(2026, 6, 5, 9, 5))       # 금 09:05 (경계 포함)
     assert in_monitor_window(datetime(2026, 6, 5, 13, 0))      # 금 낮
     assert in_monitor_window(datetime(2026, 6, 5, 20, 0))      # 금 20:00 (경계 포함)
-    assert not in_monitor_window(datetime(2026, 6, 5, 7, 59))  # 08시 이전
+    assert not in_monitor_window(datetime(2026, 6, 5, 9, 4))   # 개장 직후 동시호가 반영 전
+    assert not in_monitor_window(datetime(2026, 6, 5, 8, 30))  # 개장 전 (현물 미거래)
     assert not in_monitor_window(datetime(2026, 6, 5, 20, 1))  # 20시 이후
     assert not in_monitor_window(datetime(2026, 6, 6, 11, 0))  # 토요일
+
+
+def test_stale_yfinance_underlying_excluded():
+    """현물이 yfinance 폴백이면 전일 데이터 staleness 위험 → 측정 제외."""
+    positions = [_pos("삼전", "005930")]
+    q = _q(333000, +11.0, 299000, -1.2)
+    q["underlying_source"] = "yfinance"
+    assert find_divergence_alerts(positions, {"005930|202606": q}) == []
+
+
+def test_kis_underlying_included():
+    positions = [_pos("삼전", "005930")]
+    q = _q(333000, +11.0, 331500, +10.9)
+    q["underlying_source"] = "kis"
+    # 괴리 0.1%p → 임계 미만 제외지만, 소스 가드는 통과해야 함
+    assert find_divergence_alerts(positions, {"005930|202606": q}) == []
+    q2 = _q(333000, +11.0, 320000, +7.0)
+    q2["underlying_source"] = "kis"
+    alerts = find_divergence_alerts(positions, {"005930|202606": q2})
+    assert len(alerts) == 1 and round(alerts[0].divergence_pp, 1) == 4.0

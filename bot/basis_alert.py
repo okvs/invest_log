@@ -1,10 +1,13 @@
 """현선물 괴리(베이시스) 장중 알림.
 
-평일 08:00~20:00 KST JobQueue로 10분마다 호출되어, 보유 선물 포지션의
+평일 09:05~20:00 KST JobQueue로 10분마다 호출되어, 보유 선물 포지션의
 **당일 변동률 괴리**(선물 등락% − 현물 등락%)가 임계(기본 3%p) 이상이면 푸시한다.
 
 선물 시세가 KIS 실시간(source=='kis')일 때만 유효하다. yfinance 폴백
 (source=='underlying')이면 선물가=현물가라 괴리가 항상 0이므로 스킵한다.
+현물(기초자산)도 KIS 실시간이어야 한다(underlying_source=='yfinance' 제외) —
+yfinance .KS 는 장 시작 후에도 전일 가격/등락률을 반환하는 staleness 가 있어
+"선물 +11% vs 현물(어제 종가) −1.2%" 같은 허위 괴리를 만든 사례(2026-06-12).
 
 도배 방지(종목별): (1) 임계 신규 돌파 시 1회, (2) 직전 알림보다 REARM_WIDEN_PP
 이상 더 벌어지면, (3) 쿨다운(COOLDOWN_MIN분) 경과 후 여전히 임계 이상이면 재알림.
@@ -37,7 +40,8 @@ DIVERGENCE_THRESHOLD_PP = 3.0   # |선물% − 현물%| 알림 임계 (%p)
 REARM_WIDEN_PP = 1.5            # 직전 알림보다 이만큼 더 벌어지면 재알림 (%p)
 COOLDOWN_MIN = 120             # 재알림 쿨다운 (분)
 CHECK_INTERVAL_SEC = 600       # 점검 간격 (10분)
-MONITOR_OPEN = dtime(8, 0)     # 감시 시작 (오전 8시)
+MONITOR_OPEN = dtime(9, 5)     # 감시 시작 — KRX 개장(09:00) 후. 개장 전엔 현물이
+                               # 안 움직여 선물 예상가와의 비교가 구조적 허위 괴리.
 MONITOR_CLOSE = dtime(20, 0)   # 감시 종료 (오후 8시)
 _STATE_FILE = "basis_alert_state.json"
 
@@ -95,6 +99,8 @@ def find_divergence_alerts(
     """임계 이상 괴리 포지션 → BasisAlert 리스트 (도배 필터 전 순수 계산).
 
     source!='kis' 이거나 선물/현물 등락률이 비어 있으면 측정 불가로 제외한다.
+    현물이 yfinance 폴백(underlying_source=='yfinance')이면 제외 — yfinance .KS 는
+    장 시작 후에도 전일 데이터를 줘서 허위 괴리를 만든다 (KIS 현물만 신뢰).
     괴리 절대값 내림차순 정렬.
     """
     out: list[BasisAlert] = []
@@ -103,6 +109,8 @@ def find_divergence_alerts(
             continue
         e = _entry_for(quotes, p)
         if e is None or e.get("source") != "kis":
+            continue
+        if e.get("underlying_source") == "yfinance":
             continue
         fc = e.get("change_pct")
         uc = e.get("underlying_change_pct")

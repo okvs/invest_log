@@ -87,6 +87,7 @@ async def test_fetch_uses_manual_quote_first():
     pos = _seed_position()
     fq.set_manual_quote("005930", 71800.0)
     with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote._kis_spot", return_value=None), \
          patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
         mock_fetch.return_value = {"005930.KS": {"price": 99999.0, "change_pct": 0.0}}
         result = await fq.fetch_futures_prices([pos.to_dict()])
@@ -98,6 +99,7 @@ async def test_fetch_falls_back_to_yfinance():
     pos = _seed_position()
     save_ticker_map({"삼성전자": "005930.KS"})
     with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote._kis_spot", return_value=None), \
          patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
         mock_fetch.return_value = {"005930.KS": {"price": 72000.0, "change_pct": 1.23}}
         result = await fq.fetch_futures_prices([pos.to_dict()])
@@ -109,6 +111,7 @@ async def test_fetch_uses_kis_when_available():
     pos = _seed_position()
     save_ticker_map({"삼성전자": "005930.KS"})
     with patch("bot.futures_quote._kis_quote") as mock_kis, \
+         patch("bot.futures_quote._kis_spot", return_value=None), \
          patch("bot.futures_quote.fetch_current_quotes") as mock_y:
         mock_kis.return_value = {"price": 300500.0, "change_pct": 7.5}
         # 기초자산 컬럼용 yfinance는 항상 호출되지만, 선물가는 KIS 값이 우선
@@ -127,6 +130,7 @@ async def test_fetch_uses_kis_when_available():
 async def test_fetch_returns_empty_when_yfinance_fails():
     pos = _seed_position()
     with patch("bot.futures_quote._kis_quote", return_value=None), \
+         patch("bot.futures_quote._kis_spot", return_value=None), \
          patch("bot.futures_quote.fetch_current_quotes") as mock_fetch:
         mock_fetch.return_value = {}  # KIS·yfinance 모두 실패
         result = await fq.fetch_futures_prices([pos.to_dict()])
@@ -177,3 +181,36 @@ async def test_quote_handler_invalid_price_stays():
     result = await _receive_price(bad_update, ctx)
     assert result == PRICE
     assert "입력 오류" in bad_update.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_underlying_prefers_kis_spot_over_yfinance():
+    """기초자산 현물은 KIS 실시간 우선 — yfinance staleness 가드."""
+    pos = _seed_position()
+    save_ticker_map({"삼성전자": "005930.KS"})
+    with patch("bot.futures_quote._kis_quote") as mock_kis, \
+         patch("bot.futures_quote._kis_spot") as mock_spot, \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_y:
+        mock_kis.return_value = {"price": 333000.0, "change_pct": 11.0}
+        mock_spot.return_value = {"price": 331500.0, "change_pct": 10.9}
+        mock_y.return_value = {"005930.KS": {"price": 299000.0, "change_pct": -1.2}}  # 전일 stale
+        result = await fq.fetch_futures_quotes([pos.to_dict()])
+    entry = result["005930|202606"]
+    assert entry["underlying_price"] == 331500.0
+    assert entry["underlying_change_pct"] == 10.9
+    assert entry["underlying_source"] == "kis"
+
+
+@pytest.mark.asyncio
+async def test_underlying_falls_back_to_yfinance_with_source_tag():
+    pos = _seed_position()
+    save_ticker_map({"삼성전자": "005930.KS"})
+    with patch("bot.futures_quote._kis_quote") as mock_kis, \
+         patch("bot.futures_quote._kis_spot", return_value=None), \
+         patch("bot.futures_quote.fetch_current_quotes") as mock_y:
+        mock_kis.return_value = {"price": 333000.0, "change_pct": 11.0}
+        mock_y.return_value = {"005930.KS": {"price": 299000.0, "change_pct": -1.2}}
+        result = await fq.fetch_futures_quotes([pos.to_dict()])
+    entry = result["005930|202606"]
+    assert entry["underlying_price"] == 299000.0
+    assert entry["underlying_source"] == "yfinance"

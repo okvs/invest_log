@@ -112,6 +112,17 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
         logger.warning("선물 기초자산 시세 조회 실패", exc_info=True)
         underlying_quotes = {}
 
+    # 기초자산 현물은 KIS 실시간을 우선 사용 — yfinance .KS 는 장 시작 후에도
+    # 전일 데이터를 반환하는 staleness 가 있어 당일 등락률 비교(괴리)가 깨진다.
+    kis_spot: dict[str, dict] = {}
+    for sym in {p.get("symbol", "") for p in positions if p.get("symbol")}:
+        try:
+            q = await asyncio.to_thread(_kis_spot, sym)
+        except Exception:
+            q = None
+        if q:
+            kis_spot[sym] = q
+
     result: dict[str, dict] = {}
     for p in positions:
         sym = p.get("symbol", "")
@@ -121,9 +132,16 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
         key = f"{sym}|{cm}"
 
         ticker = symbol_to_ticker.get(sym, "")
-        u_quote = underlying_quotes.get(ticker) or {}
-        u_price = u_quote.get("price")
-        u_change = u_quote.get("change_pct")
+        ks = kis_spot.get(sym)
+        if ks:
+            u_price = ks.get("price")
+            u_change = ks.get("change_pct")
+            u_source = "kis"
+        else:
+            u_quote = underlying_quotes.get(ticker) or {}
+            u_price = u_quote.get("price")
+            u_change = u_quote.get("change_pct")
+            u_source = "yfinance"
 
         if sym in manual:
             result[key] = {
@@ -132,6 +150,7 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
                 "source": "manual",
                 "underlying_price": u_price,
                 "underlying_change_pct": u_change,
+                "underlying_source": u_source,
             }
             continue
 
@@ -147,6 +166,7 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
                 "source": "kis",
                 "underlying_price": u_price,
                 "underlying_change_pct": u_change,
+                "underlying_source": u_source,
             }
             continue
 
@@ -158,6 +178,7 @@ async def fetch_futures_quotes(positions: list[dict]) -> dict[str, dict]:
                 "source": "underlying",
                 "underlying_price": u_price,
                 "underlying_change_pct": u_change,
+                "underlying_source": u_source,
             }
 
     return result
@@ -171,3 +192,13 @@ def _kis_quote(symbol: str, contract_month: str):
         logger.warning("KIS 선물 모듈 로드 실패", exc_info=True)
         return None
     return fetch_kis_futures_quote(symbol, contract_month)
+
+
+def _kis_spot(symbol: str):
+    """KIS 현물 시세 호출 wrapper (sync) — asyncio.to_thread 용."""
+    try:
+        from bot.kis_futures import fetch_kis_spot_quote
+    except Exception:
+        logger.warning("KIS 현물 모듈 로드 실패", exc_info=True)
+        return None
+    return fetch_kis_spot_quote(symbol)
