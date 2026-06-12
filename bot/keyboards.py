@@ -143,9 +143,13 @@ def reason_select_keyboard(reasons: list[str]) -> InlineKeyboardMarkup:
 thesis_reuse_keyboard = existing_info_keyboard
 
 
-# --- 증거금비율 선택 ---
+# --- 증거금비율(현금 부담 비율) 선택 ---
+# margin:N = 매수금의 N% 현금 차감 + (100−N)% 신용융자.
+# KB 자기융자 매수는 종목 증거금률(45% 등)과 무관하게 **전액 융자**로 체결되므로
+# margin:0 (전액 신용)을 선택해야 실제 회계와 일치한다 (2026-06-12 확인).
 MARGIN_PREFIX = "margin:"
 MARGIN_CASH = "margin:100"
+MARGIN_CREDIT_FULL = "margin:0"   # 자기융자 — 매수금 전액 신용, 현금 차감 0
 MARGIN_60 = "margin:60"
 MARGIN_50 = "margin:50"
 MARGIN_45 = "margin:45"
@@ -153,18 +157,19 @@ MARGIN_40 = "margin:40"
 
 
 def margin_ratio_keyboard() -> InlineKeyboardMarkup:
-    """매수 시 증거금비율 선택 키보드."""
+    """매수 자금 구성 선택 키보드 — 라벨 = 현금/신용 분해."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("현금 100%", callback_data=MARGIN_CASH),
+            InlineKeyboardButton("전액 신용 (자기융자)", callback_data=MARGIN_CREDIT_FULL),
         ],
         [
-            InlineKeyboardButton("신용 60%", callback_data=MARGIN_60),
-            InlineKeyboardButton("신용 50%", callback_data=MARGIN_50),
+            InlineKeyboardButton("현금60+신용40", callback_data=MARGIN_60),
+            InlineKeyboardButton("현금50+신용50", callback_data=MARGIN_50),
         ],
         [
-            InlineKeyboardButton("신용 45%", callback_data=MARGIN_45),
-            InlineKeyboardButton("신용 40%", callback_data=MARGIN_40),
+            InlineKeyboardButton("현금45+신용55", callback_data=MARGIN_45),
+            InlineKeyboardButton("현금40+신용60", callback_data=MARGIN_40),
         ],
     ])
 

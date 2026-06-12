@@ -407,7 +407,7 @@ async def _do_save(update, context, buy_input, *, is_callback=False) -> int:
         return ConversationHandler.END
 
     context.user_data["buy_input"] = buy_input
-    msg = "증거금비율을 선택해주세요."
+    msg = "매수 자금 구성을 선택해주세요. (자기융자 매수는 '전액 신용' — 증거금률과 무관하게 전액 융자로 잡힙니다)"
     if is_callback:
         query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else update
         await query.edit_message_text(msg, reply_markup=margin_ratio_keyboard())
