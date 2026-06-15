@@ -32,6 +32,55 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_MSG_LIMIT = 4096
 
+# --- PWA (홈 화면에 설치하면 독립 창의 웹앱처럼 동작) ---
+_PWA_DIR = Path(__file__).resolve().parent.parent / "pwa"
+_PWA_HEAD = (
+    '<link rel="manifest" href="manifest.webmanifest">\n'
+    '<meta name="theme-color" content="#0f0f14">\n'
+    '<meta name="apple-mobile-web-app-capable" content="yes">\n'
+    '<meta name="mobile-web-app-capable" content="yes">\n'
+    '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">\n'
+    '<meta name="apple-mobile-web-app-title" content="투자">\n'
+    '<link rel="apple-touch-icon" href="apple-touch-icon.png">\n'
+)
+_PWA_MANIFEST = json.dumps(
+    {
+        "name": "내 투자 현황",
+        "short_name": "투자",
+        "id": "./",
+        "start_url": "./",
+        "scope": "./",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#0f0f14",
+        "theme_color": "#0f0f14",
+        "icons": [
+            {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+    },
+    ensure_ascii=False,
+).encode("utf-8")
+
+
+def _inject_pwa(html: bytes) -> bytes:
+    """HTML <head>에 PWA 메타/매니페스트 링크를 주입(중복 방지)."""
+    text = html.decode("utf-8")
+    if "manifest.webmanifest" in text or "</head>" not in text:
+        return html
+    return text.replace("</head>", _PWA_HEAD + "</head>", 1).encode("utf-8")
+
+
+def _pwa_assets() -> dict[str, bytes]:
+    """manifest + 아이콘을 {경로: 바이트}로 반환(비밀 경로 아래로 함께 발행)."""
+    assets: dict[str, bytes] = {"/manifest.webmanifest": _PWA_MANIFEST}
+    for name in ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"):
+        fp = _PWA_DIR / name
+        if fp.exists():
+            assets[f"/{name}"] = fp.read_bytes()
+    return assets
+
 # 한글 폰트 설정
 _KOREAN_FONT = None
 for fname in fm.findSystemFonts():
@@ -455,5 +504,13 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
             show_cash=True,
         )
         files["/claude_kis.html"] = claude_kis_buf.getvalue()
+
+    # PWA: HTML <head>에 매니페스트/메타 주입 + manifest·아이콘 동봉
+    # (홈 화면에 설치하면 새 탭 대신 독립 창의 웹앱처럼 동작)
+    files = {
+        path: (_inject_pwa(content) if path.endswith(".html") else content)
+        for path, content in files.items()
+    }
+    files.update(_pwa_assets())
 
     return files
