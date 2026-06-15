@@ -61,13 +61,23 @@ def _naver_quote(code: str) -> dict | None:
         d = next(iter(data.get("datas") or []), None)
         if not d:
             return None
-        price = _won(d.get("closePrice"))
+        # 정규장 vs NXT(넥스트레이드) 시간외 — 더 최신 체결을 현재가로 사용.
+        # NXT 애프터마켓은 15:30~20:00 거래되며 overMarketPriceInfo로 따로 온다.
+        # localTradedAt 은 동일 포맷(+09:00) ISO 라 문자열 비교 = 시간순.
+        reg_traded = d.get("localTradedAt") or ""
+        om = d.get("overMarketPriceInfo") or {}
+        om_price = _won(om.get("overPrice"))
+        om_traded = om.get("localTradedAt") or ""
+        if om_price and om_traded and om_traded > reg_traded:
+            price, src = om_price, om
+        else:
+            price, src = _won(d.get("closePrice")), d
         if not price:
             return None
         # compareToPreviousClosePrice('-750')·fluctuationsRatio('-1.81') 은 부호 포함
-        change = _won(d.get("compareToPreviousClosePrice"))
+        change = _won(src.get("compareToPreviousClosePrice"))
         prev = price - change if change is not None else None
-        change_pct = _won(d.get("fluctuationsRatio"))
+        change_pct = _won(src.get("fluctuationsRatio"))
         return {"price": price, "prev_close": prev, "change_pct": change_pct}
     except Exception as e:
         logger.warning(f"네이버 시세 실패 {code}: {e}")

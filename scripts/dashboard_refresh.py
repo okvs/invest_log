@@ -31,8 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "dashboard_refresh.log")
 KST = timezone(timedelta(hours=9))
-MARKET_OPEN = (9, 0)    # 09:00
-MARKET_CLOSE = (15, 30)  # 15:30 (정규장 마감)
+# KRX 정규장 09:00~15:30 + NXT(넥스트레이드) 프리/애프터마켓 포함 08:00~20:00.
+MARKET_OPEN = (8, 0)     # 08:00 (NXT 프리마켓)
+MARKET_CLOSE = (20, 0)   # 20:00 (NXT 애프터마켓 마감)
 
 
 def log(msg: str) -> None:
@@ -83,7 +84,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.loop > 0:
-        log(f"=== 대시보드 재발행 데몬 시작: {args.loop}초 간격(장중 09:00~15:30 KST) ===")
+        log(f"=== 대시보드 재발행 데몬 시작: {args.loop}초 간격(장중 08:00~20:00 KST, NXT 포함) ===")
         while True:
             try:
                 refresh_once(force=args.force)

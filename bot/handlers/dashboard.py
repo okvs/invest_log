@@ -35,6 +35,7 @@ TELEGRAM_MSG_LIMIT = 4096
 # --- PWA (홈 화면에 설치하면 독립 창의 웹앱처럼 동작) ---
 _PWA_DIR = Path(__file__).resolve().parent.parent / "pwa"
 _PWA_HEAD = (
+    '<meta http-equiv="refresh" content="300">\n'  # 5분마다 자동 새로고침(재발행 반영)
     '<link rel="manifest" href="manifest.webmanifest">\n'
     '<meta name="theme-color" content="#0f0f14">\n'
     '<meta name="apple-mobile-web-app-capable" content="yes">\n'
