@@ -1,1 +1,34 @@
-uv run python main.py
+#!/usr/bin/env bash
+# invest_log 전체 기동: 매수/매도 봇 + 카톡 포워더 + 장중 대시보드 재발행.
+# 각각 별도 tmux 세션으로 띄워 터미널을 닫아도 유지된다(재부팅 때만 꺼짐).
+#
+# 실행:  bash run_cmd     (또는  ./run_cmd)
+# 전제:  '전체 디스크 접근' 권한이 있는 터미널(iTerm 등) 안에서 실행할 것
+#        — 카톡 포워더가 맥 카톡 DB를 읽기 때문.
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# 1) 매수/매도 기록 봇 (main.py) — 반드시 단일 인스턴스
+#    (중복 실행 시 텔레그램 getUpdates Conflict 로 거래가 기록 안 됨)
+echo "▶ 봇(main.py) 기동 — 기존 인스턴스 정리 후 재시작"
+pkill -f "python.*main.py" 2>/dev/null || true
+sleep 1
+tmux has-session -t invest-bot 2>/dev/null && tmux kill-session -t invest-bot || true
+tmux new-session -d -s invest-bot \
+  "cd '$DIR' && while true; do uv run python main.py; echo '[restart] bot exited, 5s 후 재시작'; sleep 5; done"
+
+# 2) 증권사 카톡 → 텔레그램 포워더 (60초 폴링)
+echo "▶ 카톡 포워더 기동"
+bash "$DIR/scripts/kakao_forward_start.sh" >/dev/null
+
+# 3) 장중(09:00~15:30 KST) 20분마다 대시보드 재발행 — 현재가 갱신
+echo "▶ 장중 대시보드 재발행 기동"
+bash "$DIR/scripts/dashboard_refresh_start.sh" >/dev/null
+
+echo
+echo "가동 중인 tmux 세션:"
+tmux ls | grep -E "invest-bot|kakao-fwd|dash-refresh" || true
+echo
+echo "보기:    tmux attach -t invest-bot   (나오기: Ctrl-b d)"
+echo "로그:    tail -f '$DIR/logs/kakao_forward.log'  /  dashboard_refresh.log"
+echo "전체끄기: tmux kill-session -t invest-bot \\; kill-session -t kakao-fwd \\; kill-session -t dash-refresh"

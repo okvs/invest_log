@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import urllib.request
 from collections import defaultdict
 from datetime import date
 
@@ -23,36 +25,99 @@ def fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     return {t: q["price"] for t, q in fetch_current_quotes(tickers).items()}
 
 
+_NAVER_URL = "https://polling.finance.naver.com/api/realtime/domestic/stock/{}"
+
+
+def _won(s) -> float | None:
+    """'337,000' → 337000.0. None/빈값 → None."""
+    if s is None:
+        return None
+    try:
+        return float(str(s).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _kr_code(ticker: str) -> str | None:
+    """'005930.KS'/'.KQ' → '005930'. 국내 종목이 아니면 None."""
+    for suf in (".KS", ".KQ"):
+        if ticker.endswith(suf):
+            return ticker[: -len(suf)]
+    return None
+
+
+def _naver_quote(code: str) -> dict | None:
+    """네이버 금융 실시간 국내 시세. 실패 시 None.
+
+    yfinance(.KS)가 개장 직후 한동안 전일 데이터를 주는 문제를 보완한다.
+    """
+    try:
+        req = urllib.request.Request(
+            _NAVER_URL.format(code),
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        d = next(iter(data.get("datas") or []), None)
+        if not d:
+            return None
+        price = _won(d.get("closePrice"))
+        if not price:
+            return None
+        # compareToPreviousClosePrice('-750')·fluctuationsRatio('-1.81') 은 부호 포함
+        change = _won(d.get("compareToPreviousClosePrice"))
+        prev = price - change if change is not None else None
+        change_pct = _won(d.get("fluctuationsRatio"))
+        return {"price": price, "prev_close": prev, "change_pct": change_pct}
+    except Exception as e:
+        logger.warning(f"네이버 시세 실패 {code}: {e}")
+        return None
+
+
+def _yf_quote(t: str) -> dict | None:
+    """yfinance fast_info 단일 종목 시세."""
+    try:
+        fi = yf.Ticker(t).fast_info
+        price = fi.last_price
+        if price is None or price != price:
+            return None
+        try:
+            prev = fi.previous_close
+        except Exception:
+            prev = None
+        if prev is None or prev != prev or prev == 0:
+            return {"price": float(price), "prev_close": None, "change_pct": None}
+        prev_val = float(prev)
+        return {
+            "price": float(price),
+            "prev_close": prev_val,
+            "change_pct": (float(price) - prev_val) / prev_val * 100,
+        }
+    except Exception as e:
+        logger.warning(f"{t} 현재가 조회 실패: {e}")
+        return None
+
+
 def fetch_current_quotes(tickers: list[str]) -> dict[str, dict]:
-    """yfinance fast_info로 종목별 현재가 + 전일 종가 + 등락률(%) 조회.
+    """종목별 현재가 + 전일 종가 + 등락률(%) 조회.
+
+    국내 종목(.KS/.KQ)은 **네이버 금융 실시간**을 우선 사용하고(yfinance가 개장
+    직후 전일 데이터를 주는 문제 회피), 실패하면 yfinance로 폴백한다. 해외 종목은
+    yfinance를 사용한다.
 
     반환 dict 값 형태:
       {"price": <float>, "prev_close": <float|None>, "change_pct": <float|None>}
     """
     quotes: dict[str, dict] = {}
     for t in tickers:
-        try:
-            fi = yf.Ticker(t).fast_info
-            price = fi.last_price
-            if price is None or price != price:
-                continue
-            try:
-                prev = fi.previous_close
-            except Exception:
-                prev = None
-            if prev is None or prev != prev or prev == 0:
-                change_pct = None
-                prev_val = None
-            else:
-                prev_val = float(prev)
-                change_pct = (float(price) - prev_val) / prev_val * 100
-            quotes[t] = {
-                "price": float(price),
-                "prev_close": prev_val,
-                "change_pct": change_pct,
-            }
-        except Exception as e:
-            logger.warning(f"{t} 현재가 조회 실패: {e}")
+        q = None
+        code = _kr_code(t)
+        if code:
+            q = _naver_quote(code)
+        if q is None:
+            q = _yf_quote(t)
+        if q is not None:
+            quotes[t] = q
     return quotes
 
 
