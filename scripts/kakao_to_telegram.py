@@ -44,6 +44,8 @@ TARGETS = {
     "신한투자증권": 4697684299181193,
 }
 TG_LIMIT = 4000  # 텔레그램 메시지 길이 한도(4096) 여유분
+HEALTH_KEY = "__health__"   # state 안 헬스 상태 키(숫자 chat_id와 충돌 안 함)
+ALERT_REPEAT_HOURS = 6      # 계속 실패 시 재알림 간격(도배 방지)
 
 
 def log(msg: str) -> None:
@@ -132,6 +134,50 @@ def tg_send(token: str, chat_id: int, text: str) -> bool:
 def format_msg(broker: str, ts_kst: str, detail: str) -> str:
     head = f"🔔 {broker}" + (f" · {ts_kst} KST" if ts_kst else "")
     return f"{head}\n{'─' * 20}\n{detail.strip()}"
+
+
+def notify_health(token: str, chat_id: int, ok: bool, detail: str = "") -> None:
+    """카톡 읽기 정상/실패 전이 시에만 텔레그램으로 알림(상태는 state에 보존).
+
+    - 실패→정상: '복구됨' 1회.
+    - 정상→실패: '멈춤 + 복구법' 1회. 계속 실패하면 ALERT_REPEAT_HOURS 마다만 재알림.
+    - 매 폴링 정상일 땐 아무것도 안 보냄(도배 방지). launchd가 매번 새 프로세스라
+      상태를 state 파일에 저장해야 전이를 판단할 수 있다.
+    """
+    state = load_state()
+    h = state.get(HEALTH_KEY, {"failing": False, "last_alert": ""})
+    changed = False
+
+    if ok:
+        if h.get("failing"):
+            tg_send(token, chat_id, "✅ 카톡 알림 포워딩이 복구됐어요. 다시 정상 전송됩니다.")
+            log("health: 복구 알림 전송")
+            h = {"failing": False, "last_alert": ""}
+            changed = True
+    else:
+        need = not h.get("failing")
+        if not need and h.get("last_alert"):
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(h["last_alert"])).total_seconds()
+                need = elapsed > ALERT_REPEAT_HOURS * 3600
+            except ValueError:
+                need = True
+        if need:
+            tg_send(token, chat_id, (
+                "⚠️ 카톡 알림 포워딩이 멈췄어요.\n"
+                "맥 카톡 DB를 읽지 못합니다 — 카톡 재로그인 / 카톡 대형 업데이트 / "
+                "디스크 접근 권한 문제일 수 있어요.\n\n"
+                "복구 방법(맥 터미널):\n"
+                "python3 ~/.claude/skills/kakaotalk-mac/scripts/kakaotalk_mac.py auth --refresh\n\n"
+                f"사유: {detail[:300]}"
+            ))
+            log("health: 실패 알림 전송")
+            h = {"failing": True, "last_alert": datetime.now().isoformat(timespec="seconds")}
+            changed = True
+
+    if changed:
+        state[HEALTH_KEY] = h
+        save_state(state)
 
 
 # ---------------------------------------------------------------------------
@@ -248,19 +294,24 @@ def main(argv=None) -> int:
         while True:
             try:
                 n = poll_once(token, chat_id)
+                notify_health(token, chat_id, ok=True)
                 if n:
                     log(f"이번 주기 {n}건 전송")
             except SystemExit as e:
+                notify_health(token, chat_id, ok=False, detail=str(e))
                 log(f"치명적 오류: {e}")  # auth 캐시 만료 등 → 다음 주기 재시도
             except Exception as e:  # noqa: BLE001
+                notify_health(token, chat_id, ok=False, detail=str(e))
                 log(f"폴링 예외: {e}")
             time.sleep(args.loop)
 
     try:
         n = poll_once(token, chat_id, catchup=args.catchup, init_only=args.init)
+        notify_health(token, chat_id, ok=True)
         log(f"완료: {n}건 전송")
         return 0
     except SystemExit as e:
+        notify_health(token, chat_id, ok=False, detail=str(e))
         log(f"오류: {e}")
         log("  → kakaocli가 DB를 못 읽으면 '전체 디스크 접근(FDA)' 권한을 확인하세요 "
             "(kakaocli, python3.12 바이너리).")
