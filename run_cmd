@@ -21,7 +21,7 @@ tmux new-session -d -s invest-bot \
 echo "▶ 카톡 포워더 기동"
 bash "$DIR/scripts/kakao_forward_start.sh" >/dev/null
 
-# 3) 장중(09:00~15:30 KST) 20분마다 대시보드 재발행 — 현재가 갱신
+# 3) 장중(08:00~20:00 KST, NXT 포함) 15분마다 대시보드 재발행 — 현재가 갱신
 echo "▶ 장중 대시보드 재발행 기동"
 bash "$DIR/scripts/dashboard_refresh_start.sh" >/dev/null
 

@@ -15,7 +15,7 @@ fetch 없음), 거래가 없으면 PWA 현재가가 멈춘다. 이 스크립트�
 사용 예:
   .venv/bin/python scripts/dashboard_refresh.py --once          # 장중이면 1회 재발행
   .venv/bin/python scripts/dashboard_refresh.py --once --force  # 장 시간 무시하고 강제 재발행(테스트)
-  .venv/bin/python scripts/dashboard_refresh.py --loop 1200     # 20분마다(장중에만) 재발행
+  .venv/bin/python scripts/dashboard_refresh.py --loop 900      # 15분마다(장중에만) 재발행
 """
 from __future__ import annotations
 

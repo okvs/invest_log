@@ -13,11 +13,11 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "기존 '$SESSION' 세션 종료"
 fi
 
-# --loop 1200 = 20분. 데몬이 매 주기 장중 여부를 판단해 장중에만 발행한다.
+# --loop 900 = 15분. 데몬이 매 주기 장중 여부를 판단해 장중에만 발행한다.
 # 바깥 while 은 프로세스가 통째로 죽는 드문 경우의 자동 재시작용.
 tmux new-session -d -s "$SESSION" \
-  "cd '$DIR' && while true; do '$PY' scripts/dashboard_refresh.py --loop 1200; echo '[restart] refresh exited, 5s 후 재시작'; sleep 5; done"
+  "cd '$DIR' && while true; do '$PY' scripts/dashboard_refresh.py --loop 900; echo '[restart] refresh exited, 5s 후 재시작'; sleep 5; done"
 
-echo "tmux 세션 '$SESSION' 시작됨 (장중 20분마다 재발행)"
+echo "tmux 세션 '$SESSION' 시작됨 (장중 15분마다 재발행)"
 echo "  로그: tail -f '$DIR/logs/dashboard_refresh.log'"
 echo "  끄기: tmux kill-session -t $SESSION"
