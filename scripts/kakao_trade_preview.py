@@ -66,12 +66,19 @@ def load_auth() -> tuple[str, str]:
     return db, key
 
 
-def kc_query(cli: str, db: str, key: str, sql: str) -> list:
+def kc_query(cli: str, db: str, key: str, sql: str, timeout: int = 30) -> list:
     """kakaocli query → JSON(배열의 배열) 반환."""
-    res = subprocess.run(
-        [cli, "query", sql, "--db", db, "--key", key],
-        capture_output=True, text=True,
-    )
+    try:
+        res = subprocess.run(
+            [cli, "query", sql, "--db", db, "--key", key],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # FDA 미부여 시 보호된 DB 열기에서 멈추는 케이스 → 무한 hang 방지
+        sys.exit(
+            f"error: kakaocli query {timeout}s 타임아웃 — DB 접근이 막혔을 수 있습니다.\n"
+            "  launchd/cron 등 백그라운드 실행이면 kakaocli·python3.12 에 '전체 디스크 접근(FDA)' 권한이 필요합니다."
+        )
     if res.returncode != 0:
         sys.exit(f"error: kakaocli query 실패\n{res.stderr.strip() or res.stdout.strip()}")
     out = res.stdout.strip()
