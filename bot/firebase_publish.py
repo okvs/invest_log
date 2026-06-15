@@ -103,8 +103,15 @@ def deploy(files: dict[str, bytes]) -> str:
         hashes[path] = h
         path_by_hash[h] = path
 
-    # 1) 버전 생성
-    ver = _api("POST", f"{_HOSTING_API}/sites/{SITE_ID}/versions", token, body={})
+    # 1) 버전 생성 — 모든 파일 no-cache(매 접근 재검증) 로 서빙.
+    #    기본값 max-age=3600 이면 새로고침/자동갱신해도 최대 1시간 옛 발행본이 떠서,
+    #    대시보드처럼 자주 재발행하는 콘텐츠는 항상 ETag 재검증되게 한다.
+    ver = _api(
+        "POST", f"{_HOSTING_API}/sites/{SITE_ID}/versions", token,
+        body={"config": {"headers": [
+            {"glob": "**", "headers": {"Cache-Control": "no-cache, max-age=0, must-revalidate"}}
+        ]}},
+    )
     version_name = ver["name"]  # sites/<site>/versions/<id>
 
     # 2) populateFiles
