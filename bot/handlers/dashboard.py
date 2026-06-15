@@ -17,6 +17,7 @@ from telegram.ext import ContextTypes
 
 from bot.formatters import format_dashboard, fetch_current_prices, format_number, _resolve_tickers
 from bot.html_report import build_html_report
+from bot import firebase_publish
 from parsers.input_parser import search_stocks
 from storage.json_store import (
     load_account,
@@ -378,3 +379,81 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             document=claude_kis_html,
             caption="Claude KIS 모의투자 포트폴리오",
         )
+
+    # Firebase Hosting 최신본 갱신 (비차단)
+    firebase_publish.trigger_publish()
+
+
+async def build_all_dashboard_html() -> dict[str, bytes]:
+    """현재 상태로 모든 대시보드 HTML을 생성해 {경로: 바이트}로 반환한다.
+
+    Hosting 배포는 사이트 전체 스냅샷이므로, 서빙할 모든 파일을 매번 포함한다.
+    `/index.html`은 내 포트폴리오와 동일(비밀 경로 루트에서 바로 보이게).
+    텔레그램 전송 없이 dashboard_handler와 동일한 HTML을 만든다.
+    """
+    files: dict[str, bytes] = {}
+
+    # --- 내 포트폴리오 ---
+    holdings = load_holdings()
+    holdings, merged = _merge_duplicate_holdings(holdings)
+    if merged:
+        save_holdings(holdings)
+
+    active = [h for h in holdings if h.get("quantity", 0) > 0]
+    futures_positions = [
+        p for p in load_futures_positions() if p.get("contracts", 0) > 0
+    ]
+    futures_prices = await _fetch_futures_prices(futures_positions)
+
+    my_html: bytes | None = None
+    if active:
+        await _backfill_missing_tickers(holdings)
+        holdings = load_holdings()
+        account = load_account()
+        my_buf = build_html_report(
+            holdings,
+            initial_capital=account.get("initial_capital"),
+            show_cash=bool(account.get("initial_capital")),
+            cash_override=account.get("cash"),
+            futures_positions=futures_positions,
+            futures_prices=futures_prices,
+            futures_cash=account.get("futures_cash"),
+            futures_maintenance_ratio=account.get("futures_maintenance_ratio"),
+        )
+        my_html = my_buf.getvalue()
+    elif futures_positions:
+        my_buf = build_html_report(
+            holdings=[],
+            futures_positions=futures_positions,
+            futures_prices=futures_prices,
+        )
+        my_html = my_buf.getvalue()
+
+    if my_html is not None:
+        files["/my_portfolio.html"] = my_html
+        files["/index.html"] = my_html  # 비밀 경로 루트 = 내 포트폴리오
+
+    # --- Claude 포트폴리오 (있을 때만) ---
+    claude_account = _load_claude_account()
+    if claude_account is not None:
+        initial_capital, _cash = claude_account
+        claude_buf = build_html_report(
+            _load_claude_holdings(),
+            title="Claude 투자 현황",
+            initial_capital=initial_capital,
+            show_cash=True,
+        )
+        files["/claude.html"] = claude_buf.getvalue()
+
+    claude_kis_account = _load_claude_account(CLAUDE_KIS_DATA_DIR)
+    if claude_kis_account is not None:
+        kis_initial, _ = claude_kis_account
+        claude_kis_buf = build_html_report(
+            _load_claude_holdings(CLAUDE_KIS_DATA_DIR),
+            title="Claude KIS 모의투자 현황",
+            initial_capital=kis_initial,
+            show_cash=True,
+        )
+        files["/claude_kis.html"] = claude_kis_buf.getvalue()
+
+    return files

@@ -14,3 +14,11 @@ reports/
 
 # Persistence
 *.pickle
+
+# Firebase service-account credential (절대 커밋 금지)
+firebase-credentials.json
+*-firebase-adminsdk-*.json
+
+# 로컬 전용 작업 파일
+progress.md
+lesson.md

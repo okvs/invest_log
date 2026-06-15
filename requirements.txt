@@ -6,3 +6,4 @@ matplotlib>=3.7.0
 plotly>=6.0.0
 playwright>=1.40.0
 pykrx>=1.2.8
+firebase-admin>=7.0.0

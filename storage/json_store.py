@@ -50,6 +50,24 @@ def save(filename: str, data: dict[str, Any]) -> None:
     with FileLock(_lock_path(filename)):
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+    _notify_dashboard_change(filename)
+
+
+def _notify_dashboard_change(filename: str) -> None:
+    """대시보드에 반영되는 파일이 바뀌면 Firebase Hosting 최신본을 갱신한다.
+
+    매수/매도/수정/예수금/융자/선물 등 모든 변경 경로가 결국 save()를 거치므로,
+    여기 한 곳에서 발행을 트리거해 빠짐없이 동기화한다. trigger_publish는
+    opt-in(FIREBASE_PUBLISH)·이벤트 루프 존재 시에만 동작하므로 테스트/스크립트엔
+    영향이 없다.
+    """
+    if filename not in _DASHBOARD_FILES:
+        return
+    try:
+        from bot import firebase_publish
+        firebase_publish.trigger_publish()
+    except Exception:
+        pass
 
 
 # --- 편의 함수 ---
@@ -245,6 +263,9 @@ def get_recent_futures_reasons(
 
 
 ACCOUNT_FILE = "account.json"
+
+# 대시보드 HTML에 반영되는 상태 파일 — 저장 시 Firebase Hosting 발행 트리거
+_DASHBOARD_FILES = {PORTFOLIO_FILE, ACCOUNT_FILE, FUTURES_POSITIONS_FILE}
 
 
 def load_account() -> dict:
