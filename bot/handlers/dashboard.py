@@ -447,10 +447,14 @@ def _lookup_ticker_cf(tmap: dict, name: str) -> str:
 
 def _extra_card(
     name: str, tag: str, caption: str, chart_buf,
-    *, kind: str = "", item_id: str = "", link: str = "",
+    *, kind: str = "", item_id: str = "", link: str = "", data_retro: str = "",
 ) -> str:
-    """봉차트 카드. kind='retro'면 카드 전체가 텔레그램 회고 딥링크,
-    kind='pyramid'면 하단에 '확인(숨기기)' 버튼(클라이언트 dismiss)."""
+    """봉차트 카드. kind='retro'면 카드 전체가 텔레그램 회고 딥링크(읽기 대시보드),
+    kind='pyramid'면 하단에 '확인(숨기기)' 버튼(클라이언트 dismiss).
+
+    retro 카드에는 미회고 매도 거래정보(data_retro, HTML 이스케이프된 JSON)를
+    함께 심는다 — 읽기 대시보드에선 무시되고, app.html(쓰기) 의 JS 가 이 값으로
+    탭하면 인라인 회고 폼을 열어 /api/retro 로 기록한다."""
     if chart_buf is None:
         body = '<div style="color:var(--text-dim);padding:24px;text-align:center;">차트를 불러오지 못했습니다(시세 조회 실패).</div>'
     else:
@@ -465,9 +469,11 @@ def _extra_card(
         f'{body}'
         f'<div class="extra-cap">{caption}</div>'
     )
-    if kind == "retro" and link:
+    if kind == "retro":
+        href = f' href="{link}" target="_blank" rel="noopener"' if link else ""
+        dr = f' data-retro="{data_retro}"' if data_retro else ""
         return (
-            f'<a class="extra-card" href="{link}" target="_blank" rel="noopener">'
+            f'<a class="extra-card retro-card"{href}{dr}>'
             f'{inner}<div class="extra-act">탭하면 텔레그램에서 회고 ›</div></a>'
         )
     if kind == "pyramid":
@@ -505,8 +511,16 @@ def _render_review_section() -> tuple[str, list[str]]:
     cards: list[str] = []
     for sells in ordered[:_MAX_REVIEW]:
         name = sells[0].get("name", "")
+        payload: list[dict] = []
         for s in sells:
             ids.append("retro:" + str(s.get("id", "")))
+            payload.append({
+                "id": str(s.get("id", "")),
+                "name": name,
+                "date": (s.get("date", "") or "")[:10],
+                "pnl": int(float(s.get("profit_loss", 0) or 0)),
+            })
+        data_retro = json.dumps(payload, ensure_ascii=False).replace('"', "&quot;")
         ticker = next(
             (h.get("ticker") for h in holdings
              if _norm(h.get("name", "")) == _norm(name) and h.get("ticker")), ""
@@ -519,9 +533,10 @@ def _render_review_section() -> tuple[str, list[str]]:
         cap = (
             f'{last.get("date", "")[:10]} 매도 · {len(sells)}건 미회고 · '
             f'<span class="{"profit" if pnl >= 0 else "loss"}">손익 {int(pnl):+,}원</span>'
-            ' · 텔레그램 <b>회고</b>로 복기'
         )
-        cards.append(_extra_card(name, "회고 대기", cap, chart, kind="retro", link=bot_url))
+        cards.append(_extra_card(
+            name, "회고 대기", cap, chart, kind="retro", link=bot_url, data_retro=data_retro,
+        ))
 
     html = (
         '<div class="section-title" style="margin-top:24px;">📝 회고 대기 '
@@ -599,7 +614,8 @@ async def _cached_extra(fname: str, key: str, ttl: int, render_fn) -> tuple[str,
 async def _build_graph_extras() -> tuple[str, list[str]]:
     """그래프 탭 하단(자산그래프 아래) 부가 섹션 + 배지용 item id 목록."""
     txs = load_transactions()
-    review_key = "|".join(sorted(
+    # 'v2|' 접두 = data-retro 마크업 도입 시 캐시 무효화(코드 변경은 key 에 안 잡힘).
+    review_key = "v2|" + "|".join(sorted(
         str(t.get("id", "")) for t in txs
         if t.get("type") == "sell" and not t.get("retrospective_id")
     ))
@@ -681,35 +697,102 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
     return text.encode("utf-8")
 
 
-_WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "server" / "static"
 _TUNNEL_URL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "tunnel_url.txt"
-_APP_MANIFEST = json.dumps({
-    "name": "투자 기록", "short_name": "투자기록", "id": "./app.html",
-    "start_url": "app.html", "scope": "./", "display": "standalone",
-    "orientation": "portrait", "background_color": "#0d1411", "theme_color": "#0d1411",
-    "icons": [
-        {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-        {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-        {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
-    ],
-}, ensure_ascii=False).encode("utf-8")
-# 설치 가능 조건(fetch 핸들러 존재) 충족용 최소 서비스워커 — 캐시는 하지 않음(항상 최신).
-_SW_JS = (
-    b"self.addEventListener('install',function(e){self.skipWaiting();});"
-    b"self.addEventListener('activate',function(e){self.clients.claim();});"
-    b"self.addEventListener('fetch',function(e){});"
-)
+
+# 쓰기 레이어 — app.html(쓰기 PWA)에만 주입. 읽기 대시보드와 HTML 은 동일하고,
+# 그래프 탭 '회고 대기' 카드(.retro-card[data-retro])를 탭하면 인라인 회고 폼이
+# 열려 맥 터널 API(/api/retro)로 기록한다. 폼 스타일은 대시보드 CSS 변수를 그대로 사용.
+_WRITE_LAYER = """
+<style>
+  .retro-card{cursor:pointer}
+  .retro-modal{position:fixed;inset:0;z-index:3000;display:none;align-items:flex-end;
+       justify-content:center;background:rgba(0,0,0,.45)}
+  .retro-modal.show{display:flex}
+  .retro-sheet{background:var(--card);color:var(--text);width:100%;max-width:560px;
+       max-height:88vh;overflow:auto;border-radius:18px 18px 0 0;
+       padding:18px 16px calc(22px + env(safe-area-inset-bottom));
+       box-shadow:0 -4px 24px rgba(0,0,0,.3)}
+  .retro-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+  .retro-hd b{font-size:16px}
+  .retro-x{background:none;border:none;color:var(--text-dim);font-size:20px;line-height:1;cursor:pointer}
+  .retro-sheet label{display:block;font-size:12px;color:var(--text-dim);font-weight:600;margin:12px 0 4px}
+  .retro-sheet input,.retro-sheet select,.retro-sheet textarea{width:100%;padding:11px 12px;
+       border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);
+       font-size:15px;font-family:inherit;box-sizing:border-box}
+  .retro-sheet textarea{min-height:60px;resize:vertical}
+  .retro-submit{width:100%;padding:13px;border:none;border-radius:12px;background:var(--accent);
+       color:#fff;font-size:15px;font-weight:700;margin-top:16px;cursor:pointer}
+  .retro-submit:disabled{opacity:.6}
+  .retro-toast{position:fixed;left:50%;bottom:calc(112px + env(safe-area-inset-bottom));
+       transform:translateX(-50%);background:var(--accent);color:#fff;padding:11px 18px;
+       border-radius:10px;font-size:14px;font-weight:600;opacity:0;transition:opacity .2s;
+       pointer-events:none;z-index:3100;max-width:90vw;text-align:center}
+  .retro-toast.show{opacity:1}
+</style>
+<div class="retro-modal" id="retro-modal"><div class="retro-sheet">
+  <div class="retro-hd"><b id="retro-title">회고</b><button class="retro-x" id="retro-close">&times;</button></div>
+  <label>매수 근거가 맞았나?</label>
+  <select id="retro-correct"><option value="">(부분적/모름)</option><option value="true">맞았다</option><option value="false">틀렸다</option></select>
+  <label>잘한 점</label><textarea id="retro-well"></textarea>
+  <label>아쉬운 점</label><textarea id="retro-regret"></textarea>
+  <label>피할 수 있었나</label><input id="retro-avoid" placeholder="피할 수 있었다 / 통제 불가 / 모르겠다">
+  <label>교훈</label><textarea id="retro-lesson"></textarea>
+  <button class="retro-submit" id="retro-submit">회고 저장</button>
+</div></div>
+<div class="retro-toast" id="retro-toast"></div>
+<script>(function(){
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  var modal=document.getElementById('retro-modal'); if(!modal) return;
+  var cur=null, $=function(id){return document.getElementById(id);};
+  function toast(m,bad){var t=$('retro-toast');t.textContent=m;
+    t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  function open(card){var raw=card.getAttribute('data-retro');if(!raw)return;
+    try{cur={card:card,items:JSON.parse(raw)};}catch(e){return;}
+    var nm=(cur.items[0]&&cur.items[0].name)||'';
+    $('retro-title').textContent=nm+' 회고'+(cur.items.length>1?(' · '+cur.items.length+'건'):'');
+    $('retro-correct').value='';['retro-well','retro-regret','retro-avoid','retro-lesson'].forEach(function(i){$(i).value='';});
+    modal.classList.add('show');}
+  function close(){modal.classList.remove('show');cur=null;}
+  function val(id){return ($(id).value||'').trim();}
+  async function submit(){if(!cur)return;var btn=$('retro-submit');btn.disabled=true;
+    var tc=$('retro-correct').value;
+    var base={thesis_correct:tc===''?null:(tc==='true'),what_went_well:val('retro-well'),
+      regrets:val('retro-regret'),avoidable:val('retro-avoid'),lessons:val('retro-lesson')};
+    try{
+      for(var i=0;i<cur.items.length;i++){
+        var body=Object.assign({transaction_id:cur.items[i].id},base);
+        var r=await fetch(API+'/api/retro',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
+      }
+      try{var dis=JSON.parse(localStorage.getItem('graph_dismissed')||'{}');
+        cur.items.forEach(function(it){dis['retro:'+it.id]=1;});
+        localStorage.setItem('graph_dismissed',JSON.stringify(dis));}catch(e){}
+      var b=document.getElementById('graph-badge');
+      if(b){var n=(parseInt(b.textContent,10)||0)-cur.items.length;
+        if(n>0){b.textContent=n;}else{b.style.display='none';}}
+      cur.card.style.display='none';toast('회고 저장 완료');close();
+    }catch(e){toast(e.message||'저장 실패',true);}finally{btn.disabled=false;}}
+  document.querySelectorAll('.retro-card').forEach(function(card){
+    var act=card.querySelector('.extra-act');if(act){act.textContent='탭해서 회고 기록 ›';}
+    card.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();open(card);});});
+  $('retro-close').addEventListener('click',close);
+  modal.addEventListener('click',function(e){if(e.target===modal)close();});
+  $('retro-submit').addEventListener('click',submit);
+})();</script>
+"""
 
 
-def _build_writeapp_files() -> dict[str, bytes]:
-    """쓰기 PWA(server/static/index.html)를 web.app 발행본에 포함.
+def _build_writeapp_files(dashboard_html: bytes | None) -> dict[str, bytes]:
+    """app.html(쓰기 PWA) = 읽기 대시보드(index.html)와 동일한 HTML + 회고 쓰기 레이어.
 
-    로그인이 web.app(=authDomain)과 같은 도메인에서 일어나야 모바일에서 동작하므로
-    프론트를 Firebase Hosting 으로 서빙하고, 데이터 API 는 맥 터널(data/tunnel_url.txt)
-    을 호출한다(__APPCFG__ 주입). 터널 주소가 없으면 미발행(맥 localhost 버전만).
+    대시보드와 똑같이 보이되, 그래프 탭의 '회고 대기' 카드를 탭하면 인라인 폼이
+    열려 맥 터널 API(/api/retro)로 회고를 기록한다(__APPCFG__ 로 터널 주소 주입).
+    터널 주소(data/tunnel_url.txt)가 없으면 미발행. 완성 후엔 이 app.html 하나만
+    쓰면 된다(읽기 대시보드를 대체).
     """
-    src = _WEBAPP_DIR / "index.html"
-    if not src.exists():
+    if not dashboard_html:
         return {}
     try:
         tunnel = _TUNNEL_URL_FILE.read_text(encoding="utf-8").strip()
@@ -717,17 +800,11 @@ def _build_writeapp_files() -> dict[str, bytes]:
         tunnel = ""
     if not tunnel:
         return {}
-    html = src.read_text(encoding="utf-8")
-    # authDomain 은 기본값(firebaseapp.com) 사용 — 구글 OAuth 클라이언트에 등록된
-    # 리다이렉트 핸들러가 firebaseapp.com 이라, web.app 으로 바꾸면 'redirect_uri
-    # 불일치 → 액세스 차단'. 앱은 web.app 에서 서빙되지만 authDomain 은 표준값 유지.
+    text = dashboard_html.decode("utf-8")
     cfg = json.dumps({"api": tunnel}, ensure_ascii=False)
-    html = html.replace("</head>", f"<script>window.__APPCFG__={cfg};</script></head>", 1)
-    return {
-        "/app.html": html.encode("utf-8"),
-        "/app.webmanifest": _APP_MANIFEST,
-        "/sw.js": _SW_JS,
-    }
+    layer = f"<script>window.__APPCFG__={cfg};</script>" + _WRITE_LAYER
+    text = text.replace("</body>", layer + "</body>", 1)
+    return {"/app.html": text.encode("utf-8")}
 
 
 def _pwa_assets() -> dict[str, bytes]:
@@ -1171,6 +1248,7 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
         for path, content in files.items()
     }
     files.update(_pwa_assets())
-    files.update(_build_writeapp_files())  # 쓰기 PWA(app.html) — web.app 에서 로그인+입력
+    # 쓰기 PWA(app.html) = 읽기 대시보드(index.html)와 동일 HTML + 회고 쓰기 레이어
+    files.update(_build_writeapp_files(files.get("/index.html")))
 
     return files
