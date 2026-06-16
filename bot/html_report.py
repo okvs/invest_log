@@ -425,7 +425,7 @@ def _build_quadrants_svg(
     parts: list[str] = []
     parts.append(
         f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
-        f'style="background:#0f0f14;width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
+        f'style="background:var(--qd-bg);width:100%;max-width:{W}px;height:auto;display:block;margin:0 auto;">'
     )
 
     # 선물 마커용 빗금 패턴 (대각선 white stripes, 반투명)
@@ -448,13 +448,13 @@ def _build_quadrants_svg(
     for tx in ticks_x:
         px = sx(tx)
         parts.append(
-            f'<line x1="{px:.2f}" y1="{y_top}" x2="{px:.2f}" y2="{y_bottom}" '
+            f'<line class="qd-grid" x1="{px:.2f}" y1="{y_top}" x2="{px:.2f}" y2="{y_bottom}" '
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
     for ty in ticks_y:
         py = sy(ty)
         parts.append(
-            f'<line x1="{x_left}" y1="{py:.2f}" x2="{x_right}" y2="{py:.2f}" '
+            f'<line class="qd-grid" x1="{x_left}" y1="{py:.2f}" x2="{x_right}" y2="{py:.2f}" '
             f'stroke="#1a1a24" stroke-width="1"/>'
         )
 
@@ -465,17 +465,17 @@ def _build_quadrants_svg(
 
     # 사분면 구분선: X=0 (수익률), Y=10% (비중)
     parts.append(
-        f'<line x1="{ox:.2f}" y1="{y_top}" x2="{ox:.2f}" y2="{y_bottom}" '
+        f'<line class="qd-origin" x1="{ox:.2f}" y1="{y_top}" x2="{ox:.2f}" y2="{y_bottom}" '
         f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
     parts.append(
-        f'<line x1="{x_left}" y1="{oty:.2f}" x2="{x_right}" y2="{oty:.2f}" '
+        f'<line class="qd-origin" x1="{x_left}" y1="{oty:.2f}" x2="{x_right}" y2="{oty:.2f}" '
         f'stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5,4"/>'
     )
 
     # 외곽 프레임
     parts.append(
-        f'<rect x="{x_left}" y="{y_top}" width="{plot_w}" height="{plot_h}" '
+        f'<rect class="qd-frame" x="{x_left}" y="{y_top}" width="{plot_w}" height="{plot_h}" '
         f'fill="none" stroke="#2a2a3a" stroke-width="1"/>'
     )
 
@@ -1051,10 +1051,8 @@ def build_html_report(
         f"{e_brk}</div>"
     )
 
-    # 배지 HTML (Claude 리포트 구분용)
+    # 배지 HTML — 'AI vs Human' 배지는 사용자 요청으로 제거(항상 비움)
     badge_html = ""
-    if show_cash:
-        badge_html = '<div class="badge" style="display:inline-block;background:#4A90D9;color:#fff;font-size:11px;padding:3px 10px;border-radius:12px;margin-top:6px;letter-spacing:1px;">AI vs Human Battle</div>'
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -1071,6 +1069,9 @@ def build_html_report(
     --text-dim:#6b7a70; --border:#d4ddd7; --track:#dde6e0; --hover:#f0f4f1;
     --accent:#1f7a52; --accent-soft:#d3e6da; --profit:#15924a; --loss:#d83c3c;
     --shadow:0 2px 14px rgba(31,80,55,0.10);
+    --tabbar-bg:rgba(255,255,255,0.72);
+    --qd-bg:#eef3ee; --qd-grid:#d7e0d9; --qd-origin:#93a39a; --qd-frame:#cdd8d0; --qd-text:#1f2a24;
+    --hold-fs:12px;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -1078,6 +1079,8 @@ def build_html_report(
       --text-dim:#7d8c83; --border:#243029; --track:#1b261f; --hover:#1b261f;
       --accent:#3cc488; --accent-soft:#1c3026; --profit:#22c55e; --loss:#f87171;
       --shadow:0 2px 14px rgba(0,0,0,0.45);
+      --tabbar-bg:rgba(21,32,25,0.72);
+      --qd-bg:#0f0f14; --qd-grid:#1a1a24; --qd-origin:#cbd5e1; --qd-frame:#2a2a3a; --qd-text:#e0e0e0;
     }}
   }}
 
@@ -1212,6 +1215,18 @@ def build_html_report(
   .qd-caption {{ color:var(--text-dim); }}
   .qd-tip {{ background:var(--card); color:var(--text); border-color:var(--border); }}
   .thesis {{ color:var(--text-dim); }}
+  /* 4사분면 SVG — 배경/격자/축/라벨 테마화(라이트=밝은 배경) */
+  .qd-grid {{ stroke:var(--qd-grid); }}
+  .qd-origin {{ stroke:var(--qd-origin); }}
+  .qd-frame {{ stroke:var(--qd-frame); }}
+  .qd-pt-label {{ fill:var(--qd-text); }}
+  /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 1pt 축소) */
+  #holdings table {{ font-size:var(--hold-fs, 12px); }}
+  .fs-ctrl {{ float:right; display:inline-flex; gap:6px; }}
+  .fs-ctrl button {{ background:var(--card); color:var(--text-dim); border:1px solid var(--border);
+                     border-radius:8px; width:30px; height:26px; font-size:13px; font-weight:700;
+                     cursor:pointer; font-family:inherit; line-height:1; padding:0; }}
+  .fs-ctrl button:hover {{ color:var(--accent); border-color:var(--accent); }}
 </style>
 </head>
 <body>
@@ -1249,8 +1264,8 @@ def build_html_report(
   <div class="section-title">섹터별 비중</div>
   {sector_bars_html}
 
-  <div class="table-wrap">
-    <div class="section-title" style="margin-top:32px">보유 종목</div>
+  <div class="table-wrap" id="holdings">
+    <div class="section-title" style="margin-top:32px">보유 종목<span class="fs-ctrl"><button type="button" onclick="holdFs(-1)" aria-label="글자 작게">A−</button><button type="button" onclick="holdFs(1)" aria-label="글자 크게">A+</button></span></div>
     <table>
       <thead>
         <tr>
@@ -1334,6 +1349,23 @@ document.querySelectorAll('.qd-toggle').forEach(btn => {{
     }});
     el.addEventListener('mouseleave', () => {{ tip.style.display = 'none'; }});
   }});
+}})();
+
+// 보유 종목 글자크기 +/- (이 섹션에만 적용, localStorage 유지)
+function holdFs(delta) {{
+  var el = document.getElementById('holdings');
+  if (!el) return;
+  var cur = parseInt(localStorage.getItem('hold_fs') || '12', 10);
+  if (isNaN(cur)) cur = 12;
+  cur = Math.max(9, Math.min(20, cur + delta));
+  el.style.setProperty('--hold-fs', cur + 'px');
+  try {{ localStorage.setItem('hold_fs', cur); }} catch (e) {{}}
+}}
+(function() {{
+  var el = document.getElementById('holdings');
+  if (!el) return;
+  var s = parseInt(localStorage.getItem('hold_fs') || '12', 10);
+  if (!isNaN(s)) el.style.setProperty('--hold-fs', s + 'px');
 }})();
 </script>
 </body>

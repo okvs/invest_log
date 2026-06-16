@@ -84,11 +84,15 @@ _TAB_CSS = """
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
 
-  /* 하단 플로팅 탭바 (앱 스타일) */
-  .tabbar { position:fixed; left:12px; right:12px; bottom:12px; z-index:1000;
+  /* 하단 플로팅 탭바 (앱 스타일, 반투명+블러) — bottom에 safe-area 반영해
+     스크롤되는 현황 탭에서도 홈 인디케이터 위에 일관되게 떠 있게 함 */
+  .tabbar { position:fixed; left:12px; right:12px;
+            bottom:calc(10px + env(safe-area-inset-bottom)); z-index:1000;
             display:flex; gap:4px; padding:8px;
-            padding-bottom:calc(8px + env(safe-area-inset-bottom));
-            background:var(--card); border:1px solid var(--border);
+            background:var(--tabbar-bg);
+            -webkit-backdrop-filter:saturate(160%) blur(14px);
+            backdrop-filter:saturate(160%) blur(14px);
+            border:1px solid var(--border);
             border-radius:24px; box-shadow:var(--shadow);
             max-width:520px; margin:0 auto; }
   .tabbar button { flex:1; background:none; border:none; cursor:pointer;
