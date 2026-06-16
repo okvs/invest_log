@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -22,8 +23,10 @@ from parsers.input_parser import search_stocks
 from storage.json_store import (
     load_account,
     load_futures_positions,
+    load_futures_transactions,
     load_holdings,
     load_ticker_map,
+    load_transactions,
     save_holdings,
     save_ticker_map,
 )
@@ -71,6 +74,207 @@ def _inject_pwa(html: bytes) -> bytes:
     if "manifest.webmanifest" in text or "</head>" not in text:
         return html
     return text.replace("</head>", _PWA_HEAD + "</head>", 1).encode("utf-8")
+
+
+# --- 하단 탭바(앱 스타일) ---
+_TAB_CSS = """
+<style>
+  body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+  .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:1000;
+            display:flex; background:#15151c; border-top:1px solid #2a2a36;
+            padding-bottom: env(safe-area-inset-bottom);
+            box-shadow:0 -2px 12px rgba(0,0,0,.35); }
+  .tabbar button { flex:1; background:none; border:none; cursor:pointer;
+            color:#7a7a88; font-size:11px; padding:9px 0 8px;
+            display:flex; flex-direction:column; align-items:center; gap:3px;
+            font-family:inherit; -webkit-tap-highlight-color:transparent; }
+  .tabbar button .ic { font-size:20px; line-height:1; }
+  .tabbar button.active { color:#4A90D9; }
+  .tabbar button:disabled { color:#44444f; cursor:default; }
+  .hist-list { max-width:760px; margin:0 auto; }
+  .hist-row { background:#1a1a24; border-radius:10px; padding:11px 14px; margin-bottom:8px; }
+  .hist-row .r1 { display:flex; align-items:center; gap:8px; }
+  .hist-row .nm { font-weight:600; color:#e8e8ee; font-size:14px; flex:1;
+                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hist-row .pnl { font-size:13px; font-weight:700; white-space:nowrap; }
+  .hist-row .r2 { font-size:12px; color:#8a8a99; margin-top:5px; }
+  .hbadge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px; white-space:nowrap; }
+  .b-buy { background:#3a1f24; color:#ff6b81; }
+  .b-sell { background:#1e2a3a; color:#5aa9ff; }
+  .b-open { background:#2a1f3a; color:#b07cff; }
+  .b-close { background:#1f2a24; color:#5ad19a; }
+  .hist-date { background:#101018; color:#9a9aa8; font-size:12px; font-weight:600;
+               max-width:760px; margin:18px auto 8px; padding:2px 2px; }
+</style>
+"""
+
+_TAB_SCRIPT = """
+<script>
+(function(){
+  var KEY='invest_active_tab';
+  function show(id){
+    document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.toggle('active',p.id===id);});
+    document.querySelectorAll('.tabbar button').forEach(function(b){b.classList.toggle('active',b.dataset.tab===id);});
+    try{localStorage.setItem(KEY,id);}catch(e){}
+  }
+  document.querySelectorAll('.tabbar button[data-tab]').forEach(function(b){
+    b.addEventListener('click',function(){show(b.dataset.tab);window.scrollTo(0,0);});
+  });
+  var s=null; try{s=localStorage.getItem(KEY);}catch(e){}
+  if(s&&document.getElementById(s)){show(s);}
+})();
+</script>
+"""
+
+_TABBAR_HTML = (
+    '<nav class="tabbar">'
+    '<button data-tab="tab-status" class="active"><span class="ic">📊</span>자산현황</button>'
+    '<button data-tab="tab-graph"><span class="ic">📈</span>그래프</button>'
+    '<button data-tab="tab-history"><span class="ic">🧾</span>히스토리</button>'
+    '<button data-tab="tab-more"><span class="ic">＋</span>추후</button>'
+    '</nav>'
+)
+
+
+def _fmt_won(v) -> str:
+    try:
+        return f"{int(round(float(v))):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _build_history_html() -> str:
+    """현물(매수/매도)+선물(진입/청산) 거래를 최신순으로 카드 리스트 렌더."""
+    items: list[dict] = []
+
+    for t in load_transactions():
+        is_buy = t.get("type") == "buy"
+        items.append({
+            "date": str(t.get("date", "")),
+            "cls": "b-buy" if is_buy else "b-sell",
+            "label": "매수" if is_buy else "매도",
+            "name": t.get("name", ""),
+            "detail": f"{int(t.get('quantity', 0)):,}주 × {_fmt_won(t.get('price'))}원",
+            "pnl": None if is_buy else t.get("profit_loss"),
+            "pnl_pct": None if is_buy else t.get("profit_loss_pct"),
+        })
+
+    fut_label = {"open": "선물진입", "close": "선물청산",
+                 "roll_open": "롤(진입)", "roll_close": "롤(청산)"}
+    for t in load_futures_transactions():
+        typ = t.get("type", "")
+        is_open = typ in ("open", "roll_open")
+        items.append({
+            "date": str(t.get("date", "")),
+            "cls": "b-open" if is_open else "b-close",
+            "label": fut_label.get(typ, typ),
+            "name": t.get("name", ""),
+            "detail": f"{int(t.get('contracts', 0)):,}계약 × {_fmt_won(t.get('price'))}원",
+            "pnl": None if is_open else t.get("pnl"),
+            "pnl_pct": None if is_open else t.get("pnl_pct"),
+        })
+
+    items = [it for it in items if it["date"]]
+    items.sort(key=lambda x: x["date"], reverse=True)
+    items = items[:200]
+
+    if not items:
+        return '<div style="color:#888;text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
+
+    out: list[str] = ['<div class="hist-list">']
+    cur_day = None
+    for it in items:
+        day = it["date"][:10]
+        if day != cur_day:
+            cur_day = day
+            out.append(f'<div class="hist-date">{day}</div>')
+        pnl_html = ""
+        if it["pnl"] is not None:
+            pnl = float(it["pnl"])
+            sign = "+" if pnl >= 0 else ""
+            cls = "profit" if pnl >= 0 else "loss"
+            pct = it.get("pnl_pct")
+            pct_s = f" ({sign}{float(pct):.1f}%)" if pct is not None else ""
+            pnl_html = f'<span class="pnl {cls}">{sign}{_fmt_won(pnl)}원{pct_s}</span>'
+        tm = it["date"][11:16]
+        out.append(
+            '<div class="hist-row">'
+            '<div class="r1">'
+            f'<span class="hbadge {it["cls"]}">{it["label"]}</span>'
+            f'<span class="nm">{it["name"]}</span>'
+            f'{pnl_html}'
+            '</div>'
+            f'<div class="r2">{tm} · {it["detail"]}</div>'
+            '</div>'
+        )
+    out.append("</div>")
+    return "".join(out)
+
+
+async def _graph_img_html() -> str:
+    """자산그래프(전체 기간) PNG 를 base64 <img> 로. 실패 시 안내 문구."""
+    try:
+        from bot.asset_history import render_asset_graph
+        from bot.handlers.asset_graph import _balance_nav
+
+        target_nav = await _balance_nav()
+        buf = await asyncio.to_thread(render_asset_graph, target_nav, None)
+        if buf is not None:
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return (
+                '<div class="card" style="padding:12px;max-width:960px;margin:0 auto;">'
+                f'<img src="data:image/png;base64,{b64}" alt="자산 그래프" '
+                'style="width:100%;height:auto;border-radius:8px;display:block;"></div>'
+            )
+    except Exception:
+        logger.warning("자산그래프 렌더 실패", exc_info=True)
+    return '<div style="color:#888;text-align:center;padding:48px 24px;">자산 기록이 없습니다.</div>'
+
+
+async def _wrap_with_tabs(html: bytes) -> bytes:
+    """대시보드 HTML 을 하단 탭바(자산현황/그래프/히스토리/추후) 구조로 감싼다.
+
+    기존 본문은 그대로 1번 탭(자산현황)으로 두고, 그래프/히스토리/빈 탭과
+    고정 하단 탭바·전환 스크립트를 추가한다. 구조가 안 맞으면 원본 그대로 반환.
+    """
+    import re
+
+    text = html.decode("utf-8")
+    if "</head>" not in text or "</body>" not in text or "<body" not in text:
+        return html
+
+    graph_html = await _graph_img_html()
+    history_html = _build_history_html()
+
+    # 1) <head> 에 탭 CSS 주입
+    text = text.replace("</head>", _TAB_CSS + "</head>", 1)
+
+    # 2) <body ...> 직후에 자산현황 탭 패널 시작
+    text = re.sub(
+        r"(<body[^>]*>)",
+        r'\1<div id="tab-status" class="tab-panel active">',
+        text, count=1,
+    )
+
+    # 3) </body> 직전: 자산현황 닫기 + 그래프/히스토리/추후 탭 + 탭바 + 스크립트
+    panels = (
+        "</div>"  # close tab-status
+        '<div id="tab-graph" class="tab-panel">'
+        '<div class="section-title" style="margin-top:8px;">📈 자산 그래프</div>'
+        f"{graph_html}</div>"
+        '<div id="tab-history" class="tab-panel">'
+        '<div class="section-title" style="margin-top:8px;">🧾 매수·매도 히스토리</div>'
+        f"{history_html}</div>"
+        '<div id="tab-more" class="tab-panel">'
+        '<div style="text-align:center;color:#666;padding:80px 24px;">'
+        '<div style="font-size:42px;margin-bottom:12px;">🚧</div>'
+        '<div style="font-size:15px;">추후 추가 예정</div></div></div>'
+    )
+    tail = panels + _TABBAR_HTML + _TAB_SCRIPT
+    text = text.replace("</body>", tail + "</body>", 1)
+    return text.encode("utf-8")
 
 
 def _pwa_assets() -> dict[str, bytes]:
@@ -480,6 +684,7 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
         my_html = my_buf.getvalue()
 
     if my_html is not None:
+        my_html = await _wrap_with_tabs(my_html)  # 하단 탭바(자산현황/그래프/히스토리/추후)
         files["/my_portfolio.html"] = my_html
         files["/index.html"] = my_html  # 비밀 경로 루트 = 내 포트폴리오
 
