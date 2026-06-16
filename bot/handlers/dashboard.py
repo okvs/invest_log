@@ -40,7 +40,8 @@ _PWA_DIR = Path(__file__).resolve().parent.parent / "pwa"
 _PWA_HEAD = (
     '<meta http-equiv="refresh" content="300">\n'  # 5분마다 자동 새로고침(재발행 반영)
     '<link rel="manifest" href="manifest.webmanifest">\n'
-    '<meta name="theme-color" content="#0f0f14">\n'
+    '<meta name="theme-color" content="#e9efe9" media="(prefers-color-scheme: light)">\n'
+    '<meta name="theme-color" content="#0d1411" media="(prefers-color-scheme: dark)">\n'
     '<meta name="apple-mobile-web-app-capable" content="yes">\n'
     '<meta name="mobile-web-app-capable" content="yes">\n'
     '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">\n'
@@ -79,34 +80,48 @@ def _inject_pwa(html: bytes) -> bytes:
 # --- 하단 탭바(앱 스타일) ---
 _TAB_CSS = """
 <style>
-  body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
+  body { padding-bottom: calc(98px + env(safe-area-inset-bottom)) !important; }
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
-  .tabbar { position:fixed; left:0; right:0; bottom:0; z-index:1000;
-            display:flex; background:#15151c; border-top:1px solid #2a2a36;
-            padding-bottom: env(safe-area-inset-bottom);
-            box-shadow:0 -2px 12px rgba(0,0,0,.35); }
+
+  /* 하단 플로팅 탭바 (앱 스타일) */
+  .tabbar { position:fixed; left:12px; right:12px; bottom:12px; z-index:1000;
+            display:flex; gap:4px; padding:8px;
+            padding-bottom:calc(8px + env(safe-area-inset-bottom));
+            background:var(--card); border:1px solid var(--border);
+            border-radius:24px; box-shadow:var(--shadow);
+            max-width:520px; margin:0 auto; }
   .tabbar button { flex:1; background:none; border:none; cursor:pointer;
-            color:#7a7a88; font-size:11px; padding:9px 0 8px;
-            display:flex; flex-direction:column; align-items:center; gap:3px;
-            font-family:inherit; -webkit-tap-highlight-color:transparent; }
-  .tabbar button .ic { font-size:20px; line-height:1; }
-  .tabbar button.active { color:#4A90D9; }
-  .tabbar button:disabled { color:#44444f; cursor:default; }
+            color:var(--text-dim); font-size:11px; font-weight:600;
+            display:flex; flex-direction:column; align-items:center; gap:5px;
+            padding:9px 4px; border-radius:16px; font-family:inherit;
+            -webkit-tap-highlight-color:transparent;
+            transition:background .15s, color .15s; }
+  .tabbar button svg { width:22px; height:22px; fill:none; stroke:currentColor;
+            stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  .tabbar button.active { color:var(--accent); background:var(--accent-soft); }
+
+  /* 차트 PNG는 다크 프레임 카드로(이미지 자체가 다크 렌더라 라이트모드에서도 일관) */
+  .imgcard { background:#0e1512; border-radius:14px; padding:12px;
+             max-width:960px; margin:0 auto; box-shadow:var(--shadow); }
+  .imgcard img { width:100%; height:auto; border-radius:8px; display:block; }
+
   .hist-list { max-width:760px; margin:0 auto; }
-  .hist-row { background:#1a1a24; border-radius:10px; padding:11px 14px; margin-bottom:8px; }
+  .hist-row { background:var(--card); border:1px solid var(--border);
+              border-radius:12px; padding:11px 14px; margin-bottom:8px;
+              box-shadow:var(--shadow); }
   .hist-row .r1 { display:flex; align-items:center; gap:8px; }
-  .hist-row .nm { font-weight:600; color:#e8e8ee; font-size:14px; flex:1;
+  .hist-row .nm { font-weight:600; color:var(--text-strong); font-size:14px; flex:1;
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .hist-row .pnl { font-size:13px; font-weight:700; white-space:nowrap; }
-  .hist-row .r2 { font-size:12px; color:#8a8a99; margin-top:5px; }
+  .hist-row .r2 { font-size:12px; color:var(--text-dim); margin-top:5px; }
   .hbadge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px; white-space:nowrap; }
-  .b-buy { background:#3a1f24; color:#ff6b81; }
-  .b-sell { background:#1e2a3a; color:#5aa9ff; }
-  .b-open { background:#2a1f3a; color:#b07cff; }
-  .b-close { background:#1f2a24; color:#5ad19a; }
-  .hist-date { background:#101018; color:#9a9aa8; font-size:12px; font-weight:600;
-               max-width:760px; margin:18px auto 8px; padding:2px 2px; }
+  .b-buy { background:rgba(216,60,60,.16); color:#d83c3c; }
+  .b-sell { background:rgba(31,122,82,.16); color:var(--accent); }
+  .b-open { background:rgba(139,92,246,.16); color:#8b5cf6; }
+  .b-close { background:rgba(21,146,74,.16); color:var(--profit); }
+  .hist-date { color:var(--text-dim); font-size:12px; font-weight:700;
+               max-width:760px; margin:18px auto 8px; }
 </style>
 """
 
@@ -128,12 +143,31 @@ _TAB_SCRIPT = """
 </script>
 """
 
+_IC_STATUS = (
+    '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/>'
+    '<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/>'
+    '<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/>'
+    '<rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>'
+)
+_IC_GRAPH = (
+    '<svg viewBox="0 0 24 24"><polyline points="3 16 9 10 13 14 21 6"/>'
+    '<polyline points="15 6 21 6 21 12"/></svg>'
+)
+_IC_HISTORY = (
+    '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4"/>'
+    '<polyline points="3 4 3 9 8 9"/><polyline points="12 8 12 12 15 13.5"/></svg>'
+)
+_IC_STRATEGY = (
+    '<svg viewBox="0 0 24 24"><path d="M9.5 18h5"/><path d="M10 21h4"/>'
+    '<path d="M12 3a6 6 0 0 0-3.8 10.7c.7.6 1.3 1.4 1.3 2.3h5c0-.9.6-1.7 1.3-2.3'
+    'A6 6 0 0 0 12 3z"/></svg>'
+)
 _TABBAR_HTML = (
     '<nav class="tabbar">'
-    '<button data-tab="tab-status" class="active"><span class="ic">📊</span>자산현황</button>'
-    '<button data-tab="tab-graph"><span class="ic">📈</span>그래프</button>'
-    '<button data-tab="tab-history"><span class="ic">🧾</span>히스토리</button>'
-    '<button data-tab="tab-backtest"><span class="ic">🧪</span>백테스트</button>'
+    f'<button data-tab="tab-status" class="active">{_IC_STATUS}현황</button>'
+    f'<button data-tab="tab-graph">{_IC_GRAPH}그래프</button>'
+    f'<button data-tab="tab-history">{_IC_HISTORY}기록</button>'
+    f'<button data-tab="tab-backtest">{_IC_STRATEGY}전략</button>'
     '</nav>'
 )
 
@@ -181,7 +215,7 @@ def _build_history_html() -> str:
     items = items[:200]
 
     if not items:
-        return '<div style="color:#888;text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
+        return '<div style="color:var(--text-dim);text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
 
     out: list[str] = ['<div class="hist-list">']
     cur_day = None
@@ -224,13 +258,12 @@ async def _graph_img_html() -> str:
         if buf is not None:
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             return (
-                '<div class="card" style="padding:12px;max-width:960px;margin:0 auto;">'
-                f'<img src="data:image/png;base64,{b64}" alt="자산 그래프" '
-                'style="width:100%;height:auto;border-radius:8px;display:block;"></div>'
+                '<div class="imgcard">'
+                f'<img src="data:image/png;base64,{b64}" alt="자산 그래프"></div>'
             )
     except Exception:
         logger.warning("자산그래프 렌더 실패", exc_info=True)
-    return '<div style="color:#888;text-align:center;padding:48px 24px;">자산 기록이 없습니다.</div>'
+    return '<div style="color:var(--text-dim);text-align:center;padding:48px 24px;">자산 기록이 없습니다.</div>'
 
 
 _BACKTEST_TAB_TTL = 3 * 3600  # 백테스트 탭 캐시 유효시간(초) — 과거시세 다운로드가 무거워 재계산 제한
@@ -265,11 +298,11 @@ def _render_backtest_tab(res: dict) -> str:
 
     head = (
         '<div class="card" style="max-width:760px;margin:0 auto 12px;text-align:left;padding:16px 18px;">'
-        '<div style="font-weight:700;color:#fff;margin-bottom:8px;">포트폴리오 동결 백테스트 '
-        '<span style="color:#888;font-weight:400;font-size:12px;">(현물+선물 · 신용 제외)</span></div>'
-        f'<div style="font-size:13px;color:#cfcfd8;line-height:1.9;">'
+        '<div style="font-weight:700;color:var(--text-strong);margin-bottom:8px;">포트폴리오 동결 백테스트 '
+        '<span style="color:var(--text-dim);font-weight:400;font-size:12px;">(현물+선물 · 신용 제외)</span></div>'
+        f'<div style="font-size:13px;color:var(--text);line-height:1.9;">'
         f'기간 {d(rows[0]["date"])} ~ {d(rows[-1]["date"])} · 거래일 {len(rows)}일<br>'
-        f'현재 순자산 <b style="color:#fff;">{_bt_short(nav_now)}</b> '
+        f'현재 순자산 <b style="color:var(--text-strong);">{_bt_short(nav_now)}</b> '
         f'(총자산 {_bt_short(gross)} − 신용 {_bt_short(cur_credit)})<br>'
         f'초기자본 {_bt_short(initial)} · '
         f'<span class="{"profit" if pct >= 0 else "loss"}">{pct:+.1f}%</span>'
@@ -277,19 +310,19 @@ def _render_backtest_tab(res: dict) -> str:
     )
     if higher:
         tops = "".join(
-            f'<div style="font-size:12px;color:#9a9aa8;margin-top:3px;">'
+            f'<div style="font-size:12px;color:var(--text-dim);margin-top:3px;">'
             f'{d(r["date"])} · {_bt_short(r["nav_frozen_today"])} '
             f'(+{_bt_short(r["nav_frozen_today"] - nav_now)})</div>'
             for r in higher[:5]
         )
-        more = f'<div style="font-size:12px;color:#666;margin-top:3px;">… +{len(higher) - 5}건</div>' if len(higher) > 5 else ""
+        more = f'<div style="font-size:12px;color:var(--text-dim);margin-top:3px;">… +{len(higher) - 5}건</div>' if len(higher) > 5 else ""
         head += (
             f'<div style="margin-top:10px;color:#f0b03a;font-weight:700;font-size:13px;">'
             f'★ 현재 순자산 초과 거래일 {len(higher)}/{len(rows)}건</div>{tops}{more}'
         )
     else:
         head += (
-            '<div style="margin-top:10px;color:#22c55e;font-weight:700;font-size:13px;">'
+            '<div style="margin-top:10px;color:var(--profit);font-weight:700;font-size:13px;">'
             '→ 현재 순자산이 ALL-TIME HIGH (모든 동결 시나리오보다 높음)</div>'
         )
     head += "</div>"
@@ -299,12 +332,11 @@ def _render_backtest_tab(res: dict) -> str:
     if buf is not None:
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         img = (
-            '<div class="card" style="padding:12px;max-width:960px;margin:0 auto;">'
-            f'<img src="data:image/png;base64,{b64}" alt="백테스트" '
-            'style="width:100%;height:auto;border-radius:8px;display:block;"></div>'
+            '<div class="imgcard">'
+            f'<img src="data:image/png;base64,{b64}" alt="백테스트"></div>'
         )
     ts = datetime.now().strftime("%m-%d %H:%M")
-    foot = f'<div style="text-align:center;color:#666;font-size:11px;margin-top:10px;">계산 시각 {ts} · 최대 3시간마다 갱신</div>'
+    foot = f'<div style="text-align:center;color:var(--text-dim);font-size:11px;margin-top:10px;">계산 시각 {ts} · 최대 3시간마다 갱신</div>'
     return head + img + foot
 
 
@@ -321,7 +353,7 @@ async def _backtest_tab_html() -> str:
         from scripts.backtest_frozen_portfolio import run_backtest
         res = await asyncio.to_thread(run_backtest)
         if res is None:
-            return '<div style="color:#888;text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
+            return '<div style="color:var(--text-dim);text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
         html = _render_backtest_tab(res)
         try:
             REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -336,7 +368,7 @@ async def _backtest_tab_html() -> str:
                 return cache.read_text(encoding="utf-8")
         except OSError:
             pass
-        return '<div style="color:#888;text-align:center;padding:48px 24px;">백테스트 계산 실패 — 잠시 후 다시 시도됩니다.</div>'
+        return '<div style="color:var(--text-dim);text-align:center;padding:48px 24px;">백테스트 계산 실패 — 잠시 후 다시 시도됩니다.</div>'
 
 
 async def _wrap_with_tabs(html: bytes) -> bytes:

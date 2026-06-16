@@ -1064,6 +1064,24 @@ def build_html_report(
 <title>{title} — {now}</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
+
+  /* === 테마: 라이트(기본) + 다크(시스템 설정) — 그린 핀테크 팔레트 === */
+  :root {{
+    --bg:#e9efe9; --card:#ffffff; --text:#1f2a24; --text-strong:#0f1f17;
+    --text-dim:#6b7a70; --border:#d4ddd7; --track:#dde6e0; --hover:#f0f4f1;
+    --accent:#1f7a52; --accent-soft:#d3e6da; --profit:#15924a; --loss:#d83c3c;
+    --shadow:0 2px 14px rgba(31,80,55,0.10);
+  }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{
+      --bg:#0d1411; --card:#152019; --text:#d6e0d9; --text-strong:#f0f5f1;
+      --text-dim:#7d8c83; --border:#243029; --track:#1b261f; --hover:#1b261f;
+      --accent:#3cc488; --accent-soft:#1c3026; --profit:#22c55e; --loss:#f87171;
+      --shadow:0 2px 14px rgba(0,0,0,0.45);
+    }}
+  }}
+
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
          background:#0f0f14; color:#e0e0e0; padding:24px; }}
 
@@ -1167,6 +1185,33 @@ def build_html_report(
 
   /* 미등록 알림 */
   .warning {{ margin-top:24px; background:#2a2215; border:1px solid #665520; border-radius:8px; padding:16px; font-size:13px; color:#fbbf24; }}
+
+  /* === 테마 변수 적용 오버라이드 (위 하드코딩 색을 라이트/다크로 치환) === */
+  body {{ background:var(--bg); color:var(--text); }}
+  .header h1 {{ color:var(--text-strong); }}
+  .header .date {{ color:var(--text-dim); }}
+  .card {{ background:var(--card); box-shadow:var(--shadow); }}
+  .card .label {{ color:var(--text-dim); }}
+  .card .sub.brk {{ color:var(--text-dim); }}
+  .profit {{ color:var(--profit); }}
+  .loss {{ color:var(--loss); }}
+  .section-title {{ color:var(--text-strong); border-bottom-color:var(--border); }}
+  .sector-bar-wrap {{ background:var(--track); }}
+  .sector-amt {{ color:var(--text-dim); }}
+  .sector-breakdown {{ color:var(--text-dim); }}
+  .futures-tag {{ color:var(--text-dim); }}
+  .futures-tag-strong {{ color:var(--text-strong); }}
+  th {{ background:var(--card); color:var(--text-dim); }}
+  th:hover {{ color:var(--text-strong); }}
+  th.sorted .arrow {{ color:var(--accent); }}
+  td {{ border-bottom-color:var(--border); }}
+  tr:hover td {{ background:var(--hover); }}
+  .qd-header {{ border-bottom-color:var(--border); }}
+  .qd-title-note {{ color:var(--text-dim); }}
+  .qd-legend-item {{ color:var(--text-dim); }}
+  .qd-caption {{ color:var(--text-dim); }}
+  .qd-tip {{ background:var(--card); color:var(--text); border-color:var(--border); }}
+  .thesis {{ color:var(--text-dim); }}
 </style>
 </head>
 <body>
