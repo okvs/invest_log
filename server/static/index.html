@@ -59,6 +59,13 @@
   .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
   .small{font-size:12px}
   .page{max-width:560px;margin:0 auto}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .stat{background:var(--soft);border-radius:12px;padding:13px 12px}
+  .stat .k{font-size:11px;color:var(--dim);font-weight:600}
+  .stat .v{font-size:17px;font-weight:800;color:var(--strong);margin-top:3px;letter-spacing:-.3px}
+  .dashlink{display:flex;align-items:center;justify-content:space-between;text-decoration:none;
+       color:var(--accent);font-weight:700;font-size:14px;padding:14px 16px}
+  .dashlink .arr{font-size:18px}
 </style>
 </head>
 <body>
@@ -83,9 +90,12 @@
     <section id="pg-status" class="page-sec">
       <div class="card" id="summary"><div class="muted">불러오는 중…</div></div>
       <div class="card">
-        <div class="muted small" style="margin-bottom:8px">보유 종목</div>
+        <div class="muted small" style="margin-bottom:8px">보유 종목 <span style="opacity:.7">· 평단 기준</span></div>
         <table id="holdings"><tbody></tbody></table>
       </div>
+      <a class="card dashlink hide" id="dashlink" href="./" style="margin-bottom:12px">
+        <span>📊 잔고 대시보드 보기</span><span class="arr">›</span>
+      </a>
     </section>
 
     <section id="pg-trade" class="page-sec hide">
@@ -153,8 +163,9 @@ function toast(msg, bad){const t=$('toast');t.textContent=msg;
   t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
 
 async function api(path, method='GET', body){
-  const r = await fetch(API_BASE+path,{method,
-    headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},
+  const headers={'Content-Type':'application/json'};
+  if(TOKEN) headers['Authorization']='Bearer '+TOKEN;   // 공개 모드면 토큰 없이 호출
+  const r = await fetch(API_BASE+path,{method,headers,
     body:body?JSON.stringify(body):undefined});
   if(r.status===401){ doLogout(); throw new Error('로그인이 필요합니다'); }
   const j = await r.json().catch(()=>({}));
@@ -177,7 +188,9 @@ async function doLogin(){
   }catch(e){ $('loginerr').textContent = (''+e.message).includes('Failed to fetch') ? '서버에 연결할 수 없습니다(맥/터널 확인)' : e.message; }
 }
 function doLogout(){ TOKEN=''; localStorage.removeItem('invest_token'); showLogin(); }
-function showApp(){ $('login').classList.add('hide'); $('app').classList.remove('hide'); $('tabbar').classList.remove('hide'); refresh(); }
+function showApp(){ $('login').classList.add('hide'); $('app').classList.remove('hide'); $('tabbar').classList.remove('hide');
+  if(!/^(localhost|127\.|0\.0\.0\.0)/.test(location.hostname)) $('dashlink').classList.remove('hide');
+  refresh(); }
 function showLogin(){ $('login').classList.remove('hide'); $('app').classList.add('hide'); $('tabbar').classList.add('hide'); }
 
 $('loginbtn').onclick = doLogin;
@@ -192,15 +205,24 @@ async function refresh(){
   renderSummary(); renderHoldings(); fillSellSelect(); renderRetroList();
 }
 function renderSummary(){
-  const a=STATE.account||{}; const n=(STATE.holdings||[]).length;
-  $('summary').innerHTML =
-    `<div class="row" style="justify-content:space-between"><span class="muted">현금 예수금</span><b>${won(a.cash||0)}원</b></div>`+
-    (a.futures_cash!=null?`<div class="row" style="justify-content:space-between;margin-top:6px"><span class="muted">선물 가용</span><b>${won(a.futures_cash)}원</b></div>`:'')+
-    `<div class="row" style="justify-content:space-between;margin-top:6px"><span class="muted">보유 종목</span><b>${n}종목</b></div>`;
+  const a=STATE.account||{}; const hs=STATE.holdings||[];
+  const invested = hs.reduce((s,h)=>s+(h.avg_price||0)*(h.quantity||0),0);
+  const cells = [['현금 예수금', won(a.cash||0)+'원']];
+  if(a.futures_cash!=null) cells.push(['선물 가용', won(a.futures_cash)+'원']);
+  cells.push(['주식 매입금액', won(invested)+'원']);
+  cells.push(['보유 종목', hs.length+'종목']);
+  $('summary').innerHTML = '<div class="stats">'+cells.map(c=>
+    `<div class="stat"><div class="k">${c[0]}</div><div class="v">${c[1]}</div></div>`).join('')+'</div>';
 }
 function renderHoldings(){
-  const rows=(STATE.holdings||[]).map(h=>`<tr><td>${h.name}</td><td>${(h.quantity||0).toLocaleString()}</td><td>${won(h.avg_price||0)}</td></tr>`).join('');
-  $('holdings').innerHTML = `<thead><tr><th>종목</th><th>수량</th><th>평단</th></tr></thead><tbody>${rows||'<tr><td colspan=3 class="muted">보유 없음</td></tr>'}</tbody>`;
+  const hs=STATE.holdings||[];
+  const total=hs.reduce((s,h)=>s+(h.avg_price||0)*(h.quantity||0),0)||1;
+  const rows=hs.map(h=>{
+    const amt=(h.avg_price||0)*(h.quantity||0), w=Math.round(amt/total*100);
+    return `<tr><td>${h.name}</td><td>${(h.quantity||0).toLocaleString()}</td><td>${won(h.avg_price||0)}</td>`+
+      `<td>${won(amt)}<div class="muted" style="font-size:10px">${w}%</div></td></tr>`;
+  }).join('');
+  $('holdings').innerHTML = `<thead><tr><th>종목</th><th>수량</th><th>평단</th><th>매입금액</th></tr></thead><tbody>${rows||'<tr><td colspan=4 class="muted">보유 없음</td></tr>'}</tbody>`;
 }
 function fillSellSelect(){ $('s_name').innerHTML = (STATE.holdings||[]).map(h=>`<option>${h.name}</option>`).join(''); }
 function renderRetroList(){
@@ -259,8 +281,12 @@ async function submitRetro(){
   }catch(e){toast(e.message,true);}
 }
 
-// --- 시작: 저장된 토큰 있으면 바로 앱 ---
-if(TOKEN){ showApp(); } else { showLogin(); }
+// --- 시작: 공개 모드 기본 — 바로 앱(로그인 장벽 없음).
+//     서버가 WEBAPP_AUTH 로 인증을 켠 경우에만, 토큰이 없을 때 로그인 화면. ---
+showApp();
+fetch(API_BASE+'/api/health').then(r=>r.json()).then(h=>{
+  if(h && h.auth_required && !TOKEN) showLogin();
+}).catch(()=>{});
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
 </script>
 </body>

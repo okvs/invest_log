@@ -62,6 +62,16 @@ def is_password_set() -> bool:
     return bool(_load().get("pw_hash"))
 
 
+def auth_enabled() -> bool:
+    """인증 게이트 활성 여부. 기본 OFF(공개) — 비밀번호 단계에서 WEBAPP_AUTH=1 로 켠다.
+
+    공개 모드에서는 토큰 없이 모든 /api/* 를 쓸 수 있다(프론트도 로그인 화면을
+    건너뛴다). 비밀번호를 다시 도입할 땐 서버 환경변수 WEBAPP_AUTH=1 만 켜면
+    아래 login/_issue_token/_verify_token 경로가 그대로 살아난다.
+    """
+    return os.getenv("WEBAPP_AUTH", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def login(password: str) -> str:
     """비밀번호 검증(또는 첫 설정) 후 서명 토큰 반환. 실패 시 ValueError."""
     password = (password or "").strip()
@@ -108,6 +118,8 @@ def _verify_token(token: str) -> bool:
 
 
 async def require_user(authorization: str = Header(None)) -> str:
+    if not auth_enabled():
+        return "owner"  # 공개 모드 — 토큰 불필요
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing token")
     token = authorization[len("Bearer "):].strip()

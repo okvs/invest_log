@@ -93,18 +93,31 @@ def client():
     app.dependency_overrides.clear()
 
 
-def test_api_requires_auth():
+def test_api_public_when_auth_disabled():
+    """공개 모드(기본): 토큰 없이도 /api/* 사용 가능(200)."""
+    _seed()
+    c = TestClient(app)  # override 없음 + 토큰 없음
+    assert c.get("/api/state").status_code == 200
+    assert c.post("/api/buy", json={"name": "삼성전자", "quantity": 1, "price": 70000}).status_code == 200
+
+
+def test_api_requires_auth_when_enabled(monkeypatch):
+    """WEBAPP_AUTH 켜면 토큰 없는 요청은 401."""
+    monkeypatch.setenv("WEBAPP_AUTH", "1")
     c = TestClient(app)  # override 없음 + 토큰 없음
     assert c.get("/api/state").status_code == 401
     assert c.post("/api/buy", json={"name": "x", "quantity": 1, "price": 1}).status_code == 401
 
 
 def test_api_health_open():
-    assert TestClient(app).get("/api/health").json()["ok"] is True
+    h = TestClient(app).get("/api/health").json()
+    assert h["ok"] is True
+    assert h["auth_required"] is False  # 기본 공개 모드
 
 
-def test_password_login_flow():
-    """첫 로그인=비번 설정, 토큰으로 보호 API 접근, 틀린 비번 401."""
+def test_password_login_flow(monkeypatch):
+    """WEBAPP_AUTH 켠 상태: 첫 로그인=비번 설정, 토큰으로 보호 API, 틀린 비번 401."""
+    monkeypatch.setenv("WEBAPP_AUTH", "1")
     _seed()
     c = TestClient(app)  # override 없이 실제 인증 경로 사용
     # 첫 로그인 → 비밀번호 설정 + 토큰

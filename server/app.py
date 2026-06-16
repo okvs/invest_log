@@ -5,8 +5,10 @@ PWA-only 전환 1단계: 텔레그램 없이 PWA → 이 API 로 매수/매도/�
 
   uvicorn server.app:app --host 127.0.0.1 --port 8787
 
-인증: 모든 /api/* 는 Firebase ID 토큰 필요(server.auth.require_user).
-프론트(server/static)는 인증 없이 서빙(로그인 화면 포함).
+인증: 기본 '공개 모드' — 토큰 없이 /api/* 쓰기 가능(server.auth.require_user 가
+환경변수 WEBAPP_AUTH 가 켜졌을 때만 서명 토큰을 검증). 비밀번호 단계에서
+WEBAPP_AUTH=1 로 켜면 /api/login 흐름이 그대로 살아난다.
+프론트(server/static)는 항상 인증 없이 서빙한다.
 """
 from __future__ import annotations
 
@@ -73,7 +75,11 @@ class LoginReq(BaseModel):
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True, "password_set": auth.is_password_set()}
+    return {
+        "ok": True,
+        "auth_required": auth.auth_enabled(),
+        "password_set": auth.is_password_set(),
+    }
 
 
 @app.post("/api/login")
