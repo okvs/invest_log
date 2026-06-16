@@ -133,12 +133,28 @@ async def expiry_check_handler(update: Update, context) -> None:
     await update.message.reply_text(build_alert_message(alerts))
 
 
+async def _save_bot_username(app) -> None:
+    """기동 시 봇 username 을 data/bot_username.txt 에 기록.
+    대시보드(그래프 탭 회고 카드)가 텔레그램 딥링크에 쓴다 — 빌드 시 네트워크
+    조회 없이 이 파일만 읽으면 되도록."""
+    try:
+        uname = (app.bot.username or "").lstrip("@")
+        if uname:
+            from pathlib import Path
+            p = Path(__file__).resolve().parent / "data" / "bot_username.txt"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(uname, encoding="utf-8")
+            logger.info("봇 username 기록: @%s", uname)
+    except Exception:
+        logger.warning("봇 username 저장 실패", exc_info=True)
+
+
 def main() -> None:
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN 환경변수를 설정해주세요. (.env 파일 참고)")
 
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(_save_bot_username).build()
 
     # 모든 메시지에서 chat_id 자동 캐싱 (다른 핸들러 동작은 그대로)
     app.add_handler(TypeHandler(Update, _cache_chat_id), group=-1)

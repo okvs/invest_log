@@ -91,10 +91,10 @@ _TAB_CSS = """
   .tabbar-wrap { position:fixed; left:0; right:0; bottom:0; z-index:1000;
             padding:0 12px calc(12px + env(safe-area-inset-bottom));
             pointer-events:none; }
+  /* backdrop-filter 는 스크롤 시 iOS에서 바가 흔들려 보이는 원인이라 제외.
+     반투명(rgba)만으로 투명도 유지. */
   .tabbar { pointer-events:auto; display:flex; gap:4px; padding:8px;
             background:var(--tabbar-bg);
-            -webkit-backdrop-filter:saturate(160%) blur(14px);
-            backdrop-filter:saturate(160%) blur(14px);
             border:1px solid var(--border);
             border-radius:24px; box-shadow:var(--shadow);
             max-width:520px; margin:0 auto; }
@@ -121,6 +121,12 @@ _TAB_CSS = """
   .extra-tag { font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px;
             background:var(--accent-soft); color:var(--accent); }
   .extra-cap { font-size:12px; color:var(--text-dim); margin:7px 2px 0; line-height:1.6; }
+  a.extra-card { display:block; text-decoration:none; color:inherit; }
+  .extra-act { margin:8px 2px 0; font-size:12px; font-weight:700; color:var(--accent); }
+  .dismiss-btn { margin:10px 2px 0; width:100%; padding:9px 0; border-radius:10px;
+            border:1px solid var(--border); background:var(--card); color:var(--text-dim);
+            font-size:13px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .dismiss-btn:hover { color:var(--accent); border-color:var(--accent); }
 
   /* 차트 PNG는 다크 프레임 카드로(이미지 자체가 다크 렌더라 라이트모드에서도 일관) */
   .imgcard { background:#0e1512; border-radius:14px; padding:12px;
@@ -197,6 +203,21 @@ _TABBAR_HTML = (
 def _norm(s: str) -> str:
     """종목명 비교용 정규화 — 공백 제거 + casefold."""
     return (s or "").replace(" ", "").casefold()
+
+
+_BOT_USERNAME_CACHE = Path(__file__).resolve().parent.parent.parent / "data" / "bot_username.txt"
+
+
+def _bot_username() -> str:
+    """봇 username (회고 카드 → 텔레그램 딥링크용). 봇이 기동 시
+    data/bot_username.txt 에 기록한다(main._save_bot_username). 빌드 시 네트워크
+    의존을 피하려 파일만 읽고, 없으면 '' (회고 카드는 링크 없이 렌더)."""
+    try:
+        if _BOT_USERNAME_CACHE.exists():
+            return _BOT_USERNAME_CACHE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
 
 
 def _fmt_won(v) -> str:
@@ -424,7 +445,12 @@ def _lookup_ticker_cf(tmap: dict, name: str) -> str:
     return ""
 
 
-def _extra_card(name: str, tag: str, caption: str, chart_buf) -> str:
+def _extra_card(
+    name: str, tag: str, caption: str, chart_buf,
+    *, kind: str = "", item_id: str = "", link: str = "",
+) -> str:
+    """봉차트 카드. kind='retro'면 카드 전체가 텔레그램 회고 딥링크,
+    kind='pyramid'면 하단에 '확인(숨기기)' 버튼(클라이언트 dismiss)."""
     if chart_buf is None:
         body = '<div style="color:var(--text-dim);padding:24px;text-align:center;">차트를 불러오지 못했습니다(시세 조회 실패).</div>'
     else:
@@ -433,14 +459,23 @@ def _extra_card(name: str, tag: str, caption: str, chart_buf) -> str:
             '<div class="imgcard" style="margin:8px 0 0;">'
             f'<img src="data:image/png;base64,{b64}" alt="{name}"></div>'
         )
-    return (
-        '<div class="extra-card">'
+    inner = (
         f'<div class="extra-head"><span class="extra-name">{name}</span>'
         f'<span class="extra-tag">{tag}</span></div>'
         f'{body}'
         f'<div class="extra-cap">{caption}</div>'
-        '</div>'
     )
+    if kind == "retro" and link:
+        return (
+            f'<a class="extra-card" href="{link}" target="_blank" rel="noopener">'
+            f'{inner}<div class="extra-act">탭하면 텔레그램에서 회고 ›</div></a>'
+        )
+    if kind == "pyramid":
+        return (
+            f'<div class="extra-card" data-item="{item_id}">{inner}'
+            f'<button class="dismiss-btn" data-item="{item_id}">확인 (숨기기)</button></div>'
+        )
+    return f'<div class="extra-card">{inner}</div>'
 
 
 def _render_review_section() -> tuple[str, list[str]]:
@@ -453,6 +488,9 @@ def _render_review_section() -> tuple[str, list[str]]:
     unrev = [t for t in txs if t.get("type") == "sell" and not t.get("retrospective_id")]
     if not unrev:
         return "", []
+
+    uname = _bot_username()
+    bot_url = f"https://t.me/{uname}" if uname else ""
 
     by_stock: dict[str, list[dict]] = {}
     for t in unrev:
@@ -483,7 +521,7 @@ def _render_review_section() -> tuple[str, list[str]]:
             f'<span class="{"profit" if pnl >= 0 else "loss"}">손익 {int(pnl):+,}원</span>'
             ' · 텔레그램 <b>회고</b>로 복기'
         )
-        cards.append(_extra_card(name, "회고 대기", cap, chart))
+        cards.append(_extra_card(name, "회고 대기", cap, chart, kind="retro", link=bot_url))
 
     html = (
         '<div class="section-title" style="margin-top:24px;">📝 회고 대기 '
@@ -508,7 +546,8 @@ def _render_pyramid_section() -> tuple[str, list[str]]:
     ids: list[str] = []
     cards: list[str] = []
     for c in cands[:_MAX_PYRAMID]:
-        ids.append(f"pyr:{c['name']}:{today}")
+        item_id = f"pyr:{c['name']}:{today}"
+        ids.append(item_id)
         stxs = [t for t in txs if _norm(t.get("name", "")) == _norm(c["name"])]
         avg = float(c.get("avg") or 0) or _avg_buy_price(stxs)
         chart = build_trade_chart(c["name"], c.get("ticker", ""), stxs, avg, c.get("cur"))
@@ -517,7 +556,7 @@ def _render_pyramid_section() -> tuple[str, list[str]]:
             f'<span class="profit">수익 {c["pnl_pct"]:+.1f}%</span> · '
             f'제안 {c["suggested_shares"]:,}주(≈1천만)'
         )
-        cards.append(_extra_card(c["name"], "피라미딩각", cap, chart))
+        cards.append(_extra_card(c["name"], "피라미딩각", cap, chart, kind="pyramid", item_id=item_id))
 
     html = (
         '<div class="section-title" style="margin-top:24px;">🔺 피라미딩 후보 '
@@ -621,15 +660,21 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
     items_json = json.dumps(graph_ids, ensure_ascii=False)
     badge_script = (
         "<script>(function(){var I=" + items_json + ";"
-        "var seen={};try{seen=JSON.parse(localStorage.getItem('graph_seen')||'{}');}catch(e){}"
-        "var un=I.filter(function(x){return !seen[x];});"
+        "function gs(k){var o={};try{o=JSON.parse(localStorage.getItem(k)||'{}');}catch(e){}return o;}"
+        "function ss(k,o){try{localStorage.setItem(k,JSON.stringify(o));}catch(e){}}"
+        "var seen=gs('graph_seen'),dis=gs('graph_dismissed');"
         "var b=document.getElementById('graph-badge');"
-        "if(b){if(un.length){b.textContent=un.length;b.style.display='';}else{b.style.display='none';}}"
+        "function refresh(){var un=I.filter(function(x){return !seen[x]&&!dis[x];});"
+        "if(b){if(un.length){b.textContent=un.length;b.style.display='';}else{b.style.display='none';}}}"
+        "document.querySelectorAll('.extra-card[data-item]').forEach(function(c){"
+        "if(dis[c.getAttribute('data-item')])c.style.display='none';});"
+        "document.querySelectorAll('.dismiss-btn').forEach(function(btn){"
+        "btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();"
+        "var id=btn.getAttribute('data-item');dis[id]=1;ss('graph_dismissed',dis);"
+        "var card=btn.closest('.extra-card');if(card)card.style.display='none';refresh();});});"
         "var g=document.querySelector('.tabbar button[data-tab=\"tab-graph\"]');"
-        "if(g){g.addEventListener('click',function(){var s={};I.forEach(function(x){s[x]=1;});"
-        "try{localStorage.setItem('graph_seen',JSON.stringify(s));}catch(e){}"
-        "if(b){b.style.display='none';}});}"
-        "})();</script>"
+        "if(g){g.addEventListener('click',function(){I.forEach(function(x){seen[x]=1;});ss('graph_seen',seen);refresh();});}"
+        "refresh();})();</script>"
     )
     tail = panels + _TABBAR_HTML + _TAB_SCRIPT + badge_script
     text = text.replace("</body>", tail + "</body>", 1)

@@ -840,7 +840,7 @@ def build_html_report(
             data-avg="{r["avg"]}" data-cur="{cur_raw}" data-invested="{r["invested"]}"
             data-eval="{r["eval"]}" data-pnl="{r["pnl"]}" data-pnlpct="{r["pnl_pct"]:.2f}">
           <td><span class="dot" style="background:{dot_color}"></span>{r["sector"]}</td>
-          <td>{r["name"]}</td>
+          <td><span class="hnm">{r["name"]}</span></td>
           <td class="num">{_format_man(r["eval"])}</td>
           <td class="thesis">{r["thesis"]}</td>
           <td class="num {pnl_class}">{pnl_sign}{format_number(int(r["pnl"]))}원<br><small>{pnl_sign}{int(r["pnl_pct"])}%</small></td>
@@ -1068,7 +1068,7 @@ def build_html_report(
     --text-dim:#6b7a70; --border:#d4ddd7; --track:#dde6e0; --hover:#f0f4f1;
     --accent:#1f7a52; --accent-soft:#d3e6da; --profit:#15924a; --loss:#d83c3c;
     --shadow:0 2px 14px rgba(31,80,55,0.10);
-    --tabbar-bg:rgba(255,255,255,0.72);
+    --tabbar-bg:rgba(255,255,255,0.90);
     --qd-bg:#eef3ee; --qd-grid:#d7e0d9; --qd-origin:#93a39a; --qd-frame:#cdd8d0; --qd-text:#1f2a24;
     --hold-fs:11px;
   }}
@@ -1078,7 +1078,7 @@ def build_html_report(
       --text-dim:#7d8c83; --border:#243029; --track:#1b261f; --hover:#1b261f;
       --accent:#3cc488; --accent-soft:#1c3026; --profit:#22c55e; --loss:#f87171;
       --shadow:0 2px 14px rgba(0,0,0,0.45);
-      --tabbar-bg:rgba(21,32,25,0.72);
+      --tabbar-bg:rgba(21,32,25,0.90);
       --qd-bg:#0f0f14; --qd-grid:#1a1a24; --qd-origin:#cbd5e1; --qd-frame:#2a2a3a; --qd-text:#e0e0e0;
     }}
   }}
@@ -1221,8 +1221,9 @@ def build_html_report(
   .qd-pt-label {{ fill:var(--qd-text); }}
   /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 11px) */
   #holdings table {{ font-size:var(--hold-fs, 11px); }}
-  /* 종목명 컬럼 — 줄바꿈 없이 한 줄로(살짝 더 길게) */
-  #holdings td:nth-child(2) {{ white-space:nowrap; }}
+  /* 종목명 컬럼 — 'SK하이닉스'급은 한 줄, 더 길면 두 줄로 (폭 제한 후 줄바꿈) */
+  #holdings .hnm {{ display:inline-block; max-width:6.5em; white-space:normal;
+                    overflow-wrap:anywhere; line-height:1.25; vertical-align:middle; }}
   .fs-ctrl {{ float:right; display:inline-flex; gap:6px; }}
   .fs-ctrl button {{ background:var(--card); color:var(--text-dim); border:1px solid var(--border);
                      border-radius:8px; width:30px; height:26px; font-size:13px; font-weight:700;
