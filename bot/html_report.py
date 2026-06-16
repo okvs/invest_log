@@ -655,17 +655,16 @@ def _build_quadrants_svg(
     iso_label_str = " / ".join(lbl for _, lbl in iso_levels) if iso_levels else "—"
     caption = (
         '<div class="qd-caption">'
-        '점 크기 = 비중 tier (10% 단위) · 세모/네모/원/육각형/별 (T1·T2·T3·T4·T5) · '
         '<span style="color:#22c55e">초록</span>/<span style="color:#ef4444">빨강</span> 점선 = '
         f'동일 수익금 등고선 ({iso_label_str} KRW — 현재 포트폴리오 평가금 대비 동적 계산)'
         "</div>"
     )
 
     # 섹션 제목은 호출부(build_html_report)에서 토글 버튼과 같은 줄에 렌더한다.
+    # 도형별(T1~T5) 범례는 사용자 요청으로 제거(legend_html 미포함).
     return (
         '<div class="qd-wrap">'
         + "".join(parts)
-        + legend_html
         + caption
         + "</div>"
     )
@@ -1071,7 +1070,7 @@ def build_html_report(
     --shadow:0 2px 14px rgba(31,80,55,0.10);
     --tabbar-bg:rgba(255,255,255,0.72);
     --qd-bg:#eef3ee; --qd-grid:#d7e0d9; --qd-origin:#93a39a; --qd-frame:#cdd8d0; --qd-text:#1f2a24;
-    --hold-fs:12px;
+    --hold-fs:11px;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
@@ -1220,8 +1219,10 @@ def build_html_report(
   .qd-origin {{ stroke:var(--qd-origin); }}
   .qd-frame {{ stroke:var(--qd-frame); }}
   .qd-pt-label {{ fill:var(--qd-text); }}
-  /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 1pt 축소) */
-  #holdings table {{ font-size:var(--hold-fs, 12px); }}
+  /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 11px) */
+  #holdings table {{ font-size:var(--hold-fs, 11px); }}
+  /* 종목명 컬럼 — 줄바꿈 없이 한 줄로(살짝 더 길게) */
+  #holdings td:nth-child(2) {{ white-space:nowrap; }}
   .fs-ctrl {{ float:right; display:inline-flex; gap:6px; }}
   .fs-ctrl button {{ background:var(--card); color:var(--text-dim); border:1px solid var(--border);
                      border-radius:8px; width:30px; height:26px; font-size:13px; font-weight:700;
@@ -1355,16 +1356,16 @@ document.querySelectorAll('.qd-toggle').forEach(btn => {{
 function holdFs(delta) {{
   var el = document.getElementById('holdings');
   if (!el) return;
-  var cur = parseInt(localStorage.getItem('hold_fs') || '12', 10);
-  if (isNaN(cur)) cur = 12;
-  cur = Math.max(9, Math.min(20, cur + delta));
+  var cur = parseInt(localStorage.getItem('hold_fs') || '11', 10);
+  if (isNaN(cur)) cur = 11;
+  cur = Math.max(8, Math.min(20, cur + delta));
   el.style.setProperty('--hold-fs', cur + 'px');
   try {{ localStorage.setItem('hold_fs', cur); }} catch (e) {{}}
 }}
 (function() {{
   var el = document.getElementById('holdings');
   if (!el) return;
-  var s = parseInt(localStorage.getItem('hold_fs') || '12', 10);
+  var s = parseInt(localStorage.getItem('hold_fs') || '11', 10);
   if (!isNaN(s)) el.style.setProperty('--hold-fs', s + 'px');
 }})();
 </script>

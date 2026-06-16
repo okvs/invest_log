@@ -84,11 +84,14 @@ _TAB_CSS = """
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
 
-  /* 하단 플로팅 탭바 (앱 스타일, 반투명+블러) — bottom에 safe-area 반영해
-     스크롤되는 현황 탭에서도 홈 인디케이터 위에 일관되게 떠 있게 함 */
-  .tabbar { position:fixed; left:12px; right:12px;
-            bottom:calc(10px + env(safe-area-inset-bottom)); z-index:1000;
-            display:flex; gap:4px; padding:8px;
+  /* 하단 플로팅 탭바 (앱 스타일, 반투명+블러).
+     래퍼를 bottom:0 에 고정 — iOS 동적 툴바(스크롤 시 주소창 접힘)에서도
+     기준점이 흔들리지 않아 현황 탭에서 바가 내려가지 않는다. 가시 바는
+     래퍼 내부 패딩으로 홈 인디케이터 위에 띄운다. */
+  .tabbar-wrap { position:fixed; left:0; right:0; bottom:0; z-index:1000;
+            padding:0 12px calc(12px + env(safe-area-inset-bottom));
+            pointer-events:none; }
+  .tabbar { pointer-events:auto; display:flex; gap:4px; padding:8px;
             background:var(--tabbar-bg);
             -webkit-backdrop-filter:saturate(160%) blur(14px);
             backdrop-filter:saturate(160%) blur(14px);
@@ -167,12 +170,12 @@ _IC_STRATEGY = (
     'A6 6 0 0 0 12 3z"/></svg>'
 )
 _TABBAR_HTML = (
-    '<nav class="tabbar">'
+    '<div class="tabbar-wrap"><nav class="tabbar">'
     f'<button data-tab="tab-status" class="active">{_IC_STATUS}현황</button>'
     f'<button data-tab="tab-graph">{_IC_GRAPH}그래프</button>'
     f'<button data-tab="tab-history">{_IC_HISTORY}기록</button>'
     f'<button data-tab="tab-backtest">{_IC_STRATEGY}전략</button>'
-    '</nav>'
+    '</nav></div>'
 )
 
 
