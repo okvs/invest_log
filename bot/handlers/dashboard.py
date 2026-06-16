@@ -98,7 +98,7 @@ _TAB_CSS = """
             border:1px solid var(--border);
             border-radius:24px; box-shadow:var(--shadow);
             max-width:520px; margin:0 auto; }
-  .tabbar button { flex:1; background:none; border:none; cursor:pointer;
+  .tabbar button { position:relative; flex:1; background:none; border:none; cursor:pointer;
             color:var(--text-dim); font-size:11px; font-weight:600;
             display:flex; flex-direction:column; align-items:center; gap:5px;
             padding:9px 4px; border-radius:16px; font-family:inherit;
@@ -107,6 +107,20 @@ _TAB_CSS = """
   .tabbar button svg { width:22px; height:22px; fill:none; stroke:currentColor;
             stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
   .tabbar button.active { color:var(--accent); background:var(--accent-soft); }
+  /* 그래프 탭 새 알림 배지 (빨간 동그라미 숫자) */
+  .tab-badge { position:absolute; top:4px; left:calc(50% + 6px);
+            min-width:16px; height:16px; padding:0 4px; box-sizing:border-box;
+            border-radius:9px; background:#e5484d; color:#fff;
+            font-size:10px; font-weight:700; line-height:16px; text-align:center;
+            box-shadow:0 0 0 2px var(--card); }
+
+  /* 그래프 탭 부가 카드 (회고/피라미딩 봉차트) */
+  .extra-card { max-width:960px; margin:0 auto 14px; }
+  .extra-head { display:flex; align-items:center; gap:8px; margin:0 2px 2px; }
+  .extra-name { font-weight:700; color:var(--text-strong); font-size:14px; }
+  .extra-tag { font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px;
+            background:var(--accent-soft); color:var(--accent); }
+  .extra-cap { font-size:12px; color:var(--text-dim); margin:7px 2px 0; line-height:1.6; }
 
   /* 차트 PNG는 다크 프레임 카드로(이미지 자체가 다크 렌더라 라이트모드에서도 일관) */
   .imgcard { background:#0e1512; border-radius:14px; padding:12px;
@@ -172,11 +186,17 @@ _IC_STRATEGY = (
 _TABBAR_HTML = (
     '<div class="tabbar-wrap"><nav class="tabbar">'
     f'<button data-tab="tab-status" class="active">{_IC_STATUS}현황</button>'
-    f'<button data-tab="tab-graph">{_IC_GRAPH}그래프</button>'
+    f'<button data-tab="tab-graph">{_IC_GRAPH}그래프'
+    '<span class="tab-badge" id="graph-badge" style="display:none"></span></button>'
     f'<button data-tab="tab-history">{_IC_HISTORY}기록</button>'
     f'<button data-tab="tab-backtest">{_IC_STRATEGY}전략</button>'
     '</nav></div>'
 )
+
+
+def _norm(s: str) -> str:
+    """종목명 비교용 정규화 — 공백 제거 + casefold."""
+    return (s or "").replace(" ", "").casefold()
 
 
 def _fmt_won(v) -> str:
@@ -378,6 +398,183 @@ async def _backtest_tab_html() -> str:
         return '<div style="color:var(--text-dim);text-align:center;padding:48px 24px;">백테스트 계산 실패 — 잠시 후 다시 시도됩니다.</div>'
 
 
+# --- 그래프 탭 부가: 회고 대기(매도 복기) · 피라미딩 후보 봉차트 ---
+_GRAPH_REVIEW_TTL = 3 * 3600   # 매도 종목 봉차트(과거 데이터) — 길게 캐시
+_GRAPH_PYRAMID_TTL = 3600      # 피라미딩(시장 신호) — 1시간
+_MAX_REVIEW = 6
+_MAX_PYRAMID = 6
+
+
+def _avg_buy_price(stxs: list[dict]) -> float:
+    amt = qty = 0.0
+    for t in stxs:
+        if t.get("type") == "buy":
+            q = int(t.get("quantity", 0) or 0)
+            p = float(t.get("price", 0) or 0)
+            amt += p * q
+            qty += q
+    return (amt / qty) if qty else 0.0
+
+
+def _lookup_ticker_cf(tmap: dict, name: str) -> str:
+    nk = _norm(name)
+    for k, v in tmap.items():
+        if _norm(k) == nk:
+            return v
+    return ""
+
+
+def _extra_card(name: str, tag: str, caption: str, chart_buf) -> str:
+    if chart_buf is None:
+        body = '<div style="color:var(--text-dim);padding:24px;text-align:center;">차트를 불러오지 못했습니다(시세 조회 실패).</div>'
+    else:
+        b64 = base64.b64encode(chart_buf.getvalue()).decode("ascii")
+        body = (
+            '<div class="imgcard" style="margin:8px 0 0;">'
+            f'<img src="data:image/png;base64,{b64}" alt="{name}"></div>'
+        )
+    return (
+        '<div class="extra-card">'
+        f'<div class="extra-head"><span class="extra-name">{name}</span>'
+        f'<span class="extra-tag">{tag}</span></div>'
+        f'{body}'
+        f'<div class="extra-cap">{caption}</div>'
+        '</div>'
+    )
+
+
+def _render_review_section() -> tuple[str, list[str]]:
+    """미회고 매도(type==sell·retrospective_id 없음) 종목별 봉차트 카드."""
+    from bot.trade_review import build_trade_chart
+
+    txs = load_transactions()
+    holdings = load_holdings()
+    tmap = load_ticker_map()
+    unrev = [t for t in txs if t.get("type") == "sell" and not t.get("retrospective_id")]
+    if not unrev:
+        return "", []
+
+    by_stock: dict[str, list[dict]] = {}
+    for t in unrev:
+        by_stock.setdefault(_norm(t.get("name", "")), []).append(t)
+    ordered = sorted(
+        by_stock.values(),
+        key=lambda lst: max((x.get("date", "") for x in lst), default=""),
+        reverse=True,
+    )
+
+    ids: list[str] = []
+    cards: list[str] = []
+    for sells in ordered[:_MAX_REVIEW]:
+        name = sells[0].get("name", "")
+        for s in sells:
+            ids.append("retro:" + str(s.get("id", "")))
+        ticker = next(
+            (h.get("ticker") for h in holdings
+             if _norm(h.get("name", "")) == _norm(name) and h.get("ticker")), ""
+        ) or _lookup_ticker_cf(tmap, name)
+        stxs = [t for t in txs if _norm(t.get("name", "")) == _norm(name)]
+        avg = _avg_buy_price(stxs)
+        chart = build_trade_chart(name, ticker, stxs, avg, None)
+        last = max(sells, key=lambda x: x.get("date", ""))
+        pnl = sum(float(x.get("profit_loss", 0) or 0) for x in sells)
+        cap = (
+            f'{last.get("date", "")[:10]} 매도 · {len(sells)}건 미회고 · '
+            f'<span class="{"profit" if pnl >= 0 else "loss"}">손익 {int(pnl):+,}원</span>'
+            ' · 텔레그램 <b>회고</b>로 복기'
+        )
+        cards.append(_extra_card(name, "회고 대기", cap, chart))
+
+    html = (
+        '<div class="section-title" style="margin-top:24px;">📝 회고 대기 '
+        '<span style="font-weight:400;font-size:12px;color:var(--text-dim);">(매도 복기)</span></div>'
+        + "".join(cards)
+    )
+    return html, ids
+
+
+def _render_pyramid_section() -> tuple[str, list[str]]:
+    """오늘 피라미딩 후보(강한 돌파·수익 중) 종목별 봉차트 카드."""
+    from bot.trade_review import build_trade_chart
+    from bot.pyramiding import detect_opportunities
+
+    holdings = load_holdings()
+    txs = load_transactions()
+    cands = detect_opportunities(holdings)
+    if not cands:
+        return "", []
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    ids: list[str] = []
+    cards: list[str] = []
+    for c in cands[:_MAX_PYRAMID]:
+        ids.append(f"pyr:{c['name']}:{today}")
+        stxs = [t for t in txs if _norm(t.get("name", "")) == _norm(c["name"])]
+        avg = float(c.get("avg") or 0) or _avg_buy_price(stxs)
+        chart = build_trade_chart(c["name"], c.get("ticker", ""), stxs, avg, c.get("cur"))
+        cap = (
+            f'{c["kind"]} · 전일대비 {c["chg"]:+.1f}% · '
+            f'<span class="profit">수익 {c["pnl_pct"]:+.1f}%</span> · '
+            f'제안 {c["suggested_shares"]:,}주(≈1천만)'
+        )
+        cards.append(_extra_card(c["name"], "피라미딩각", cap, chart))
+
+    html = (
+        '<div class="section-title" style="margin-top:24px;">🔺 피라미딩 후보 '
+        '<span style="font-weight:400;font-size:12px;color:var(--text-dim);">(강한 돌파·수익 중)</span></div>'
+        + "".join(cards)
+    )
+    return html, ids
+
+
+async def _cached_extra(fname: str, key: str, ttl: int, render_fn) -> tuple[str, list[str]]:
+    """무거운 봉차트 섹션을 reports/<fname> 에 캐시. key 불일치 또는 ttl 경과 시 재생성."""
+    cache = REPORTS_DIR / fname
+    try:
+        if cache.exists():
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            fresh = (datetime.now().timestamp() - cache.stat().st_mtime) < ttl
+            if data.get("key") == key and fresh:
+                return data.get("html", ""), data.get("ids", [])
+    except (OSError, json.JSONDecodeError):
+        pass
+    try:
+        html, ids = await asyncio.to_thread(render_fn)
+    except Exception:
+        logger.warning("그래프 부가섹션 렌더 실패: %s", fname, exc_info=True)
+        try:
+            if cache.exists():
+                d = json.loads(cache.read_text(encoding="utf-8"))
+                return d.get("html", ""), d.get("ids", [])
+        except (OSError, json.JSONDecodeError):
+            pass
+        return "", []
+    try:
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"key": key, "html": html, "ids": ids}, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return html, ids
+
+
+async def _build_graph_extras() -> tuple[str, list[str]]:
+    """그래프 탭 하단(자산그래프 아래) 부가 섹션 + 배지용 item id 목록."""
+    txs = load_transactions()
+    review_key = "|".join(sorted(
+        str(t.get("id", "")) for t in txs
+        if t.get("type") == "sell" and not t.get("retrospective_id")
+    ))
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    rh, rids = await _cached_extra(".graph_review.json", review_key, _GRAPH_REVIEW_TTL, _render_review_section)
+    ph, pids = await _cached_extra(".graph_pyramid.json", today, _GRAPH_PYRAMID_TTL, _render_pyramid_section)
+
+    body = rh + ph
+    if not body:
+        body = '<div style="color:var(--text-dim);text-align:center;padding:32px 24px;">회고 대기·피라미딩 후보가 없습니다.</div>'
+    return body, (rids + pids)
+
+
 async def _wrap_with_tabs(html: bytes) -> bytes:
     """대시보드 HTML 을 하단 탭바(자산현황/그래프/히스토리/추후) 구조로 감싼다.
 
@@ -391,6 +588,7 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         return html
 
     graph_html = await _graph_img_html()
+    extras_html, graph_ids = await _build_graph_extras()
     history_html = _build_history_html()
     backtest_html = await _backtest_tab_html()
 
@@ -404,12 +602,13 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         text, count=1,
     )
 
-    # 3) </body> 직전: 자산현황 닫기 + 그래프/히스토리/추후 탭 + 탭바 + 스크립트
+    # 3) </body> 직전: 자산현황 닫기 + 그래프/히스토리/전략 탭 + 탭바 + 스크립트
+    #    그래프 탭 = 자산그래프(상단) + 회고/피라미딩 봉차트(하단)
     panels = (
         "</div>"  # close tab-status
         '<div id="tab-graph" class="tab-panel">'
         '<div class="section-title" style="margin-top:8px;">📈 자산 그래프</div>'
-        f"{graph_html}</div>"
+        f"{graph_html}{extras_html}</div>"
         '<div id="tab-history" class="tab-panel">'
         '<div class="section-title" style="margin-top:8px;">🧾 매수·매도 히스토리</div>'
         f"{history_html}</div>"
@@ -417,7 +616,22 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         '<div class="section-title" style="margin-top:8px;">🧪 백테스트</div>'
         f"{backtest_html}</div>"
     )
-    tail = panels + _TABBAR_HTML + _TAB_SCRIPT
+    # 그래프 탭 새 알림 배지 — 클라이언트가 localStorage 'graph_seen' 과 대조해
+    # 미확인 개수를 빨간 동그라미로 표시, 그래프 탭을 누르면(확인) 사라진다.
+    items_json = json.dumps(graph_ids, ensure_ascii=False)
+    badge_script = (
+        "<script>(function(){var I=" + items_json + ";"
+        "var seen={};try{seen=JSON.parse(localStorage.getItem('graph_seen')||'{}');}catch(e){}"
+        "var un=I.filter(function(x){return !seen[x];});"
+        "var b=document.getElementById('graph-badge');"
+        "if(b){if(un.length){b.textContent=un.length;b.style.display='';}else{b.style.display='none';}}"
+        "var g=document.querySelector('.tabbar button[data-tab=\"tab-graph\"]');"
+        "if(g){g.addEventListener('click',function(){var s={};I.forEach(function(x){s[x]=1;});"
+        "try{localStorage.setItem('graph_seen',JSON.stringify(s));}catch(e){}"
+        "if(b){b.style.display='none';}});}"
+        "})();</script>"
+    )
+    tail = panels + _TABBAR_HTML + _TAB_SCRIPT + badge_script
     text = text.replace("</body>", tail + "</body>", 1)
     return text.encode("utf-8")
 
