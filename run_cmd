@@ -30,9 +30,19 @@ bash "$DIR/scripts/kakao_apply_start.sh" >/dev/null
 echo "▶ 장중 대시보드 재발행 기동"
 bash "$DIR/scripts/dashboard_refresh_start.sh" >/dev/null
 
+# 5) PWA 백엔드(FastAPI) — 폰에서 매수/매도/회고 쓰기 (텔레그램 대체 진행 중)
+echo "▶ PWA 백엔드 기동 (localhost:8787)"
+bash "$DIR/scripts/webapp_start.sh" >/dev/null
+
+# 6) Cloudflare 터널 — 폰에서 접속할 공개 주소. ⚠️ quick tunnel 이라 재시작 시 URL 변동.
+#    현재 주소는 data/tunnel_url.txt, Firebase 허용 도메인은 자동 등록됨.
+echo "▶ Cloudflare 터널 기동"
+bash "$DIR/scripts/tunnel_start.sh" | grep -E "폰/외부 접속|발급된 주소" || true
+
 echo
 echo "가동 중인 tmux 세션:"
-tmux ls | grep -E "invest-bot|kakao-fwd|kakao-apply|dash-refresh" || true
+tmux ls | grep -E "invest-bot|kakao-fwd|kakao-apply|dash-refresh|invest-web|invest-tunnel" || true
+echo "PWA 주소: $(cat "$DIR/data/tunnel_url.txt" 2>/dev/null || echo '(터널 미가동)')"
 echo
 echo "보기:    tmux attach -t invest-bot   (나오기: Ctrl-b d)"
 echo "로그:    tail -f '$DIR/logs/kakao_forward.log'  /  kakao_apply.log  /  dashboard_refresh.log"
