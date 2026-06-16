@@ -133,7 +133,7 @@ _TABBAR_HTML = (
     '<button data-tab="tab-status" class="active"><span class="ic">📊</span>자산현황</button>'
     '<button data-tab="tab-graph"><span class="ic">📈</span>그래프</button>'
     '<button data-tab="tab-history"><span class="ic">🧾</span>히스토리</button>'
-    '<button data-tab="tab-more"><span class="ic">＋</span>추후</button>'
+    '<button data-tab="tab-backtest"><span class="ic">🧪</span>백테스트</button>'
     '</nav>'
 )
 
@@ -233,6 +233,112 @@ async def _graph_img_html() -> str:
     return '<div style="color:#888;text-align:center;padding:48px 24px;">자산 기록이 없습니다.</div>'
 
 
+_BACKTEST_TAB_TTL = 3 * 3600  # 백테스트 탭 캐시 유효시간(초) — 과거시세 다운로드가 무거워 재계산 제한
+
+
+def _bt_short(x) -> str:
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(x) >= 1e8:
+        return f"{x / 1e8:.2f}억"
+    if abs(x) >= 1e7:
+        return f"{x / 1e7:.1f}천만"
+    if abs(x) >= 1e4:
+        return f"{x / 1e4:.0f}만"
+    return f"{x:,.0f}원"
+
+
+def _render_backtest_tab(res: dict) -> str:
+    """run_backtest 결과 → 탭 본문 HTML(요약 + PNG base64)."""
+    rows = res["rows"]
+    higher = res.get("higher") or []
+    nav_now = res["nav_actual_today"]
+    gross = res.get("nav_actual_today_gross", nav_now)
+    cur_credit = res.get("cur_credit", 0)
+    initial = res["initial"]
+    pct = (nav_now / initial - 1) * 100 if initial else 0.0
+
+    def d(x):
+        return x.strftime("%m-%d") if hasattr(x, "strftime") else str(x)
+
+    head = (
+        '<div class="card" style="max-width:760px;margin:0 auto 12px;text-align:left;padding:16px 18px;">'
+        '<div style="font-weight:700;color:#fff;margin-bottom:8px;">포트폴리오 동결 백테스트 '
+        '<span style="color:#888;font-weight:400;font-size:12px;">(현물+선물 · 신용 제외)</span></div>'
+        f'<div style="font-size:13px;color:#cfcfd8;line-height:1.9;">'
+        f'기간 {d(rows[0]["date"])} ~ {d(rows[-1]["date"])} · 거래일 {len(rows)}일<br>'
+        f'현재 순자산 <b style="color:#fff;">{_bt_short(nav_now)}</b> '
+        f'(총자산 {_bt_short(gross)} − 신용 {_bt_short(cur_credit)})<br>'
+        f'초기자본 {_bt_short(initial)} · '
+        f'<span class="{"profit" if pct >= 0 else "loss"}">{pct:+.1f}%</span>'
+        '</div>'
+    )
+    if higher:
+        tops = "".join(
+            f'<div style="font-size:12px;color:#9a9aa8;margin-top:3px;">'
+            f'{d(r["date"])} · {_bt_short(r["nav_frozen_today"])} '
+            f'(+{_bt_short(r["nav_frozen_today"] - nav_now)})</div>'
+            for r in higher[:5]
+        )
+        more = f'<div style="font-size:12px;color:#666;margin-top:3px;">… +{len(higher) - 5}건</div>' if len(higher) > 5 else ""
+        head += (
+            f'<div style="margin-top:10px;color:#f0b03a;font-weight:700;font-size:13px;">'
+            f'★ 현재 순자산 초과 거래일 {len(higher)}/{len(rows)}건</div>{tops}{more}'
+        )
+    else:
+        head += (
+            '<div style="margin-top:10px;color:#22c55e;font-weight:700;font-size:13px;">'
+            '→ 현재 순자산이 ALL-TIME HIGH (모든 동결 시나리오보다 높음)</div>'
+        )
+    head += "</div>"
+
+    img = ""
+    buf = res.get("png_buf")
+    if buf is not None:
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        img = (
+            '<div class="card" style="padding:12px;max-width:960px;margin:0 auto;">'
+            f'<img src="data:image/png;base64,{b64}" alt="백테스트" '
+            'style="width:100%;height:auto;border-radius:8px;display:block;"></div>'
+        )
+    ts = datetime.now().strftime("%m-%d %H:%M")
+    foot = f'<div style="text-align:center;color:#666;font-size:11px;margin-top:10px;">계산 시각 {ts} · 최대 3시간마다 갱신</div>'
+    return head + img + foot
+
+
+async def _backtest_tab_html() -> str:
+    """백테스트 탭 본문. reports/.backtest_tab.html 에 캐시(3h) — 매 발행 재계산 방지."""
+    cache = REPORTS_DIR / ".backtest_tab.html"
+    try:
+        if cache.exists() and (datetime.now().timestamp() - cache.stat().st_mtime) < _BACKTEST_TAB_TTL:
+            return cache.read_text(encoding="utf-8")
+    except OSError:
+        pass
+
+    try:
+        from scripts.backtest_frozen_portfolio import run_backtest
+        res = await asyncio.to_thread(run_backtest)
+        if res is None:
+            return '<div style="color:#888;text-align:center;padding:48px 24px;">거래 내역이 없습니다.</div>'
+        html = _render_backtest_tab(res)
+        try:
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            cache.write_text(html, encoding="utf-8")
+        except OSError:
+            pass
+        return html
+    except Exception:
+        logger.warning("백테스트 탭 렌더 실패", exc_info=True)
+        try:
+            if cache.exists():
+                return cache.read_text(encoding="utf-8")
+        except OSError:
+            pass
+        return '<div style="color:#888;text-align:center;padding:48px 24px;">백테스트 계산 실패 — 잠시 후 다시 시도됩니다.</div>'
+
+
 async def _wrap_with_tabs(html: bytes) -> bytes:
     """대시보드 HTML 을 하단 탭바(자산현황/그래프/히스토리/추후) 구조로 감싼다.
 
@@ -247,6 +353,7 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
 
     graph_html = await _graph_img_html()
     history_html = _build_history_html()
+    backtest_html = await _backtest_tab_html()
 
     # 1) <head> 에 탭 CSS 주입
     text = text.replace("</head>", _TAB_CSS + "</head>", 1)
@@ -267,10 +374,9 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         '<div id="tab-history" class="tab-panel">'
         '<div class="section-title" style="margin-top:8px;">🧾 매수·매도 히스토리</div>'
         f"{history_html}</div>"
-        '<div id="tab-more" class="tab-panel">'
-        '<div style="text-align:center;color:#666;padding:80px 24px;">'
-        '<div style="font-size:42px;margin-bottom:12px;">🚧</div>'
-        '<div style="font-size:15px;">추후 추가 예정</div></div></div>'
+        '<div id="tab-backtest" class="tab-panel">'
+        '<div class="section-title" style="margin-top:8px;">🧪 백테스트</div>'
+        f"{backtest_html}</div>"
     )
     tail = panels + _TABBAR_HTML + _TAB_SCRIPT
     text = text.replace("</body>", tail + "</body>", 1)
