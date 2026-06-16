@@ -8,7 +8,7 @@ set -euo pipefail
 
 SESSION=kakao-fwd
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PY="$(command -v python3)"
+PY="$DIR/.venv/bin/python"   # sqlcipher3(카톡 DB 직접 읽기)·requests 등 deps는 .venv에 있음
 
 # 이미 떠 있으면 교체
 if tmux has-session -t "$SESSION" 2>/dev/null; then

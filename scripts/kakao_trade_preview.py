@@ -29,8 +29,6 @@ import argparse
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
@@ -43,48 +41,29 @@ _SIDE = {"매수체결": "buy", "매도체결": "sell"}
 
 
 # ---------------------------------------------------------------------------
-# kakaocli / auth 자원
+# auth / 질의 자원  (kakaocli 미사용 — sqlcipher3 로 in-process 직접 읽기)
+#
+# 과거엔 kakaocli 바이너리에 query 를 위임했으나, 동일 키·동일 cipher 파라미터로
+# scripts/kakao_db.py 가 우리 프로세스에서 DB 를 직접 연다. 아래 3개 함수는
+# 기존 호출부(kakao_apply / kakao_to_telegram)와의 호환을 위해 시그니처를 유지하되,
+# cli/db/key 인자는 무시하고 kakao_db 로 위임하는 얇은 어댑터다.
 # ---------------------------------------------------------------------------
+import kakao_db  # noqa: E402
+
+
 def find_kakaocli() -> str:
-    path = shutil.which("kakaocli") or "/opt/homebrew/bin/kakaocli"
-    if not os.path.exists(path) and not shutil.which("kakaocli"):
-        sys.exit("error: kakaocli 를 찾을 수 없습니다 (PATH 또는 /opt/homebrew/bin).")
-    return path
+    """[deprecated] kakaocli 미사용. 호환용으로 빈 문자열 반환."""
+    return ""
 
 
 def load_auth() -> tuple[str, str]:
-    if not os.path.exists(CACHE_PATH):
-        sys.exit(
-            "error: auth 캐시가 없습니다.\n"
-            "  먼저 실행: python3 ~/.claude/skills/kakaotalk-mac/scripts/kakaotalk_mac.py auth --refresh"
-        )
-    with open(CACHE_PATH, encoding="utf-8") as f:
-        d = json.load(f)
-    db, key = d.get("database_path"), d.get("key")
-    if not db or not key or not os.path.exists(db):
-        sys.exit("error: auth 캐시가 불완전합니다. auth --refresh 로 다시 만드세요.")
-    return db, key
+    """(database_path, key) — kakao_db 가 캐시/재파생으로 확보(kakaocli 불필요)."""
+    return kakao_db.resolve_auth()
 
 
-def kc_query(cli: str, db: str, key: str, sql: str, timeout: int = 30) -> list:
-    """kakaocli query → JSON(배열의 배열) 반환."""
-    try:
-        res = subprocess.run(
-            [cli, "query", sql, "--db", db, "--key", key],
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        # FDA 미부여 시 보호된 DB 열기에서 멈추는 케이스 → 무한 hang 방지
-        sys.exit(
-            f"error: kakaocli query {timeout}s 타임아웃 — DB 접근이 막혔을 수 있습니다.\n"
-            "  launchd/cron 등 백그라운드 실행이면 kakaocli·python3.12 에 '전체 디스크 접근(FDA)' 권한이 필요합니다."
-        )
-    if res.returncode != 0:
-        sys.exit(f"error: kakaocli query 실패\n{res.stderr.strip() or res.stdout.strip()}")
-    out = res.stdout.strip()
-    # kakaocli 출력 앞에 잡음 줄이 섞일 수 있어 JSON 시작점부터 파싱
-    start = out.find("[")
-    return json.loads(out[start:]) if start >= 0 else []
+def kc_query(cli=None, db=None, key=None, sql: str = "", timeout: int = 30) -> list:
+    """SQL 실행 → list[list] (kakaocli 출력과 동일 형태). cli/db/key/timeout 은 무시."""
+    return kakao_db.query(sql)
 
 
 # ---------------------------------------------------------------------------
