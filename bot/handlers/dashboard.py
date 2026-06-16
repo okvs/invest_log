@@ -728,6 +728,11 @@ _WRITE_LAYER = """
        border-radius:10px;font-size:14px;font-weight:600;opacity:0;transition:opacity .2s;
        pointer-events:none;z-index:3100;max-width:90vw;text-align:center}
   .retro-toast.show{opacity:1}
+  .retro-skip{display:block;width:100%;max-width:960px;margin:-6px auto 14px;padding:9px;
+       border:1px solid var(--border);border-radius:10px;background:var(--card);
+       color:var(--text-dim);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;
+       -webkit-tap-highlight-color:transparent}
+  .retro-skip:active{opacity:.7}
 </style>
 <div class="retro-modal" id="retro-modal"><div class="retro-sheet">
   <div class="retro-hd"><b id="retro-title">회고</b><button class="retro-x" id="retro-close">&times;</button></div>
@@ -755,6 +760,12 @@ _WRITE_LAYER = """
     modal.classList.add('show');}
   function close(){modal.classList.remove('show');cur=null;}
   function val(id){return ($(id).value||'').trim();}
+  function getDis(){try{return JSON.parse(localStorage.getItem('graph_dismissed')||'{}');}catch(e){return {};}}
+  function markDismissed(items){var d=getDis();items.forEach(function(it){d['retro:'+it.id]=1;});
+    try{localStorage.setItem('graph_dismissed',JSON.stringify(d));}catch(e){}}
+  function allDismissed(items){var d=getDis();return items.length>0&&items.every(function(it){return d['retro:'+it.id];});}
+  function decBadge(n){var b=document.getElementById('graph-badge');if(!b)return;
+    var v=(parseInt(b.textContent,10)||0)-n;if(v>0){b.textContent=v;}else{b.style.display='none';}}
   async function submit(){if(!cur)return;var btn=$('retro-submit');btn.disabled=true;
     var tc=$('retro-correct').value;
     var base={thesis_correct:tc===''?null:(tc==='true'),what_went_well:val('retro-well'),
@@ -766,17 +777,19 @@ _WRITE_LAYER = """
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
       }
-      try{var dis=JSON.parse(localStorage.getItem('graph_dismissed')||'{}');
-        cur.items.forEach(function(it){dis['retro:'+it.id]=1;});
-        localStorage.setItem('graph_dismissed',JSON.stringify(dis));}catch(e){}
-      var b=document.getElementById('graph-badge');
-      if(b){var n=(parseInt(b.textContent,10)||0)-cur.items.length;
-        if(n>0){b.textContent=n;}else{b.style.display='none';}}
+      markDismissed(cur.items);decBadge(cur.items.length);
       cur.card.style.display='none';toast('회고 저장 완료');close();
     }catch(e){toast(e.message||'저장 실패',true);}finally{btn.disabled=false;}}
   document.querySelectorAll('.retro-card').forEach(function(card){
+    var items=[];try{items=JSON.parse(card.getAttribute('data-retro')||'[]');}catch(e){}
+    if(allDismissed(items)){card.style.display='none';return;}  // 이전에 스킵/회고한 카드는 숨김
     var act=card.querySelector('.extra-act');if(act){act.textContent='탭해서 회고 기록 ›';}
-    card.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();open(card);});});
+    card.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();open(card);});
+    var sk=document.createElement('button');sk.type='button';sk.className='retro-skip';
+    sk.textContent='건너뛰기 (이 종목 회고 안 함)';
+    sk.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();
+      markDismissed(items);decBadge(items.length);card.style.display='none';toast('건너뛰었어요');});
+    if(card.parentNode){card.parentNode.insertBefore(sk,card.nextSibling);}});
   $('retro-close').addEventListener('click',close);
   modal.addEventListener('click',function(e){if(e.target===modal)close();});
   $('retro-submit').addEventListener('click',submit);
