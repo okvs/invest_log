@@ -681,6 +681,52 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
     return text.encode("utf-8")
 
 
+_WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "server" / "static"
+_TUNNEL_URL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "tunnel_url.txt"
+_APP_MANIFEST = json.dumps({
+    "name": "투자 기록", "short_name": "투자기록", "id": "./app.html",
+    "start_url": "app.html", "scope": "./", "display": "standalone",
+    "orientation": "portrait", "background_color": "#0d1411", "theme_color": "#0d1411",
+    "icons": [
+        {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}, ensure_ascii=False).encode("utf-8")
+# 설치 가능 조건(fetch 핸들러 존재) 충족용 최소 서비스워커 — 캐시는 하지 않음(항상 최신).
+_SW_JS = (
+    b"self.addEventListener('install',function(e){self.skipWaiting();});"
+    b"self.addEventListener('activate',function(e){self.clients.claim();});"
+    b"self.addEventListener('fetch',function(e){});"
+)
+
+
+def _build_writeapp_files() -> dict[str, bytes]:
+    """쓰기 PWA(server/static/index.html)를 web.app 발행본에 포함.
+
+    로그인이 web.app(=authDomain)과 같은 도메인에서 일어나야 모바일에서 동작하므로
+    프론트를 Firebase Hosting 으로 서빙하고, 데이터 API 는 맥 터널(data/tunnel_url.txt)
+    을 호출한다(__APPCFG__ 주입). 터널 주소가 없으면 미발행(맥 localhost 버전만).
+    """
+    src = _WEBAPP_DIR / "index.html"
+    if not src.exists():
+        return {}
+    try:
+        tunnel = _TUNNEL_URL_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        tunnel = ""
+    if not tunnel:
+        return {}
+    html = src.read_text(encoding="utf-8")
+    cfg = json.dumps({"api": tunnel, "authDomain": f"{firebase_publish.SITE_ID}.web.app"}, ensure_ascii=False)
+    html = html.replace("</head>", f"<script>window.__APPCFG__={cfg};</script></head>", 1)
+    return {
+        "/app.html": html.encode("utf-8"),
+        "/app.webmanifest": _APP_MANIFEST,
+        "/sw.js": _SW_JS,
+    }
+
+
 def _pwa_assets() -> dict[str, bytes]:
     """manifest + 아이콘을 {경로: 바이트}로 반환(비밀 경로 아래로 함께 발행)."""
     assets: dict[str, bytes] = {"/manifest.webmanifest": _PWA_MANIFEST}
@@ -1122,5 +1168,6 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
         for path, content in files.items()
     }
     files.update(_pwa_assets())
+    files.update(_build_writeapp_files())  # 쓰기 PWA(app.html) — web.app 에서 로그인+입력
 
     return files

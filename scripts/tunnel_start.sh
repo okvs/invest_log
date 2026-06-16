@@ -35,11 +35,19 @@ fi
 
 HOST="${URL#https://}"
 echo "$URL" > "$DIR/data/tunnel_url.txt"
-echo "발급된 주소: $URL"
+echo "발급된 주소(API): $URL"
 echo "Firebase 허용 도메인 등록 중..."
 "$DIR/.venv/bin/python" "$DIR/scripts/firebase_authz_domain.py" "$HOST" || \
   echo "(허용 도메인 자동 등록 실패 — 수동: scripts/firebase_authz_domain.py $HOST)"
 
+# web.app 발행본(app.html)에 새 터널 API 주소를 반영하도록 재발행
+echo "PWA(app.html) 재발행 중..."
+FIREBASE_PUBLISH=1 "$DIR/.venv/bin/python" "$DIR/scripts/dashboard_refresh.py" --once --force >/dev/null 2>&1 \
+  && echo "재발행 완료" || echo "(재발행 실패 — dash-refresh 다음 주기에 반영됨)"
+
+APP_URL="$(FIREBASE_PUBLISH=1 "$DIR/.venv/bin/python" -c "from bot import firebase_publish as fp; print(fp.dashboard_url().rstrip('/')+'/app.html')" 2>/dev/null || true)"
 echo ""
-echo "📱 폰/외부 접속:  $URL"
+echo "📱 폰에서 열 주소(PWA, 로그인+입력):"
+echo "    ${APP_URL:-"(빌드 후 web.app/<token>/app.html)"}"
+echo "  (API 백엔드는 $URL — 직접 열 필요 없음)"
 echo "  로그: tail -f '$LOG'   끄기: tmux kill-session -t $SESSION"

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,6 +22,20 @@ from server import service
 from server.auth import require_user
 
 app = FastAPI(title="invest_log PWA API")
+
+# 프론트는 Firebase Hosting(web.app)에서 서빙되고 API는 맥 터널을 호출하므로
+# 교차출처(CORS) 허용이 필요하다. 출처는 안정적인 Firebase 도메인 + 로컬 개발만 허용.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://invest-log-caf3d.web.app",
+        "https://invest-log-caf3d.firebaseapp.com",
+        "http://localhost:8787",
+        "http://127.0.0.1:8787",
+    ],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
