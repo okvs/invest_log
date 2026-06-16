@@ -36,7 +36,6 @@
   textarea{min-height:64px;resize:vertical}
   button{font-family:inherit;cursor:pointer}
   .btn{width:100%;padding:13px;border:none;border-radius:12px;background:var(--accent);color:#fff;font-size:15px;font-weight:700;margin-top:14px}
-  .btn.sec{background:var(--soft);color:var(--accent)}
   .btn:active{opacity:.85}
   .seg{display:flex;gap:6px;margin-bottom:12px}
   .seg button{flex:1;padding:9px;border:1px solid var(--border);background:var(--card);color:var(--dim);border-radius:10px;font-weight:700;font-size:13px}
@@ -55,9 +54,7 @@
        border-radius:22px;box-shadow:var(--shadow);max-width:520px;margin:0 auto}
   .tabbar button{flex:1;background:none;border:none;color:var(--dim);font-size:12px;font-weight:700;padding:9px 4px;border-radius:14px}
   .tabbar button.on{background:var(--soft);color:var(--accent)}
-  #login{min-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center}
-  #gbtn{display:flex;align-items:center;gap:10px;padding:12px 22px;border:1px solid var(--border);border-radius:12px;
-       background:var(--card);color:var(--text);font-size:15px;font-weight:700;box-shadow:var(--shadow)}
+  #login{min-height:78vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center}
   .hide{display:none}
   .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
   .small{font-size:12px}
@@ -69,8 +66,10 @@
   <!-- 로그인 -->
   <div id="login">
     <h1>📈 투자 기록</h1>
-    <div class="muted small">허용된 계정으로 로그인하세요</div>
-    <button id="gbtn">🔑 구글로 로그인</button>
+    <div class="muted small">비밀번호로 로그인</div>
+    <input id="pw" type="password" placeholder="비밀번호" autocomplete="current-password" style="max-width:240px">
+    <button id="loginbtn" class="btn" style="max-width:240px;margin-top:6px">로그인</button>
+    <div class="muted small" style="max-width:300px">※ 처음 로그인할 때 입력한 비밀번호가 그대로 설정됩니다.</div>
     <div id="loginerr" class="loss small"></div>
   </div>
 
@@ -81,7 +80,6 @@
       <button class="tag" id="logout" style="border:none">로그아웃</button>
     </div>
 
-    <!-- 현황 -->
     <section id="pg-status" class="page-sec">
       <div class="card" id="summary"><div class="muted">불러오는 중…</div></div>
       <div class="card">
@@ -90,7 +88,6 @@
       </div>
     </section>
 
-    <!-- 매수/매도 -->
     <section id="pg-trade" class="page-sec hide">
       <div class="seg">
         <button id="seg-buy" class="on" onclick="setSide('buy')">매수</button>
@@ -118,7 +115,6 @@
       </div>
     </section>
 
-    <!-- 회고 -->
     <section id="pg-retro" class="page-sec hide">
       <div class="card"><div class="muted small">회고 대기 (미회고 매도)</div>
         <div id="retrolist" style="margin-top:8px"></div></div>
@@ -144,86 +140,72 @@
   <button onclick="go('retro')">📝 회고</button>
 </nav></div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
-// 호스팅 환경별 주입(web.app 발행 시): API 베이스(맥 터널) + authDomain(같은 도메인=web.app)
 const APPCFG = window.__APPCFG__ || {};
-const API_BASE = APPCFG.api || '';   // '' = 같은 출처(맥 localhost 직접 서빙 시)
-const firebaseConfig = {
-  apiKey: "AIzaSyBXM3CClPOh2AJXhkeCXukHcPXQA1v6w4s",
-  authDomain: APPCFG.authDomain || "invest-log-caf3d.firebaseapp.com",
-  projectId: "invest-log-caf3d",
-  storageBucket: "invest-log-caf3d.firebasestorage.app",
-  messagingSenderId: "1006342123333",
-  appId: "1:1006342123333:web:34860e03bc34a420b8582c",
-  measurementId: "G-PE54PXP40C"
-};
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
+const API_BASE = APPCFG.api || '';            // '' = 같은 출처(맥 localhost 직접 서빙)
+let TOKEN = localStorage.getItem('invest_token') || '';
 let STATE = null;
+const $ = id => document.getElementById(id);
 
-function toast(msg, bad){const t=document.getElementById('toast');t.textContent=msg;
-  t.style.background=bad?'var(--loss)':'var(--strong)';t.style.color=bad?'#fff':'var(--bg)';
+function toast(msg, bad){const t=$('toast');t.textContent=msg;
+  t.style.background=bad?'var(--loss)':'var(--strong)';t.style.color='#fff';
+  if(!bad)t.style.color='var(--bg)';
   t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
 
 async function api(path, method='GET', body){
-  const tok = await auth.currentUser.getIdToken();
-  const r = await fetch(API_BASE+path,{method,headers:{'Authorization':'Bearer '+tok,'Content-Type':'application/json'},
+  const r = await fetch(API_BASE+path,{method,
+    headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'},
     body:body?JSON.stringify(body):undefined});
+  if(r.status===401){ doLogout(); throw new Error('로그인이 필요합니다'); }
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.detail||('오류 '+r.status));
   return j;
 }
 
 // --- 로그인 ---
-document.getElementById('gbtn').onclick = async ()=>{
-  try{ await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
-  catch(e){
-    if(e.code==='auth/popup-blocked'||e.code==='auth/operation-not-supported-in-this-environment'||e.code==='auth/cancelled-popup-request')
-      auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider());
-    else document.getElementById('loginerr').textContent = e.message;
-  }
-};
-document.getElementById('logout').onclick = ()=>auth.signOut();
+async function doLogin(){
+  const pw = $('pw').value;
+  if(!pw){ $('loginerr').textContent='비밀번호를 입력하세요'; return; }
+  $('loginerr').textContent='';
+  try{
+    const r = await fetch(API_BASE+'/api/login',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.detail||'로그인 실패');
+    TOKEN = j.token; localStorage.setItem('invest_token', TOKEN);
+    $('pw').value=''; showApp();
+  }catch(e){ $('loginerr').textContent = (''+e.message).includes('Failed to fetch') ? '서버에 연결할 수 없습니다(맥/터널 확인)' : e.message; }
+}
+function doLogout(){ TOKEN=''; localStorage.removeItem('invest_token'); showLogin(); }
+function showApp(){ $('login').classList.add('hide'); $('app').classList.remove('hide'); $('tabbar').classList.remove('hide'); refresh(); }
+function showLogin(){ $('login').classList.remove('hide'); $('app').classList.add('hide'); $('tabbar').classList.add('hide'); }
 
-auth.onAuthStateChanged(async user=>{
-  if(user){
-    document.getElementById('login').classList.add('hide');
-    document.getElementById('app').classList.remove('hide');
-    document.getElementById('tabbar').classList.remove('hide');
-    await refresh();
-  }else{
-    document.getElementById('login').classList.remove('hide');
-    document.getElementById('app').classList.add('hide');
-    document.getElementById('tabbar').classList.add('hide');
-  }
-});
+$('loginbtn').onclick = doLogin;
+$('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+$('logout').onclick = doLogout;
 
-// --- 데이터 로드/렌더 ---
+// --- 데이터 ---
 function won(n){return (Math.round(n)).toLocaleString('ko-KR');}
 async function refresh(){
   try{ STATE = await api('/api/state'); }
-  catch(e){ toast(e.message,true); if((''+e.message).includes('403')) document.getElementById('loginerr').textContent='허용되지 않은 계정'; return; }
+  catch(e){ if((''+e.message).includes('로그인')) return; toast(e.message,true); return; }
   renderSummary(); renderHoldings(); fillSellSelect(); renderRetroList();
 }
 function renderSummary(){
   const a=STATE.account||{}; const n=(STATE.holdings||[]).length;
-  document.getElementById('summary').innerHTML =
+  $('summary').innerHTML =
     `<div class="row" style="justify-content:space-between"><span class="muted">현금 예수금</span><b>${won(a.cash||0)}원</b></div>`+
     (a.futures_cash!=null?`<div class="row" style="justify-content:space-between;margin-top:6px"><span class="muted">선물 가용</span><b>${won(a.futures_cash)}원</b></div>`:'')+
     `<div class="row" style="justify-content:space-between;margin-top:6px"><span class="muted">보유 종목</span><b>${n}종목</b></div>`;
 }
 function renderHoldings(){
   const rows=(STATE.holdings||[]).map(h=>`<tr><td>${h.name}</td><td>${(h.quantity||0).toLocaleString()}</td><td>${won(h.avg_price||0)}</td></tr>`).join('');
-  document.getElementById('holdings').innerHTML = `<thead><tr><th>종목</th><th>수량</th><th>평단</th></tr></thead><tbody>${rows||'<tr><td colspan=3 class="muted">보유 없음</td></tr>'}</tbody>`;
+  $('holdings').innerHTML = `<thead><tr><th>종목</th><th>수량</th><th>평단</th></tr></thead><tbody>${rows||'<tr><td colspan=3 class="muted">보유 없음</td></tr>'}</tbody>`;
 }
-function fillSellSelect(){
-  document.getElementById('s_name').innerHTML = (STATE.holdings||[]).map(h=>`<option>${h.name}</option>`).join('');
-}
+function fillSellSelect(){ $('s_name').innerHTML = (STATE.holdings||[]).map(h=>`<option>${h.name}</option>`).join(''); }
 function renderRetroList(){
   const list=STATE.unreviewed_sells||[];
-  document.getElementById('retrolist').innerHTML = list.length? list.map(t=>{
+  $('retrolist').innerHTML = list.length? list.map(t=>{
     const pnl=t.profit_loss||0, cls=pnl>=0?'profit':'loss', sign=pnl>=0?'+':'';
     return `<div class="row" style="justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)">
       <div><b>${t.name}</b><div class="muted small">${(t.date||'').slice(0,10)} · ${t.quantity}주</div></div>
@@ -234,39 +216,40 @@ function renderRetroList(){
 
 // --- 탭 ---
 function go(p){
-  ['status','trade','retro'].forEach(x=>document.getElementById('pg-'+x).classList.toggle('hide',x!==p));
+  ['status','trade','retro'].forEach(x=>$('pg-'+x).classList.toggle('hide',x!==p));
   document.querySelectorAll('.tabbar button').forEach((b,i)=>b.classList.toggle('on',['status','trade','retro'][i]===p));
-  document.getElementById('title').textContent={status:'현황',trade:'매매',retro:'회고'}[p];
+  $('title').textContent={status:'현황',trade:'매매',retro:'회고'}[p];
   window.scrollTo(0,0);
 }
 function setSide(s){
-  document.getElementById('buyfields').classList.toggle('hide',s!=='buy');
-  document.getElementById('sellfields').classList.toggle('hide',s!=='sell');
-  document.getElementById('seg-buy').classList.toggle('on',s==='buy');
-  document.getElementById('seg-sell').classList.toggle('on',s==='sell');
+  $('buyfields').classList.toggle('hide',s!=='buy');
+  $('sellfields').classList.toggle('hide',s!=='sell');
+  $('seg-buy').classList.toggle('on',s==='buy');
+  $('seg-sell').classList.toggle('on',s==='sell');
 }
 
 // --- 액션 ---
+function v(id){return $(id).value.trim();}
 async function submitBuy(){
   const name=v('b_name'), qty=+v('b_qty'), price=+v('b_price');
   if(!name||!qty||!price){toast('종목·수량·단가를 입력하세요',true);return;}
   try{ await api('/api/buy','POST',{name,quantity:qty,price,sector:v('b_sector'),thesis:v('b_thesis'),margin_ratio:+v('b_margin')});
-    toast('매수 기록 완료'); ['b_name','b_sector','b_qty','b_price','b_thesis'].forEach(id=>document.getElementById(id).value=''); await refresh();
+    toast('매수 기록 완료'); ['b_name','b_sector','b_qty','b_price','b_thesis'].forEach(id=>$(id).value=''); await refresh();
   }catch(e){toast(e.message,true);}
 }
 async function submitSell(){
   const name=v('s_name'), qty=+v('s_qty'), price=+v('s_price');
   if(!name||!qty||!price){toast('종목·수량·단가를 입력하세요',true);return;}
   try{ await api('/api/sell','POST',{name,quantity:qty,price,reason:v('s_reason')});
-    toast('매도 기록 완료'); ['s_qty','s_price','s_reason'].forEach(id=>document.getElementById(id).value=''); await refresh();
+    toast('매도 기록 완료'); ['s_qty','s_price','s_reason'].forEach(id=>$(id).value=''); await refresh();
   }catch(e){toast(e.message,true);}
 }
 let retroId=null;
-function openRetro(id,name){retroId=id;document.getElementById('r_title').textContent=name+' 회고';
-  document.getElementById('retroform').classList.remove('hide');
-  ['r_well','r_regret','r_avoid','r_lesson'].forEach(i=>document.getElementById(i).value='');document.getElementById('r_correct').value='';
-  document.getElementById('retroform').scrollIntoView({behavior:'smooth'});}
-function closeRetro(){document.getElementById('retroform').classList.add('hide');retroId=null;}
+function openRetro(id,name){retroId=id;$('r_title').textContent=name+' 회고';
+  $('retroform').classList.remove('hide');
+  ['r_well','r_regret','r_avoid','r_lesson'].forEach(i=>$(i).value='');$('r_correct').value='';
+  $('retroform').scrollIntoView({behavior:'smooth'});}
+function closeRetro(){$('retroform').classList.add('hide');retroId=null;}
 async function submitRetro(){
   if(!retroId)return; const tc=v('r_correct');
   try{ await api('/api/retro','POST',{transaction_id:retroId,
@@ -275,11 +258,9 @@ async function submitRetro(){
     toast('회고 저장 완료'); closeRetro(); await refresh();
   }catch(e){toast(e.message,true);}
 }
-function v(id){return document.getElementById(id).value.trim();}
 
-// redirect 로그인 결과 처리
-auth.getRedirectResult().catch(e=>{document.getElementById('loginerr').textContent=e.message;});
-// PWA 서비스워커 등록(설치 가능하게)
+// --- 시작: 저장된 토큰 있으면 바로 앱 ---
+if(TOKEN){ showApp(); } else { showLogin(); }
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
 </script>
 </body>

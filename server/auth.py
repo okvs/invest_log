@@ -1,70 +1,116 @@
-"""Firebase ID 토큰 검증 인증 시브.
+"""자체 비밀번호 로그인 + 서명 토큰 인증 (Firebase Auth 미사용).
 
-PWA(프론트)가 Firebase Auth 로그인으로 받은 ID 토큰을 Authorization: Bearer
-로 보내면, 백엔드가 firebase-admin 으로 검증한다(이미 의존성에 포함).
-허용 사용자: 환경변수 ALLOWED_UIDS(쉼표구분) 또는 ALLOWED_EMAILS. 비어 있으면
-'경고: 인증된 누구나 허용'(초기 셋업 편의) — 운영에선 반드시 설정할 것.
+이유: 앱은 web.app 에서 서빙되는데 구글 로그인 핸들러는 firebaseapp.com 이라
+모바일(iOS ITP)에서 교차도메인 세션이 안 잡혀 탭/새로고침마다 로그아웃됐다.
+자체 토큰은 web.app 의 1st-party localStorage 에 저장돼 안정적이다.
+
+저장: data/webapp_auth.json {salt, pw_hash, secret}. 비밀번호는 첫 로그인 시 설정.
+토큰: HMAC 서명(JWT 유사), 기본 30일 만료. 추가 의존성 없음(stdlib).
 """
 from __future__ import annotations
 
-import logging
+import base64
+import hashlib
+import hmac
+import json
 import os
-from pathlib import Path
+import time
 
 from fastapi import Header, HTTPException
 
-logger = logging.getLogger(__name__)
+from storage import json_store
 
-_CRED_PATH = Path(__file__).resolve().parent.parent / "firebase-credentials.json"
-_initialized = False
+_PBKDF2_ROUNDS = 200_000
+_TOKEN_DAYS = 30
 
 
-def _ensure_init() -> None:
-    global _initialized
-    if _initialized:
-        return
-    import firebase_admin
-    from firebase_admin import credentials
+def _auth_file():
+    # json_store.DATA_DIR 기준 — 테스트(임시 data dir 패치)와 운영 모두 정상.
+    return json_store.DATA_DIR / "webapp_auth.json"
 
-    # 다른 모듈이 default app 을 이미 만들었을 수 있으니 named app 사용
+
+def _b64e(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _load() -> dict:
     try:
-        firebase_admin.get_app("authapp")
-    except ValueError:
-        firebase_admin.initialize_app(
-            credentials.Certificate(str(_CRED_PATH)), name="authapp"
-        )
-    _initialized = True
+        return json.loads(_auth_file().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
-def _allowed() -> tuple[set[str], set[str]]:
-    uids = {x.strip() for x in os.getenv("ALLOWED_UIDS", "").split(",") if x.strip()}
-    emails = {x.strip().lower() for x in os.getenv("ALLOWED_EMAILS", "").split(",") if x.strip()}
-    return uids, emails
+def _save(d: dict) -> None:
+    fp = _auth_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(json.dumps(d), encoding="utf-8")
+    try:
+        os.chmod(fp, 0o600)
+    except OSError:
+        pass
+
+
+def _hash_pw(pw: str, salt: bytes) -> str:
+    return _b64e(hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, _PBKDF2_ROUNDS))
+
+
+def is_password_set() -> bool:
+    return bool(_load().get("pw_hash"))
+
+
+def login(password: str) -> str:
+    """비밀번호 검증(또는 첫 설정) 후 서명 토큰 반환. 실패 시 ValueError."""
+    password = (password or "").strip()
+    if len(password) < 4:
+        raise ValueError("비밀번호는 4자 이상이어야 합니다.")
+    d = _load()
+    if not d.get("pw_hash"):
+        # 첫 로그인 → 비밀번호 설정 + 토큰 시크릿 생성
+        salt = os.urandom(16)
+        d = {
+            "salt": salt.hex(),
+            "pw_hash": _hash_pw(password, salt),
+            "secret": _b64e(os.urandom(32)),
+        }
+        _save(d)
+    else:
+        salt = bytes.fromhex(d["salt"])
+        if not hmac.compare_digest(_hash_pw(password, salt), d["pw_hash"]):
+            raise ValueError("비밀번호가 틀렸습니다.")
+    return _issue_token(d["secret"])
+
+
+def _issue_token(secret: str, days: int = _TOKEN_DAYS) -> str:
+    payload = {"sub": "owner", "exp": int(time.time()) + days * 86400}
+    p = _b64e(json.dumps(payload).encode("utf-8"))
+    sig = _b64e(hmac.new(secret.encode(), p.encode(), hashlib.sha256).digest())
+    return f"{p}.{sig}"
+
+
+def _verify_token(token: str) -> bool:
+    d = _load()
+    secret = d.get("secret")
+    if not secret:
+        return False
+    try:
+        p, sig = token.split(".", 1)
+        exp_sig = _b64e(hmac.new(secret.encode(), p.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, exp_sig):
+            return False
+        payload = json.loads(_b64d(p))
+        return int(payload.get("exp", 0)) > time.time()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def require_user(authorization: str = Header(None)) -> str:
-    """검증 성공 시 uid 반환, 실패 시 401/403."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
+        raise HTTPException(status_code=401, detail="missing token")
     token = authorization[len("Bearer "):].strip()
-
-    import firebase_admin
-    from firebase_admin import auth as fb_auth
-
-    _ensure_init()
-    app = firebase_admin.get_app("authapp")
-    try:
-        decoded = fb_auth.verify_id_token(token, app=app)
-    except Exception as e:  # noqa: BLE001
-        logger.info("토큰 검증 실패: %s", e)
-        raise HTTPException(status_code=401, detail="invalid token")
-
-    uid = decoded.get("uid", "")
-    email = (decoded.get("email", "") or "").lower()
-    allow_uids, allow_emails = _allowed()
-    if allow_uids or allow_emails:
-        if uid not in allow_uids and email not in allow_emails:
-            raise HTTPException(status_code=403, detail="not allowed")
-    else:
-        logger.warning("ALLOWED_UIDS/EMAILS 미설정 — 인증된 모든 사용자 허용(운영 전 설정 필요)")
-    return uid
+    if not _verify_token(token):
+        raise HTTPException(status_code=401, detail="invalid or expired token")
+    return "owner"

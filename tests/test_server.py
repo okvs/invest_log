@@ -94,13 +94,32 @@ def client():
 
 
 def test_api_requires_auth():
-    c = TestClient(app)  # override 없음
+    c = TestClient(app)  # override 없음 + 토큰 없음
     assert c.get("/api/state").status_code == 401
     assert c.post("/api/buy", json={"name": "x", "quantity": 1, "price": 1}).status_code == 401
 
 
 def test_api_health_open():
-    assert TestClient(app).get("/api/health").json() == {"ok": True}
+    assert TestClient(app).get("/api/health").json()["ok"] is True
+
+
+def test_password_login_flow():
+    """첫 로그인=비번 설정, 토큰으로 보호 API 접근, 틀린 비번 401."""
+    _seed()
+    c = TestClient(app)  # override 없이 실제 인증 경로 사용
+    # 첫 로그인 → 비밀번호 설정 + 토큰
+    r = c.post("/api/login", json={"password": "secret123"})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    # 토큰으로 보호 API 접근
+    r = c.get("/api/state", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    # 틀린 비밀번호 → 401
+    assert c.post("/api/login", json={"password": "wrong"}).status_code == 401
+    # 맞는 비밀번호 재로그인 → 200
+    assert c.post("/api/login", json={"password": "secret123"}).status_code == 200
+    # 잘못된 토큰 → 401
+    assert c.get("/api/state", headers={"Authorization": "Bearer bad.token"}).status_code == 401
 
 
 def test_api_buy_sell_retro_flow(client):

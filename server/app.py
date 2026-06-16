@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server import service
+from server import auth, service
 from server.auth import require_user
 
 app = FastAPI(title="invest_log PWA API")
@@ -67,9 +67,22 @@ class RetroReq(BaseModel):
     lessons: str = ""
 
 
+class LoginReq(BaseModel):
+    password: str
+
+
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "password_set": auth.is_password_set()}
+
+
+@app.post("/api/login")
+async def login(req: LoginReq) -> dict:
+    try:
+        token = auth.login(req.password)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    return {"ok": True, "token": token}
 
 
 @app.get("/api/state")
