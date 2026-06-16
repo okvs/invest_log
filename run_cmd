@@ -17,18 +17,23 @@ tmux has-session -t invest-bot 2>/dev/null && tmux kill-session -t invest-bot ||
 tmux new-session -d -s invest-bot \
   "cd '$DIR' && while true; do uv run python main.py; echo '[restart] bot exited, 5s 후 재시작'; sleep 5; done"
 
-# 2) 증권사 카톡 → 텔레그램 포워더 (60초 폴링)
+# 2) 증권사 카톡 → 텔레그램 포워더 (60초 폴링) — 원문 알림을 그대로 전달
 echo "▶ 카톡 포워더 기동"
 bash "$DIR/scripts/kakao_forward_start.sh" >/dev/null
 
-# 3) 장중(08:00~20:00 KST, NXT 포함) 15분마다 대시보드 재발행 — 현재가 갱신
+# 3) 증권사 카톡 체결 → 잔고 자동반영 (60초 폴링) — 매수/매도/선물을 잔고에 반영
+#    포워더와 별개 watermark. ⚠️ 켜는 동안 같은 거래를 봇에 수동 기록하면 이중계상.
+echo "▶ 카톡 자동반영 기동"
+bash "$DIR/scripts/kakao_apply_start.sh" >/dev/null
+
+# 4) 장중(08:00~20:00 KST, NXT 포함) 15분마다 대시보드 재발행 — 현재가 갱신
 echo "▶ 장중 대시보드 재발행 기동"
 bash "$DIR/scripts/dashboard_refresh_start.sh" >/dev/null
 
 echo
 echo "가동 중인 tmux 세션:"
-tmux ls | grep -E "invest-bot|kakao-fwd|dash-refresh" || true
+tmux ls | grep -E "invest-bot|kakao-fwd|kakao-apply|dash-refresh" || true
 echo
 echo "보기:    tmux attach -t invest-bot   (나오기: Ctrl-b d)"
-echo "로그:    tail -f '$DIR/logs/kakao_forward.log'  /  dashboard_refresh.log"
-echo "전체끄기: tmux kill-session -t invest-bot \\; kill-session -t kakao-fwd \\; kill-session -t dash-refresh"
+echo "로그:    tail -f '$DIR/logs/kakao_forward.log'  /  kakao_apply.log  /  dashboard_refresh.log"
+echo "전체끄기: tmux kill-session -t invest-bot \\; kill-session -t kakao-fwd \\; kill-session -t kakao-apply \\; kill-session -t dash-refresh"
