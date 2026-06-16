@@ -718,7 +718,10 @@ def _build_writeapp_files() -> dict[str, bytes]:
     if not tunnel:
         return {}
     html = src.read_text(encoding="utf-8")
-    cfg = json.dumps({"api": tunnel, "authDomain": f"{firebase_publish.SITE_ID}.web.app"}, ensure_ascii=False)
+    # authDomain 은 기본값(firebaseapp.com) 사용 — 구글 OAuth 클라이언트에 등록된
+    # 리다이렉트 핸들러가 firebaseapp.com 이라, web.app 으로 바꾸면 'redirect_uri
+    # 불일치 → 액세스 차단'. 앱은 web.app 에서 서빙되지만 authDomain 은 표준값 유지.
+    cfg = json.dumps({"api": tunnel}, ensure_ascii=False)
     html = html.replace("</head>", f"<script>window.__APPCFG__={cfg};</script></head>", 1)
     return {
         "/app.html": html.encode("utf-8"),
