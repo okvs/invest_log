@@ -676,6 +676,21 @@ def _format_man(n: float) -> str:
     return f"{man:,}만"
 
 
+def _short_won(v: float) -> str:
+    """금액을 억/천(만)/백(만) 단위로 짧게, 저단위 이하는 절삭(반올림 X).
+
+    예: 124,553,200→1.2억, 29,757,030→2.9천, 6,500,000→6백, <1백만→0.
+    """
+    v = abs(float(v))
+    if v >= 1e8:
+        return f"{int(v // 1e7) / 10:.1f}억"
+    if v >= 1e7:
+        return f"{int(v // 1e6) / 10:.1f}천"
+    if v >= 1e6:
+        return f"{int(v // 1e6)}백"
+    return "0"
+
+
 def _build_broker_breakdown_html(
     active: list[dict], rows: list[dict], cash_by_account: dict | None,
 ) -> str:
@@ -709,38 +724,39 @@ def _build_broker_breakdown_html(
     if not brokers:
         return ""
 
-    C_CASH, C_LOAN, C_NET = "#6b7280", "#d83c3c", "var(--accent)"
+    C_CASH, C_NET, C_LOAN = "#6b7280", "var(--accent)", "#d83c3c"
     blocks = ""
     for acct, d in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True):
         cash, loan = d["cash"], d["loan"]
         net = d["eval"] - loan          # 평가금 − 융자액 = 순평가(내 돈)
-        total = cash + d["eval"]        # = 예수금 + 융자액 + (평가금−융자액)
+        total = cash + d["eval"]        # = 예수금 + (평가금−융자액) + 융자액
         if total <= 0:
             continue
-        seg_html = ""
-        for label, val, color in (("예수금", cash, C_CASH), ("융자액", loan, C_LOAN),
-                                   ("평가금−융자액", net, C_NET)):
-            pct = (val / total * 100) if total else 0
-            if pct <= 0:
-                continue
+        # 순서: 예수금 → 평가금−융자액 → 융자(맨 오른쪽)
+        segs = [("예수금", cash, C_CASH), ("평가금−융자액", net, C_NET), ("융자액", loan, C_LOAN)]
+        segs = [(lab, val, col, val / total * 100) for lab, val, col in segs if val > 0]
+        bar_html = amt_html = ""
+        for label, val, color, pct in segs:
             lbl = f'<span class="seg-label">{pct:.0f}%</span>' if pct >= 7 else ""
             tip = _html_escape(f"{label} {pct:.1f}% · {format_number(int(round(val)))}원", quote=True)
-            seg_html += (
+            bar_html += (
                 f'<div class="stack-group" style="width:{pct}%" data-tip="{tip}">'
                 f'<div class="stack-seg" style="width:100%;background:{color}"></div>{lbl}</div>'
             )
+            amt_html += f'<span style="width:{pct}%;color:{color}">{_short_won(val)}</span>'
         blocks += (
             f'<div class="broker-head"><b>{_html_escape(acct)}</b>'
             f'<span class="broker-sub">예수금 {format_number(int(round(cash)))} · '
             f'평가 {format_number(int(round(d["eval"]))) } · 융자 {format_number(int(round(loan)))}</span></div>'
-            f'<div class="stack broker-stack">{seg_html}</div>'
+            f'<div class="stack broker-stack">{bar_html}</div>'
+            f'<div class="broker-amts">{amt_html}</div>'
         )
 
     legend = (
         '<div class="broker-legend">'
         f'<span><i style="background:{C_CASH}"></i>예수금</span>'
-        f'<span><i style="background:{C_LOAN}"></i>융자액</span>'
         f'<span><i style="background:var(--accent)"></i>평가금−융자액</span>'
+        f'<span><i style="background:{C_LOAN}"></i>융자액</span>'
         '</div>'
     )
     return ('<div class="section-title" style="margin-top:32px">증권사별 구성 (KB · 신한)</div>'
@@ -1196,7 +1212,10 @@ def build_html_report(
   .broker-head {{ display:flex; align-items:baseline; justify-content:space-between;
                  gap:8px; margin:0 2px 6px; font-size:14px; }}
   .broker-sub {{ font-size:11px; color:#888; font-weight:400; }}
-  .broker-stack {{ margin-bottom:18px; height:30px; }}
+  .broker-stack {{ margin-bottom:3px; height:30px; }}
+  .broker-amts {{ display:flex; margin:0 0 18px; }}
+  .broker-amts span {{ text-align:center; font-size:10px; font-weight:700;
+                      white-space:nowrap; overflow:visible; min-width:0; }}
   .broker-legend {{ display:flex; gap:16px; flex-wrap:wrap; margin:-4px 2px 8px;
                    font-size:12px; color:#aaa; }}
   .broker-legend span {{ display:inline-flex; align-items:center; gap:5px; }}
