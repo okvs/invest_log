@@ -393,7 +393,8 @@ def _build_quadrants_svg(
     # 좌우 여백은 최소화해 plot 이 화면 폭을 꽉 채우게 한다. 오른쪽 끝을 넘는
     # 라벨은 아래 로직에서 원 왼쪽(anchor=end)으로 뒤집어 잘림을 막는다.
     W, H = 820, 760
-    pad_l, pad_r, pad_t, pad_b = 60, 44, 52, 84
+    # pad_r 은 우측 끝 '+100%' 눈금 라벨(중앙정렬, 폭 ~30px의 절반)만 들어갈 만큼만.
+    pad_l, pad_r, pad_t, pad_b = 60, 20, 52, 84
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
