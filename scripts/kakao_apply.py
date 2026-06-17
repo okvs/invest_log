@@ -125,9 +125,74 @@ class ApplyResult:
 
 
 # ---------------------------------------------------------------------------
+# 계좌(KB/신한)별 by_account 분해 갱신 — 현물만. 카톡은 어느 증권사인지 알므로
+# 체결을 해당 계좌에 귀속시켜 백데이터(Holding.by_account)를 유지한다.
+# PWA/대시보드는 종목별 합산으로 통합표시(by_account는 표시에 쓰지 않음).
+# ---------------------------------------------------------------------------
+_ACCOUNT_BY_BROKER = {"KB증권": "KB", "신한투자증권": "신한"}
+
+
+def _account_for_broker(broker: str) -> str:
+    return _ACCOUNT_BY_BROKER.get(broker, "")
+
+
+def _update_by_account_buy(name: str, account: str, qty: int, price: float) -> None:
+    """매수분을 해당 계좌의 by_account 에 가산(평단 재계산)."""
+    if not account:
+        return
+    holdings = load_holdings()
+    for h in holdings:
+        if _norm(h.get("name", "")) != _norm(name):
+            continue
+        ba = h.get("by_account") or []
+        ent = next((x for x in ba if x.get("account") == account), None)
+        amt = price * qty
+        if ent:
+            nq = int(ent.get("quantity", 0)) + qty
+            prev = float(ent.get("total_invested") or ent.get("avg_price", 0) * ent.get("quantity", 0))
+            nt = prev + amt
+            ent["quantity"] = nq
+            ent["total_invested"] = nt
+            ent["avg_price"] = round(nt / nq) if nq else 0
+        else:
+            ba.append({"account": account, "quantity": qty,
+                       "avg_price": round(price), "total_invested": amt, "funding": ""})
+        h["by_account"] = ba
+        save_holdings(holdings)
+        return
+
+
+def _update_by_account_sell(name: str, account: str, qty: int) -> None:
+    """매도분을 해당 계좌의 by_account 에서 차감(평단 유지, 전량 시 항목 제거).
+
+    해당 계좌에 by_account 기록이 없으면 건너뛴다(아직 미기록 — 추후 reconcile).
+    종목 전량매도로 holding 자체가 사라졌으면 by_account도 함께 사라져 처리 불필요.
+    """
+    if not account:
+        return
+    holdings = load_holdings()
+    for h in holdings:
+        if _norm(h.get("name", "")) != _norm(name):
+            continue
+        ba = h.get("by_account") or []
+        ent = next((x for x in ba if x.get("account") == account), None)
+        if not ent:
+            return
+        rem = int(ent.get("quantity", 0)) - qty
+        if rem > 0:
+            ent["quantity"] = rem
+            ent["total_invested"] = ent.get("avg_price", 0) * rem
+        else:
+            ba.remove(ent)
+        h["by_account"] = ba
+        save_holdings(holdings)
+        return
+
+
+# ---------------------------------------------------------------------------
 # 주식
 # ---------------------------------------------------------------------------
-def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool) -> ApplyResult:
+def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str = "") -> ApplyResult:
     name = msg.name
     qty = int(msg.quantity)
     price = float(msg.price)
@@ -155,6 +220,9 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool) -> ApplyResu
                 thesis=(existing or {}).get("buy_thesis", ""),
             )
             _process_and_save(buy_input, margin_ratio=100)
+            _update_by_account_buy(name, account, qty, price)  # 계좌별 분해 갱신
+        if account:
+            summary += f" · [{account}]"
         return ApplyResult(True, "주식매수", summary, " · ".join(warns))
 
     # sell
@@ -209,6 +277,9 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool) -> ApplyResu
         txs = load_transactions()
         txs.append(tx.to_dict())
         save_transactions(txs)
+        _update_by_account_sell(name, account, qty)  # 계좌별 분해 차감
+    if account:
+        summary += f" · [{account}]"
     return ApplyResult(True, "주식매도", summary, "")
 
 
@@ -347,8 +418,12 @@ def _apply_futures(msg: FuturesBrokerMessage, *, ts_kst: str, dry_run: bool) -> 
 # ---------------------------------------------------------------------------
 # 메시지 → 적용
 # ---------------------------------------------------------------------------
-def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False) -> ApplyResult | None:
-    """카톡 1건(원문 상세)을 적용. 체결이 아니면(파싱 실패) None 반환."""
+def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False,
+                  account: str = "") -> ApplyResult | None:
+    """카톡 1건(원문 상세)을 적용. 체결이 아니면(파싱 실패) None 반환.
+
+    account: 출처 계좌(KB/신한) — 현물 by_account 분해 갱신용(선물은 미사용).
+    """
     try:
         msg = parse_broker_message(detail)
     except ValueError:
@@ -356,7 +431,7 @@ def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False) -> Ap
     msg.name = resolve_name(msg.name, nickname_map=load_nickname_map())
     if isinstance(msg, FuturesBrokerMessage):
         return _apply_futures(msg, ts_kst=ts_kst, dry_run=dry_run)
-    return _apply_stock(msg, ts_kst=ts_kst, dry_run=dry_run)
+    return _apply_stock(msg, ts_kst=ts_kst, dry_run=dry_run, account=account)
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +526,8 @@ def poll_once(
             detail, sent_kst = detail_text(message, attachment)
             if not detail or not detail.strip():
                 continue
-            res = apply_message(detail, ts_kst=sent_kst or "", dry_run=dry_run)
+            res = apply_message(detail, ts_kst=sent_kst or "", dry_run=dry_run,
+                                account=_account_for_broker(broker))
             if res is None:
                 continue
             results.append((broker, int(log_id), sent_kst or "", res))

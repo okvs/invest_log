@@ -247,6 +247,55 @@ def test_stock_sell_oversize_is_skipped():
 
 
 # ---------------------------------------------------------------------------
+# by_account (KB/신한 계좌별 분해) 갱신 — 카톡이 어느 증권사인지로 귀속
+# ---------------------------------------------------------------------------
+def _seed_sk_two_accounts():
+    save_account({"initial_capital": 155000000.0, "cash": 56874048.0})
+    save_holdings([{
+        "id": "sk", "name": "SK하이닉스", "ticker": "000660.KS", "sector": "반도체",
+        "buy_date": "2026-01-01", "avg_price": 1999943, "quantity": 35,
+        "total_invested": 69998000.0, "credit_loan": 0.0, "buy_thesis": "",
+        "research_notes": "", "transaction_ids": [],
+        "by_account": [
+            {"account": "KB", "quantity": 30, "avg_price": 2033100, "total_invested": 60993000, "funding": ""},
+            {"account": "신한", "quantity": 5, "avg_price": 1801000, "total_invested": 9005000, "funding": "자기융자"},
+        ],
+    }])
+
+
+def test_by_account_buy_updates_only_that_account():
+    _seed_sk_two_accounts()
+    res = ka.apply_message(shinhan_stock("buy", "SK하이닉스", "000660", 5, 2100000), account="신한")
+    assert res.applied
+    h = next(x for x in load_holdings() if x["name"] == "SK하이닉스")
+    ba = {x["account"]: x for x in h["by_account"]}
+    assert ba["신한"]["quantity"] == 10   # 5 → 10
+    assert ba["KB"]["quantity"] == 30      # 다른 계좌 불변
+    assert h["quantity"] == 40             # 합산도 증가
+
+
+def test_by_account_sell_reduces_only_that_account():
+    _seed_sk_two_accounts()
+    res = ka.apply_message(kb_stock("sell", "SK하이닉스", 10, 2500000), account="KB")
+    assert res.applied
+    h = next(x for x in load_holdings() if x["name"] == "SK하이닉스")
+    ba = {x["account"]: x for x in h["by_account"]}
+    assert ba["KB"]["quantity"] == 20      # 30 → 20
+    assert ba["신한"]["quantity"] == 5      # 불변
+    assert h["quantity"] == 25
+
+
+def test_by_account_buy_new_stock_tags_account():
+    save_account({"initial_capital": 155000000.0, "cash": 56874048.0})
+    save_holdings([])
+    res = ka.apply_message(shinhan_stock("buy", "삼성전기", "009150", 10, 1761000), account="신한")
+    assert res.applied
+    h = next(x for x in load_holdings() if x["name"] == "삼성전기")
+    assert [b["account"] for b in h["by_account"]] == ["신한"]
+    assert h["by_account"][0]["quantity"] == 10
+
+
+# ---------------------------------------------------------------------------
 # 비거래 / 파싱 실패
 # ---------------------------------------------------------------------------
 def test_non_trade_message_returns_none():
