@@ -18,6 +18,10 @@ class Holding:
     credit_loan: float = 0.0
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     transaction_ids: list[str] = field(default_factory=list)
+    # 계좌별 분해(KB/신한). 백데이터에만 기록 — PWA/대시보드는 합산(이 항목 1개)로 표시.
+    # 예: [{"account":"KB","quantity":30,"avg_price":2033100,"funding":""},
+    #      {"account":"신한","quantity":5,"avg_price":1801000,"funding":"자기융자"}]
+    by_account: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +37,7 @@ class Holding:
             "buy_thesis": self.buy_thesis,
             "research_notes": self.research_notes,
             "transaction_ids": self.transaction_ids,
+            "by_account": self.by_account,
         }
 
     @classmethod
