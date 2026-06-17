@@ -1216,6 +1216,7 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
             futures_prices=futures_prices,
             futures_cash=account.get("futures_cash"),
             futures_maintenance_ratio=account.get("futures_maintenance_ratio"),
+            cash_by_account=account.get("cash_by_account"),
         )
         my_html = my_buf.getvalue()
     elif futures_positions:

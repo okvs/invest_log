@@ -676,6 +676,77 @@ def _format_man(n: float) -> str:
     return f"{man:,}만"
 
 
+def _build_broker_breakdown_html(
+    active: list[dict], rows: list[dict], cash_by_account: dict | None,
+) -> str:
+    """증권사별(KB/신한) 예수금·융자액·(평가금−융자액) 스택 막대.
+
+    계좌별 예수금(cash_by_account) + 보유 종목 by_account(계좌별 수량·credit)로
+    계좌별 평가금(현재가×수량)·융자·순평가를 집계해 비중 스택바로 보여준다.
+    데이터(cash_by_account/by_account)가 없으면 ''(미표시).
+    """
+    if not cash_by_account:
+        return ""
+    name_to_cur = {r["name"]: r.get("cur_price") for r in rows}
+    brokers: dict[str, dict] = {}
+
+    def _b(acct: str) -> dict:
+        return brokers.setdefault(acct, {"cash": 0.0, "loan": 0.0, "eval": 0.0})
+
+    for acct, amt in cash_by_account.items():
+        _b(acct)["cash"] += float(amt or 0)
+    for h in active:
+        cur = name_to_cur.get(h.get("name"))
+        for e in h.get("by_account") or []:
+            acct = e.get("account")
+            if not acct:
+                continue
+            d = _b(acct)
+            qty = int(e.get("quantity", 0) or 0)
+            price = cur if cur is not None else float(e.get("avg_price", 0) or 0)
+            d["eval"] += float(price) * qty
+            d["loan"] += float(e.get("credit", 0) or 0)
+    if not brokers:
+        return ""
+
+    C_CASH, C_LOAN, C_NET = "#6b7280", "#d83c3c", "var(--accent)"
+    blocks = ""
+    for acct, d in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True):
+        cash, loan = d["cash"], d["loan"]
+        net = d["eval"] - loan          # 평가금 − 융자액 = 순평가(내 돈)
+        total = cash + d["eval"]        # = 예수금 + 융자액 + (평가금−융자액)
+        if total <= 0:
+            continue
+        seg_html = ""
+        for label, val, color in (("예수금", cash, C_CASH), ("융자액", loan, C_LOAN),
+                                   ("평가금−융자액", net, C_NET)):
+            pct = (val / total * 100) if total else 0
+            if pct <= 0:
+                continue
+            lbl = f'<span class="seg-label">{pct:.0f}%</span>' if pct >= 7 else ""
+            tip = _html_escape(f"{label} {pct:.1f}% · {format_number(int(round(val)))}원", quote=True)
+            seg_html += (
+                f'<div class="stack-group" style="width:{pct}%" data-tip="{tip}">'
+                f'<div class="stack-seg" style="width:100%;background:{color}"></div>{lbl}</div>'
+            )
+        blocks += (
+            f'<div class="broker-head"><b>{_html_escape(acct)}</b>'
+            f'<span class="broker-sub">예수금 {format_number(int(round(cash)))} · '
+            f'평가 {format_number(int(round(d["eval"]))) } · 융자 {format_number(int(round(loan)))}</span></div>'
+            f'<div class="stack broker-stack">{seg_html}</div>'
+        )
+
+    legend = (
+        '<div class="broker-legend">'
+        f'<span><i style="background:{C_CASH}"></i>예수금</span>'
+        f'<span><i style="background:{C_LOAN}"></i>융자액</span>'
+        f'<span><i style="background:var(--accent)"></i>평가금−융자액</span>'
+        '</div>'
+    )
+    return ('<div class="section-title" style="margin-top:32px">증권사별 구성 (KB · 신한)</div>'
+            + blocks + legend)
+
+
 def build_html_report(
     holdings: list[dict],
     title: str = "투자 현황",
@@ -686,6 +757,7 @@ def build_html_report(
     futures_prices: dict[str, float] | None = None,
     futures_cash: float | None = None,
     futures_maintenance_ratio: float | None = None,
+    cash_by_account: dict | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -1053,6 +1125,11 @@ def build_html_report(
     # 배지 HTML — 'AI vs Human' 배지는 사용자 요청으로 제거(항상 비움)
     badge_html = ""
 
+    # 증권사별(KB/신한) 예수금·융자·순평가 비중 막대 (show_cash + cash_by_account 있을 때만)
+    broker_section_html = (
+        _build_broker_breakdown_html(active, rows, cash_by_account) if show_cash else ""
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -1114,6 +1191,16 @@ def build_html_report(
                color:#fff; font-size:10px; font-weight:600; text-align:center; line-height:1.2;
                white-space:nowrap; pointer-events:none;
                text-shadow:0 0 3px rgba(0,0,0,0.55); }}
+
+  /* 증권사별 구성 */
+  .broker-head {{ display:flex; align-items:baseline; justify-content:space-between;
+                 gap:8px; margin:0 2px 6px; font-size:14px; }}
+  .broker-sub {{ font-size:11px; color:#888; font-weight:400; }}
+  .broker-stack {{ margin-bottom:18px; height:30px; }}
+  .broker-legend {{ display:flex; gap:16px; flex-wrap:wrap; margin:-4px 2px 8px;
+                   font-size:12px; color:#aaa; }}
+  .broker-legend span {{ display:inline-flex; align-items:center; gap:5px; }}
+  .broker-legend i {{ width:11px; height:11px; border-radius:3px; display:inline-block; }}
 
   /* 섹터 상세 */
   .section-title {{ font-size:15px; font-weight:700; color:#fff; margin-bottom:16px;
@@ -1250,6 +1337,7 @@ def build_html_report(
   </div>
 
   <div class="stack">{stack_segments}</div>
+  {broker_section_html}
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
   <div class="qd-header">
