@@ -389,10 +389,11 @@ def _build_quadrants_svg(
             "weight_label": f"{weight:.1f}%",
         })
 
-    # SVG 영역 — 정사각형 plot. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
-    # 우측 라벨(금액/비중 토글 시) 잘림 방지를 위해 좌우 여백을 넉넉히.
+    # SVG 영역. 배지는 plot 바깥에 배치하므로 top/bottom pad 확보.
+    # 좌우 여백은 최소화해 plot 이 화면 폭을 꽉 채우게 한다. 오른쪽 끝을 넘는
+    # 라벨은 아래 로직에서 원 왼쪽(anchor=end)으로 뒤집어 잘림을 막는다.
     W, H = 820, 760
-    pad_l, pad_r, pad_t, pad_b = 90, 116, 52, 84
+    pad_l, pad_r, pad_t, pad_b = 60, 44, 52, 84
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
@@ -584,9 +585,16 @@ def _build_quadrants_svg(
             ly = cy + r + 22
             anchor = "middle"
         else:
-            label_x = cx + r + 4
             ly = cy + 3
-            anchor = "start"
+            # 기본은 원 오른쪽(anchor=start). 라벨이 4분면 오른쪽 끝(W)을 넘으면
+            # 원 왼쪽(anchor=end)에 써서 잘리지 않게 한다.
+            name_w = _text_width_est(p["name"], 11)
+            if cx + r + 4 + name_w > W - 6:
+                label_x = cx - r - 4
+                anchor = "end"
+            else:
+                label_x = cx + r + 4
+                anchor = "start"
 
         # 금액/비중 토글용 tspan — body.show-amount / body.show-weight 클래스로 표시
         amount_span = (
