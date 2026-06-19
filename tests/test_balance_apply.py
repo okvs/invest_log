@@ -15,7 +15,12 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import balance_apply as ba  # noqa: E402
 
-from storage.json_store import load_holdings, save_holdings  # noqa: E402
+from storage.json_store import (  # noqa: E402
+    load_account,
+    load_holdings,
+    save_account,
+    save_holdings,
+)
 
 
 def _seed():
@@ -127,3 +132,33 @@ def test_apply_account_creates_missing_entry(capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert out["changes"][0]["new"] == 39725000
     assert load_holdings()[0]["credit_loan"] == 39725000
+
+
+def test_cash_account_preserves_other_and_sums(capsys, monkeypatch):
+    """KB D+2예수금만 갱신 → 신한 예수금 보존, 합산 cash = 계좌별 합."""
+    save_account({
+        "initial_capital": 155000000.0, "cash": 84258310.0,
+        "cash_by_account": {"KB": 29757030, "신한": 67117018},
+        "futures_cash": 48763854.0,
+    })
+    monkeypatch.setattr(ba, "_republish", lambda: False)
+    assert ba.cmd_cash("r", "82685159", account="KB") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["account_change"] == {"account": "KB", "old": 29757030, "new": 82685159}
+    assert out["new_cash"] == 82685159 + 67117018  # 신한 보존 + 합산
+
+    acc = load_account()
+    assert acc["cash_by_account"]["KB"] == 82685159
+    assert acc["cash_by_account"]["신한"] == 67117018      # 불변
+    assert acc["cash"] == 82685159 + 67117018
+    assert acc["futures_cash"] == 48763854.0               # 선물 버킷 불변
+
+
+def test_state_includes_cash(capsys):
+    save_account({"initial_capital": 1.0, "cash": 123.0,
+                  "cash_by_account": {"KB": 100, "신한": 23}, "futures_cash": 9.0})
+    save_holdings([])
+    assert ba.cmd_state() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["cash"] == 123 and out["futures_cash"] == 9
+    assert out["cash_by_account"] == {"KB": 100, "신한": 23}

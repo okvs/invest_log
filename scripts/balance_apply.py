@@ -33,7 +33,12 @@ for _p in (str(PROJECT_ROOT), str(SCRIPTS_DIR)):
         sys.path.insert(0, _p)
 
 from bot.handlers.credit_sync import apply_credit_sync  # noqa: E402
-from storage.json_store import load_holdings, save_holdings  # noqa: E402
+from storage.json_store import (  # noqa: E402
+    load_account,
+    load_holdings,
+    save_account,
+    save_holdings,
+)
 
 SHOTS_DIR = PROJECT_ROOT / "data" / "balance_shots"
 
@@ -74,7 +79,14 @@ def cmd_state() -> int:
             ],
         })
     rows.sort(key=lambda r: r["name"])
-    print(json.dumps({"holdings": rows}, ensure_ascii=False, indent=2))
+    acc = load_account()
+    out = {
+        "holdings": rows,
+        "cash": round(float(acc.get("cash", 0) or 0)),                 # 현물 예수금(합산, NAV용)
+        "cash_by_account": acc.get("cash_by_account") or {},           # 계좌별 예수금(증권사 막대용)
+        "futures_cash": round(float(acc.get("futures_cash", 0) or 0)), # 선물 가용예수금(별도 버킷)
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -169,6 +181,50 @@ def _apply_by_account(
     return changes, unmatched, warnings
 
 
+# ---------------------------------------------------------------------------
+# cash — D+2예수금(현물) 보정. 한 계좌만 보이는 스샷이면 그 계좌만 갱신.
+# ---------------------------------------------------------------------------
+def cmd_cash(req_id: str, amount_str: str, account: str | None = None) -> int:
+    try:
+        amount = float(str(amount_str).replace(",", "").strip())
+    except (TypeError, ValueError):
+        sys.exit(f"error: 예수금 금액 인식 실패: {amount_str!r}")
+    if amount < 0:
+        sys.exit("error: 예수금은 0 이상이어야 합니다.")
+
+    acc = load_account()
+    old_cash = float(acc.get("cash", 0) or 0)
+    cba = dict(acc.get("cash_by_account") or {})
+
+    if account:
+        # 그 계좌(KB/신한) D+2예수금만 갱신, 다른 계좌는 보존, 합산 cash = 계좌별 합.
+        acct_old = float(cba.get(account, 0) or 0)
+        cba[account] = amount
+        new_cash = sum(float(v or 0) for v in cba.values())
+        acc["cash_by_account"] = cba
+        acc["cash"] = new_cash
+        acct_info = {"account": account, "old": round(acct_old), "new": round(amount)}
+    else:
+        # 계좌 구분 없이 합산 예수금 직접 set(전체 화면일 때).
+        new_cash = amount
+        acc["cash"] = amount
+        acct_info = None
+
+    save_account(acc)
+    published = _republish()
+    out = {
+        "req_id": req_id,
+        "account": account or "(합산)",
+        "old_cash": round(old_cash),
+        "new_cash": round(new_cash),
+        "account_change": acct_info,
+        "cash_by_account": acc.get("cash_by_account") or {},
+        "dashboard_published": published,
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _republish() -> bool:
     """적용 직후 대시보드를 강제 재발행(장 시간 무관)해 융자/NAV 를 즉시 반영."""
     try:
@@ -230,6 +286,14 @@ def main(argv=None) -> int:
         help="스샷이 한 계좌만 보일 때 그 계좌(KB/신한)만 갱신하고 다른 계좌 융자는 보존(combined 재계산). 생략 시 합산값 직접 set.",
     )
 
+    ap_cash = sub.add_parser("cash", help="D+2예수금(현물) 보정 + 대시보드 재발행")
+    ap_cash.add_argument("req_id")
+    ap_cash.add_argument("amount", help="예수금(원). 한 계좌 스샷이면 --account 와 함께 그 계좌 D+2예수금.")
+    ap_cash.add_argument(
+        "--account", default=None,
+        help="스샷이 한 계좌만 보일 때 그 계좌(KB/신한)만 갱신하고 다른 계좌 예수금은 보존(합산 재계산). 생략 시 합산 직접 set.",
+    )
+
     ap_reply = sub.add_parser("reply", help="요청 chat_id 로 텔레그램 회신")
     ap_reply.add_argument("req_id")
     ap_reply.add_argument("--text", default=None, help="회신 텍스트(생략 시 stdin)")
@@ -239,6 +303,8 @@ def main(argv=None) -> int:
         return cmd_state()
     if args.cmd == "apply":
         return cmd_apply(args.req_id, args.loan_json, account=args.account)
+    if args.cmd == "cash":
+        return cmd_cash(args.req_id, args.amount, account=args.account)
     if args.cmd == "reply":
         return cmd_reply(args.req_id, args.text)
     return 1
