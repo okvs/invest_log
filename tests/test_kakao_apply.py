@@ -309,3 +309,60 @@ def test_non_trade_message_returns_none():
 
 def test_unsupported_message_returns_none():
     assert ka.apply_message("그냥 광고 메시지입니다") is None
+
+
+# ---------------------------------------------------------------------------
+# NH투자증권(나무) 미국주식 — 파싱 + 자동반영(USD, usd_cash)
+# ---------------------------------------------------------------------------
+def _nh_msg(side: str, ticker: str, qty: int, price: str, kor: str = "그래닛셰어즈 2배 ETF") -> str:
+    return (
+        "[NH투자증권] 해외주식 체결집계 내역 안내\n"
+        "주문일자 : 06월18일\n계좌명   : 정*민\n"
+        f"매매구분 : {side}\n거래국가 : 미국\n"
+        f"종목명   : ({ticker} US){kor}\n"
+        f"주문수량 : {qty}주\n체결수량 : {qty}주\n거래통화 : USD\n"
+        f"체결가격 : {price}\n"
+    )
+
+
+def test_nh_us_message_parsed():
+    from parsers.input_parser import parse_broker_message, BrokerMessage
+    m = parse_broker_message(_nh_msg("매수", "MULL", 7, "867.000"))
+    assert isinstance(m, BrokerMessage)
+    assert m.currency == "USD" and m.ticker == "MULL" and m.broker == "나무"
+    assert m.trade_type == "buy" and m.quantity == 7 and m.price == 867.0
+
+
+def test_nh_us_buy_creates_usd_holding_and_cash():
+    from storage.json_store import save_account, load_account
+    save_account({"initial_capital": 1.0, "usd_cash": 10000.0})
+    save_holdings([])
+    res = ka.apply_message(_nh_msg("매수", "MULL", 7, "867.000"), ts_kst="2026-06-19 10:56:52")
+    assert res is not None and res.applied and res.action == "미국매수"
+    h = next(h for h in load_holdings() if h.get("ticker") == "MULL")
+    assert h["currency"] == "USD" and h["quantity"] == 7 and h["avg_price"] == 867.0
+    assert load_account()["usd_cash"] == 10000.0 - 867.0 * 7   # USD 예수금 차감
+
+
+def test_nh_us_buy_adds_to_existing_and_sell():
+    from storage.json_store import save_account, load_account
+    save_account({"initial_capital": 1.0, "usd_cash": 0.0})
+    save_holdings([{
+        "name": "마이크론2배", "sector": "미국주식", "buy_date": "2026-06-10",
+        "quantity": 10, "avg_price": 800.0,
+        "total_invested": 8000.0, "ticker": "MULL", "currency": "USD",
+    }])
+    # 추가매수 5주 @ 900 → 평단 재계산, usd_cash -= 4500
+    ka.apply_message(_nh_msg("매수", "MULL", 5, "900.000"), ts_kst="2026-06-19 10:00:00")
+    h = next(h for h in load_holdings() if h.get("ticker") == "MULL")
+    assert h["quantity"] == 15
+    assert h["avg_price"] == round((8000.0 + 4500.0) / 15)
+    assert load_account()["usd_cash"] == -4500.0
+    # 매도 6주 @ 1000 → 보유 9주, usd_cash += 6000, 실현손익 USD 기록
+    res = ka.apply_message(_nh_msg("매도", "MULL", 6, "1000.000"), ts_kst="2026-06-19 11:00:00")
+    assert res.applied and res.action == "미국매도"
+    h = next(h for h in load_holdings() if h.get("ticker") == "MULL")
+    assert h["quantity"] == 9
+    assert load_account()["usd_cash"] == -4500.0 + 6000.0
+    sell_tx = [t for t in load_transactions() if t.get("type") == "sell" and t.get("currency") == "USD"]
+    assert sell_tx and sell_tx[-1]["total_amount"] == 6000.0

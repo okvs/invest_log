@@ -84,6 +84,7 @@ LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "kakao_apply.log")
 TARGETS = {
     "KB증권": 4803250456343651,
     "신한투자증권": 4697684299181193,
+    "NH투자증권": 4739904926139546,   # 나무 — 미국주식(USD)
 }
 
 
@@ -284,6 +285,105 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
 
 
 # ---------------------------------------------------------------------------
+# 미국주식 (나무/NH) — USD. 티커로 매칭, account.usd_cash(미국 예수금) 가감.
+# ---------------------------------------------------------------------------
+def _find_us(holdings: list[dict], ticker: str) -> dict | None:
+    tk = (ticker or "").upper()
+    for h in holdings:
+        if h.get("currency") == "USD" and (h.get("ticker", "") or "").upper() == tk:
+            return h
+    return None
+
+
+def _adjust_usd_cash(delta: float) -> None:
+    acc = load_account()
+    acc["usd_cash"] = float(acc.get("usd_cash", 0) or 0) + delta
+    save_account(acc)
+
+
+def _apply_us_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool) -> ApplyResult:
+    ticker = (msg.ticker or "").upper()
+    qty = int(msg.quantity)
+    price = float(msg.price)        # USD 주당
+    total = price * qty             # USD
+    holdings = load_holdings()
+    existing = _find_us(holdings, ticker)
+
+    if msg.trade_type == "buy":
+        summary = f"미국 매수 {ticker} {qty}주 @ ${price:,.2f} (${total:,.2f})"
+        warns = []
+        if not existing:
+            warns.append("신규 미국종목 — 섹터 '미국주식' 기본('수정'으로 보완)")
+        if not dry_run:
+            tx = Transaction(
+                type="buy", name=msg.name, sector=(existing or {}).get("sector", "미국주식"),
+                price=price, quantity=qty, total_amount=total, currency="USD",
+                date=_to_iso(ts_kst),
+            )
+            if existing:
+                idx = holdings.index(existing)
+                h = Holding.from_dict(existing)
+                h.add_buy(price, qty, tx.id, margin_ratio=100)  # USD 평단 재계산
+                if not h.ticker:
+                    h.ticker = ticker
+                holdings[idx] = h.to_dict()
+            else:
+                h = Holding(
+                    name=msg.name, sector="미국주식", buy_date=_to_iso(ts_kst)[:10],
+                    avg_price=price, quantity=qty, total_invested=total,
+                    ticker=ticker, currency="USD", transaction_ids=[tx.id],
+                )
+                holdings.append(h.to_dict())
+            save_holdings(holdings)
+            _adjust_usd_cash(-total)         # 미국 예수금 차감(USD)
+            txs = load_transactions()
+            txs.append(tx.to_dict())
+            save_transactions(txs)
+        return ApplyResult(True, "미국매수", summary, " · ".join(warns))
+
+    # sell
+    if existing is None:
+        return ApplyResult(
+            False, "skip", f"미국 매도 {ticker} {qty}주 @ ${price:,.2f}",
+            "보유 미국종목 없음 → 미반영(수동 확인)",
+        )
+    if qty > int(existing.get("quantity", 0)):
+        return ApplyResult(
+            False, "skip", f"미국 매도 {ticker} {qty}주 @ ${price:,.2f}",
+            f"보유 {existing.get('quantity', 0)}주 초과 → 미반영(수동 확인)",
+        )
+    avg = float(existing.get("avg_price", 0) or 0)
+    pnl = (price - avg) * qty                # USD
+    pnl_pct = (pnl / (avg * qty) * 100) if (avg and qty) else 0.0
+    summary = (
+        f"미국 매도 {ticker} {qty}주 @ ${price:,.2f} · "
+        f"손익 ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+    )
+    if not dry_run:
+        h = Holding.from_dict(existing)
+        h.remove_sell(qty)                   # 미국은 credit_loan 0 → 단순 차감
+        new_holdings = []
+        for x in holdings:
+            if x.get("currency") == "USD" and (x.get("ticker", "") or "").upper() == ticker:
+                if h.quantity > 0:
+                    new_holdings.append(h.to_dict())
+            else:
+                new_holdings.append(x)
+        save_holdings(new_holdings)
+        _adjust_usd_cash(total)              # 매도대금 미국 예수금 가산(USD)
+        tx = Transaction(
+            type="sell", name=msg.name, sector=existing.get("sector", "미국주식"),
+            price=price, quantity=qty, total_amount=total, profit_loss=pnl,
+            profit_loss_pct=round(pnl_pct, 2), sell_reason=APPLY_REASON,
+            holding_id=existing.get("id", ""), currency="USD", date=_to_iso(ts_kst),
+        )
+        txs = load_transactions()
+        txs.append(tx.to_dict())
+        save_transactions(txs)
+    return ApplyResult(True, "미국매도", summary, "")
+
+
+# ---------------------------------------------------------------------------
 # 선물
 # ---------------------------------------------------------------------------
 def _find_fut_pos(name: str, cm: str, direction: str) -> dict | None:
@@ -428,9 +528,13 @@ def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False,
         msg = parse_broker_message(detail)
     except ValueError:
         return None  # 입출금/안내/비지원 등 — 적용 대상 아님
-    msg.name = resolve_name(msg.name, nickname_map=load_nickname_map())
     if isinstance(msg, FuturesBrokerMessage):
+        msg.name = resolve_name(msg.name, nickname_map=load_nickname_map())
         return _apply_futures(msg, ts_kst=ts_kst, dry_run=dry_run)
+    if getattr(msg, "currency", "KRW") == "USD":
+        # 미국주식(나무/NH) — 티커로 매칭, USD 예수금(usd_cash) 가감
+        return _apply_us_stock(msg, ts_kst=ts_kst, dry_run=dry_run)
+    msg.name = resolve_name(msg.name, nickname_map=load_nickname_map())
     return _apply_stock(msg, ts_kst=ts_kst, dry_run=dry_run, account=account)
 
 

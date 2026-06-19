@@ -206,9 +206,11 @@ def lookup_ticker(name: str, ticker_map: dict[str, str] | None = None) -> str:
 class BrokerMessage:
     name: str
     quantity: int
-    price: float  # 주당 가격
+    price: float  # 주당 가격 (currency 단위)
     trade_type: str  # "buy" or "sell"
-    broker: str  # "KB" or "신한"
+    broker: str  # "KB" | "신한" | "나무"
+    currency: str = "KRW"  # "KRW"(국내) | "USD"(미국, 나무/NH)
+    ticker: str = ""        # 미국주식 심볼(예: MULL). 국내는 빈 값.
 
 
 @dataclass
@@ -341,17 +343,68 @@ def _parse_kb_futures_message(text: str) -> FuturesBrokerMessage:
     )
 
 
+# NH투자증권(나무) 해외주식 종목명 형식: "(MULL US)그래닛셰어즈 …" → 티커 MULL
+_NH_US_TICKER_RE = re.compile(r"\(\s*([A-Za-z][A-Za-z0-9.]*)\s+US\s*\)")
+
+
+def _parse_nh_us_message(text: str) -> BrokerMessage:
+    """NH투자증권(나무) 해외주식 체결집계 알림 파싱 → 미국주식 BrokerMessage(USD).
+
+    형식 예:
+      [NH투자증권] 해외주식 체결집계 내역 안내
+      매매구분 : 매수        거래국가 : 미국
+      종목명   : (MULL US)그래닛셰어즈 마이크론 데일리 2배 ETF
+      체결수량 : 7주          거래통화 : USD       체결가격 : 867.000
+    """
+    type_m = re.search(r"매매구분\s*:\s*(매수|매도)", text)
+    name_m = re.search(r"종목명\s*:\s*(.+)", text)
+    qty_m = re.search(r"체결수량\s*:\s*([\d,]+)", text)
+    price_m = re.search(r"체결가격\s*:\s*([\d,.]+)", text)
+    cur_m = re.search(r"거래통화\s*:\s*([A-Za-z]+)", text)
+
+    if not all([type_m, name_m, qty_m, price_m]):
+        raise ValueError("NH투자증권 해외주식 메시지 형식을 인식할 수 없습니다.")
+
+    currency = (cur_m.group(1).strip().upper() if cur_m else "USD")
+    if currency != "USD":
+        raise ValueError(f"미지원 통화의 NH 해외주식 체결입니다: {currency}")
+
+    raw_name = name_m.group(1).strip()
+    tk = _NH_US_TICKER_RE.search(raw_name)
+    if not tk:
+        raise ValueError("NH 해외주식 종목명에서 미국 티커를 찾을 수 없습니다.")
+    ticker = tk.group(1).upper()
+    kor_name = raw_name[tk.end():].strip() or ticker  # 괄호 뒤 한글명(표시용), 없으면 티커
+
+    trade_type = "buy" if type_m.group(1) == "매수" else "sell"
+    quantity = int(qty_m.group(1).replace(",", ""))
+    price = float(price_m.group(1).replace(",", ""))
+    if quantity <= 0:
+        raise ValueError("체결수량이 0 이하입니다.")
+    if price <= 0:
+        raise ValueError("체결가격이 0 이하입니다.")
+
+    return BrokerMessage(
+        name=kor_name, quantity=quantity, price=price, trade_type=trade_type,
+        broker="나무", currency="USD", ticker=ticker,
+    )
+
+
 def parse_broker_message(text: str) -> BrokerMessage | FuturesBrokerMessage:
     """증권사 체결 메시지를 자동 감지하여 파싱.
 
     KB증권 선물옵션이면 FuturesBrokerMessage,
-    KB/신한 현물이면 BrokerMessage 반환.
+    KB/신한 현물·NH 해외주식이면 BrokerMessage 반환.
     """
     stripped = text.strip()
     if stripped.startswith("[KB증권]"):
         if _is_kb_futures(text):
             return _parse_kb_futures_message(text)
         return _parse_kb_message(text)
+    if stripped.startswith("[NH투자증권]"):
+        if "해외주식" in stripped:
+            return _parse_nh_us_message(text)
+        raise ValueError("지원하지 않는 NH투자증권 메시지입니다(해외주식만 지원).")
     if stripped.startswith("계좌명"):
         return _parse_shinhan_message(text)
     raise ValueError("지원하는 증권사 메시지 형식이 아닙니다.")

@@ -42,6 +42,7 @@ LOG_FILE = os.path.join(PROJECT_ROOT, "logs", "kakao_forward.log")
 TARGETS = {
     "KB증권": 4803250456343651,
     "신한투자증권": 4697684299181193,
+    "NH투자증권": 4739904926139546,   # 나무 — 미국주식(USD) 해외주식 체결집계
 }
 TG_LIMIT = 4000  # 텔레그램 메시지 길이 한도(4096) 여유분
 HEALTH_KEY = "__health__"   # state 안 헬스 상태 키(숫자 chat_id와 충돌 안 함)

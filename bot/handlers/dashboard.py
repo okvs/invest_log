@@ -233,14 +233,20 @@ def _build_history_html() -> str:
 
     for t in load_transactions():
         is_buy = t.get("type") == "buy"
+        is_usd = t.get("currency") == "USD"
+        if is_usd:
+            detail = f"{int(t.get('quantity', 0)):,}주 × ${float(t.get('price', 0) or 0):,.2f}"
+        else:
+            detail = f"{int(t.get('quantity', 0)):,}주 × {_fmt_won(t.get('price'))}원"
         items.append({
             "date": str(t.get("date", "")),
             "cls": "b-buy" if is_buy else "b-sell",
-            "label": "매수" if is_buy else "매도",
+            "label": ("🇺🇸" if is_usd else "") + ("매수" if is_buy else "매도"),
             "name": t.get("name", ""),
-            "detail": f"{int(t.get('quantity', 0)):,}주 × {_fmt_won(t.get('price'))}원",
+            "detail": detail,
             "pnl": None if is_buy else t.get("profit_loss"),
             "pnl_pct": None if is_buy else t.get("profit_loss_pct"),
+            "cur": "USD" if is_usd else "KRW",
         })
 
     fut_label = {"open": "선물진입", "close": "선물청산",
@@ -279,7 +285,11 @@ def _build_history_html() -> str:
             cls = "profit" if pnl >= 0 else "loss"
             pct = it.get("pnl_pct")
             pct_s = f" ({sign}{float(pct):.1f}%)" if pct is not None else ""
-            pnl_html = f'<span class="pnl {cls}">{sign}{_fmt_won(pnl)}원{pct_s}</span>'
+            if it.get("cur") == "USD":
+                amt = f"{'+' if pnl >= 0 else '-'}${abs(pnl):,.2f}"
+            else:
+                amt = f"{sign}{_fmt_won(pnl)}원"
+            pnl_html = f'<span class="pnl {cls}">{amt}{pct_s}</span>'
         tm = it["date"][11:16]
         out.append(
             '<div class="hist-row">'
