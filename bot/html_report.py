@@ -686,6 +686,16 @@ def _format_man(n: float) -> str:
     return f"{man:,}만"
 
 
+def _format_eval_short(n: float) -> str:
+    """보유종목 평가금 컬럼용 짧은 표기 — 1억 이상은 'N.N억'(불필요한 0 절삭,
+    백만 자리까지), 미만은 만 단위. 예: 125,157,410→1.25억 · 5,200만→5,200만."""
+    v = abs(float(n))
+    if v >= 1e8:
+        s = f"{v / 1e8:.2f}".rstrip("0").rstrip(".")
+        return f"{s}억"
+    return f"{int(v // 10000):,}만"
+
+
 def _short_won(v: float) -> str:
     """금액을 억/천(만)/백(만) 단위로 짧게, 저단위 이하는 절삭(반올림 X).
 
@@ -1023,7 +1033,7 @@ def build_html_report(
             data-eval="{r["eval"]}" data-pnl="{r["pnl"]}" data-pnlpct="{r["pnl_pct"]:.2f}">
           <td><span class="dot" style="background:{dot_color}"></span>{r["sector"]}</td>
           <td>{name_html}</td>
-          <td class="num">{_format_man(r["eval"])}</td>
+          <td class="num">{_format_eval_short(r["eval"])}</td>
           <td class="thesis">{r["thesis"]}</td>
           <td class="num {pnl_class}">{pnl_sign}{format_number(int(r["pnl"]))}원<br><small>{pnl_sign}{int(r["pnl_pct"])}%</small></td>
           <td class="num">{cur_display}</td>
