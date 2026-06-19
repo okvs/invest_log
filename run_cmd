@@ -17,9 +17,10 @@ tmux has-session -t invest-bot 2>/dev/null && tmux kill-session -t invest-bot ||
 tmux new-session -d -s invest-bot \
   "cd '$DIR' && while true; do uv run python main.py; echo '[restart] bot exited, 5s 후 재시작'; sleep 5; done"
 
-# 2) 증권사 카톡 → 텔레그램 포워더 (60초 폴링) — 원문 알림을 그대로 전달
-echo "▶ 카톡 포워더 기동"
-bash "$DIR/scripts/kakao_forward_start.sh" >/dev/null
+# 2) 증권사 카톡 → 텔레그램 원문 포워더는 더 이상 기동하지 않음.
+#    사용자 요청(2026-06-19): 매수/매도 원문 메시지 그대로 전송은 중단하고,
+#    아래 '잔고 자동반영'의 ✅ 확인 메시지만 텔레그램으로 받는다.
+#    (다시 켜려면: bash "$DIR/scripts/kakao_forward_start.sh")
 
 # 3) 증권사 카톡 체결 → 잔고 자동반영 (60초 폴링) — 매수/매도/선물을 잔고에 반영
 #    포워더와 별개 watermark. ⚠️ 켜는 동안 같은 거래를 봇에 수동 기록하면 이중계상.
