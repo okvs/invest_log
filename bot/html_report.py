@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 from collections import defaultdict
 from datetime import datetime
@@ -1243,6 +1244,64 @@ def build_html_report(
         f"{e_brk}</div>"
     )
 
+    # ── 카드 클릭 → 세로 막대그래프(모달) 데이터 ──────────────────────────────
+    # 예수금/총평가금/총자산 카드를 누르면 구성요소를 세로 막대로 보여준다.
+    # 색은 인라인으로 CSS var/hex 를 넘겨 라이트·다크 테마를 그대로 따른다.
+    def _cbar(label: str, value: float, color: str, note: str = "") -> dict:
+        return {"label": label, "value": round(float(value)), "disp": _eok(value),
+                "color": color, "note": note}
+
+    card_charts: dict = {}
+    # 예수금: 현물 + 선물 + 미국 (0 이하 항목 생략)
+    if show_cash and initial_capital:
+        _cbars = []
+        if cash_remaining > 0:
+            _cbars.append(_cbar("현물", cash_remaining, "var(--accent)"))
+        if futures_cash_val > 0:
+            _cbars.append(_cbar("선물", futures_cash_val, "#4A90D9"))
+        if usd_cash_krw > 0:
+            _cbars.append(_cbar("미국", usd_cash_krw, "#8b5cf6"))
+        if _cbars:
+            card_charts["cash"] = {
+                "title": "예수금 구성",
+                "total": _eok(cash_remaining + futures_cash_val + usd_cash_krw),
+                "bars": _cbars,
+            }
+    # 총평가금: 내 자본 vs 융자(신용 + 선물차입)
+    _loan = total_credit + fut_financing
+    _ebars = [_cbar("내 자본", pos_equity, "var(--accent)")]
+    if _loan > 1e-9:
+        _ln = []
+        if total_credit > 1e-9:
+            _ln.append(f"신용 {_eok(total_credit)}")
+        if fut_financing > 1e-9:
+            _ln.append(f"선물 {_eok(fut_financing)}")
+        _ebars.append(_cbar("융자", _loan, "#d83c3c", " · ".join(_ln)))
+    card_charts["eval"] = {"title": "총 평가금 구성", "total": _eok(gross_eval), "bars": _ebars}
+    # 총자산: 평가(신용표시) + 예수금
+    if show_cash and initial_capital:
+        card_charts["asset"] = {
+            "title": "총 자산 구성",
+            "total": _eok(assets_both),
+            "bars": [
+                _cbar("평가", assets_both - _cash, "var(--accent)",
+                      f"신용 −{_eok(total_credit)}" if has_credit else ""),
+                _cbar("예수금", _cash, "#6b7280"),
+            ],
+        }
+    card_charts_json = json.dumps(card_charts, ensure_ascii=False)
+
+    # 클릭 가능한 카드에 data-chart 속성 부여(해당 그래프 데이터가 있을 때만)
+    if asset_card_html and "asset" in card_charts:
+        asset_card_html = asset_card_html.replace(
+            "<div class='card'>", "<div class='card clickable' data-chart='asset'>", 1)
+    if "cash" in card_charts:
+        cash_card_html = cash_card_html.replace(
+            "<div class='card'>", "<div class='card clickable' data-chart='cash'>", 1)
+    if "eval" in card_charts:
+        eval_card_html = eval_card_html.replace(
+            "<div class='card'>", "<div class='card clickable' data-chart='eval'>", 1)
+
     # 배지 HTML — 'AI vs Human' 배지는 사용자 요청으로 제거(항상 비움)
     badge_html = ""
 
@@ -1444,6 +1503,32 @@ def build_html_report(
                      border-radius:8px; width:30px; height:26px; font-size:13px; font-weight:700;
                      cursor:pointer; font-family:inherit; line-height:1; padding:0; }}
   .fs-ctrl button:hover {{ color:var(--accent); border-color:var(--accent); }}
+
+  /* 카드 클릭 → 세로 막대그래프 모달 */
+  .card.clickable {{ cursor:pointer; position:relative; transition:transform .08s ease, box-shadow .15s ease; }}
+  .card.clickable:hover {{ box-shadow:0 4px 20px rgba(31,80,55,0.20); }}
+  .card.clickable:active {{ transform:scale(0.98); }}
+  .card.clickable::after {{ content:'📊'; position:absolute; top:7px; right:8px; font-size:10px; opacity:0.4; }}
+  .cmodal {{ position:fixed; inset:0; z-index:200; display:none; align-items:center;
+             justify-content:center; background:rgba(0,0,0,0.55); padding:20px; }}
+  .cmodal.open {{ display:flex; }}
+  .cmodal-box {{ background:var(--card); border:1px solid var(--border); border-radius:16px;
+                 box-shadow:var(--shadow); width:100%; max-width:440px;
+                 padding:22px 20px 26px; position:relative; }}
+  .cmodal-close {{ position:absolute; top:10px; right:14px; background:none; border:none;
+                   color:var(--text-dim); font-size:24px; line-height:1; cursor:pointer; padding:4px; }}
+  .cmodal-head {{ display:flex; align-items:baseline; justify-content:space-between;
+                  gap:10px; margin:0 28px 22px 2px; }}
+  .cmodal-title {{ font-size:15px; font-weight:700; color:var(--text-strong); }}
+  .cmodal-total {{ font-size:18px; font-weight:800; color:var(--accent); white-space:nowrap; }}
+  .cbars {{ display:flex; align-items:flex-end; justify-content:center; gap:20px; min-height:172px; }}
+  .cbar {{ display:flex; flex-direction:column; align-items:center; justify-content:flex-end; width:74px; }}
+  .cbar-val {{ font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:6px; white-space:nowrap; }}
+  .cbar-fill {{ width:100%; border-radius:8px 8px 0 0; min-height:4px; }}
+  .clabels {{ display:flex; justify-content:center; gap:20px; margin-top:9px; }}
+  .clabel {{ width:74px; text-align:center; }}
+  .cbar-label {{ font-size:12px; font-weight:700; color:var(--text); }}
+  .cbar-note {{ font-size:10px; color:var(--text-dim); margin-top:2px; line-height:1.3; }}
 </style>
 </head>
 <body>
@@ -1506,6 +1591,19 @@ def build_html_report(
 
   {build_futures_section(futures_positions or [], futures_prices or {}, total_equity=total_eval + cash_remaining + futures_cash_val, futures_cash=futures_cash_val, maintenance_ratio=futures_maintenance_ratio)}
 
+  <div class="cmodal" id="cmodal">
+    <div class="cmodal-box">
+      <button class="cmodal-close" onclick="closeCardChart()" aria-label="닫기">×</button>
+      <div class="cmodal-head">
+        <span class="cmodal-title" id="cmodal-title"></span>
+        <span class="cmodal-total" id="cmodal-total"></span>
+      </div>
+      <div class="cbars" id="cmodal-bars"></div>
+      <div class="clabels" id="cmodal-labels"></div>
+    </div>
+  </div>
+
+<script>window.__CARD_CHARTS__ = {card_charts_json};</script>
 <script>
 document.querySelectorAll('th[data-key]').forEach(th => {{
   th.addEventListener('click', () => {{
@@ -1584,6 +1682,38 @@ function holdFs(delta) {{
   if (!el) return;
   var s = parseInt(localStorage.getItem('hold_fs') || '11', 10);
   if (!isNaN(s)) el.style.setProperty('--hold-fs', s + 'px');
+}})();
+
+// 카드 클릭 → 세로 막대그래프 모달
+function openCardChart(key) {{
+  var data = (window.__CARD_CHARTS__ || {{}})[key];
+  if (!data) return;
+  var max = 1;
+  data.bars.forEach(function(b) {{ var a = Math.abs(b.value); if (a > max) max = a; }});
+  var FILL = 150;
+  var barsHtml = data.bars.map(function(b) {{
+    var h = Math.max(4, Math.round(Math.abs(b.value) / max * FILL));
+    return '<div class="cbar"><div class="cbar-val">' + b.disp + '</div>'
+      + '<div class="cbar-fill" style="height:' + h + 'px;background:' + b.color + '"></div></div>';
+  }}).join('');
+  var labelsHtml = data.bars.map(function(b) {{
+    return '<div class="clabel"><div class="cbar-label">' + b.label + '</div>'
+      + (b.note ? '<div class="cbar-note">' + b.note + '</div>' : '') + '</div>';
+  }}).join('');
+  document.getElementById('cmodal-title').textContent = data.title;
+  document.getElementById('cmodal-total').textContent = data.total;
+  document.getElementById('cmodal-bars').innerHTML = barsHtml;
+  document.getElementById('cmodal-labels').innerHTML = labelsHtml;
+  document.getElementById('cmodal').classList.add('open');
+}}
+function closeCardChart() {{ document.getElementById('cmodal').classList.remove('open'); }}
+document.querySelectorAll('.card.clickable').forEach(function(c) {{
+  c.addEventListener('click', function() {{ openCardChart(c.dataset.chart); }});
+}});
+(function() {{
+  var m = document.getElementById('cmodal');
+  if (m) m.addEventListener('click', function(e) {{ if (e.target === m) closeCardChart(); }});
+  document.addEventListener('keydown', function(e) {{ if (e.key === 'Escape') closeCardChart(); }});
 }})();
 </script>
 </body>
