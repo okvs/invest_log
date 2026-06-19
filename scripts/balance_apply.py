@@ -33,12 +33,15 @@ for _p in (str(PROJECT_ROOT), str(SCRIPTS_DIR)):
         sys.path.insert(0, _p)
 
 from bot.handlers.credit_sync import apply_credit_sync  # noqa: E402
+from models.portfolio import Holding  # noqa: E402
+from parsers.input_parser import norm_stock_name  # noqa: E402
 from storage.json_store import (  # noqa: E402
     load_account,
     load_holdings,
     save_account,
     save_holdings,
 )
+from datetime import datetime  # noqa: E402
 
 SHOTS_DIR = PROJECT_ROOT / "data" / "balance_shots"
 
@@ -64,8 +67,10 @@ def cmd_state() -> int:
             continue
         rows.append({
             "name": h.get("name", ""),
+            "ticker": h.get("ticker", ""),
+            "currency": h.get("currency", "KRW"),
             "quantity": int(h.get("quantity", 0) or 0),
-            "avg_price": round(float(h.get("avg_price", 0) or 0)),
+            "avg_price": round(float(h.get("avg_price", 0) or 0), 4),
             "credit_loan": round(float(h.get("credit_loan", 0) or 0)),
             # 계좌별 융자(스샷이 한 계좌만 보일 때 다른 계좌분을 보존·합산하기 위함)
             "by_account": [
@@ -182,6 +187,106 @@ def _apply_by_account(
 
 
 # ---------------------------------------------------------------------------
+# us-set — 미국주식(나무/NH) 보유 생성·보정 + 미국 예수금(USD). 잔고 스샷 기준.
+# ---------------------------------------------------------------------------
+def cmd_us_set(req_id: str, holdings_json: str, usd_cash: str | None = None) -> int:
+    """미국주식 보유를 스샷 기준으로 upsert(티커 매칭) + 미국 예수금 set.
+
+    holdings_json = [{"ticker","quantity","avg_price"(USD), "name"?, "sector"?}, ...]
+    - 티커(대문자)로 기존 USD 보유와 매칭해 수량/평단/총매입(USD) 갱신, 없으면 생성(currency=USD).
+    - 스샷에 안 나온 기존 US 보유는 **삭제하지 않고** 회신에 '스샷에 없음'으로 표시(부분 스샷 안전).
+    - --usd-cash 주면 account.usd_cash(미국 예수금, USD) set.
+    """
+    try:
+        items = json.loads(holdings_json)
+    except json.JSONDecodeError as e:
+        sys.exit(f"error: 미국주식 JSON 파싱 실패: {e}")
+    if not isinstance(items, list):
+        sys.exit('error: 미국주식 JSON 은 [{"ticker","quantity","avg_price"}, ...] 형태여야 합니다.')
+
+    holdings = load_holdings()
+
+    def _find_us(ticker: str) -> dict | None:
+        tk = (ticker or "").upper()
+        for h in holdings:
+            if (h.get("currency") == "USD"
+                    and (h.get("ticker", "") or "").upper() == tk):
+                return h
+        return None
+
+    created: list[str] = []
+    updated: list[dict] = []
+    seen_tickers: set[str] = set()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    for it in items:
+        ticker = str(it.get("ticker", "")).upper().strip()
+        if not ticker:
+            sys.exit(f"error: ticker 누락 항목: {it!r}")
+        qty = int(it.get("quantity", 0) or 0)
+        avg = float(it.get("avg_price", 0) or 0)
+        if qty <= 0 or avg <= 0:
+            sys.exit(f"error: {ticker} 수량/평단(USD)은 0보다 커야 합니다: {it!r}")
+        name = str(it.get("name") or ticker).strip()
+        sector = str(it.get("sector") or "미국주식").strip()
+        total = round(avg * qty, 2)
+        seen_tickers.add(ticker)
+
+        h = _find_us(ticker)
+        if h:
+            old = {"quantity": h.get("quantity"), "avg_price": h.get("avg_price")}
+            h["quantity"] = qty
+            h["avg_price"] = avg
+            h["total_invested"] = total
+            if name:
+                h["name"] = name
+            if sector:
+                h["sector"] = sector
+            updated.append({"ticker": ticker, "old": old, "new": {"quantity": qty, "avg_price": avg}})
+        else:
+            nh = Holding(
+                name=name, sector=sector, buy_date=today,
+                avg_price=avg, quantity=qty, total_invested=total,
+                ticker=ticker, currency="USD",
+            )
+            holdings.append(nh.to_dict())
+            created.append(ticker)
+
+    # 스샷에 없는 기존 US 보유 (삭제하지 않음 — 보고만)
+    missing = [
+        h.get("ticker", "") for h in holdings
+        if h.get("currency") == "USD" and h.get("quantity", 0) > 0
+        and (h.get("ticker", "") or "").upper() not in seen_tickers
+    ]
+
+    save_holdings(holdings)
+
+    usd_cash_set = None
+    if usd_cash is not None:
+        try:
+            usd_cash_set = float(str(usd_cash).replace(",", "").strip())
+        except (TypeError, ValueError):
+            sys.exit(f"error: 미국 예수금 인식 실패: {usd_cash!r}")
+        if usd_cash_set < 0:
+            sys.exit("error: 미국 예수금은 0 이상이어야 합니다.")
+        acc = load_account()
+        acc["usd_cash"] = usd_cash_set
+        save_account(acc)
+
+    published = _republish()
+    out = {
+        "req_id": req_id,
+        "created": created,
+        "updated": updated,
+        "not_in_shot": missing,
+        "usd_cash": usd_cash_set,
+        "dashboard_published": published,
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # cash — D+2예수금(현물) 보정. 한 계좌만 보이는 스샷이면 그 계좌만 갱신.
 # ---------------------------------------------------------------------------
 def cmd_cash(req_id: str, amount_str: str, account: str | None = None) -> int:
@@ -294,6 +399,11 @@ def main(argv=None) -> int:
         help="스샷이 한 계좌만 보일 때 그 계좌(KB/신한)만 갱신하고 다른 계좌 예수금은 보존(합산 재계산). 생략 시 합산 직접 set.",
     )
 
+    ap_us = sub.add_parser("us-set", help="미국주식(나무/NH) 보유 생성·보정 + 미국 예수금")
+    ap_us.add_argument("req_id")
+    ap_us.add_argument("holdings_json", help='[{"ticker","quantity","avg_price"(USD),"name"?,"sector"?}, ...]')
+    ap_us.add_argument("--usd-cash", default=None, help="미국 예수금(USD). 주면 account.usd_cash set.")
+
     ap_reply = sub.add_parser("reply", help="요청 chat_id 로 텔레그램 회신")
     ap_reply.add_argument("req_id")
     ap_reply.add_argument("--text", default=None, help="회신 텍스트(생략 시 stdin)")
@@ -305,6 +415,8 @@ def main(argv=None) -> int:
         return cmd_apply(args.req_id, args.loan_json, account=args.account)
     if args.cmd == "cash":
         return cmd_cash(args.req_id, args.amount, account=args.account)
+    if args.cmd == "us-set":
+        return cmd_us_set(args.req_id, args.holdings_json, usd_cash=args.usd_cash)
     if args.cmd == "reply":
         return cmd_reply(args.req_id, args.text)
     return 1

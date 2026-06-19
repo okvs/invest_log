@@ -154,6 +154,41 @@ def test_cash_account_preserves_other_and_sums(capsys, monkeypatch):
     assert acc["futures_cash"] == 48763854.0               # 선물 버킷 불변
 
 
+def test_us_set_creates_and_updates(capsys, monkeypatch):
+    """미국주식 생성→갱신(티커 매칭) + 미국 예수금(usd_cash), 국내 보유 불변."""
+    save_account({"initial_capital": 1.0, "cash": 100.0})
+    save_holdings([
+        {"name": "삼성전자", "sector": "반도체", "quantity": 10, "avg_price": 70000,
+         "total_invested": 700000, "currency": "KRW"},
+    ])
+    monkeypatch.setattr(ba, "_republish", lambda: False)
+
+    # 1) 생성
+    js = json.dumps([
+        {"ticker": "MULL", "quantity": 7, "avg_price": 867.0, "name": "마이크론2배"},
+        {"ticker": "SPCX", "quantity": 23, "avg_price": 201.8},
+    ])
+    assert ba.cmd_us_set("r", js, usd_cash="5000") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert set(out["created"]) == {"MULL", "SPCX"} and out["usd_cash"] == 5000.0
+
+    hs = {h["name"]: h for h in load_holdings()}
+    assert hs["삼성전자"]["currency"] == "KRW" and hs["삼성전자"]["quantity"] == 10  # 불변
+    mull = next(h for h in load_holdings() if h.get("ticker") == "MULL")
+    assert mull["currency"] == "USD" and mull["quantity"] == 7 and mull["avg_price"] == 867.0
+    assert mull["total_invested"] == round(867.0 * 7, 2)
+    assert load_account()["usd_cash"] == 5000.0
+
+    # 2) 갱신 (MULL 수량 변경, SPCX 미포함 → not_in_shot)
+    assert ba.cmd_us_set("r", json.dumps([{"ticker": "MULL", "quantity": 10, "avg_price": 900.0}])) == 0
+    out2 = json.loads(capsys.readouterr().out)
+    assert out2["updated"][0]["ticker"] == "MULL"
+    assert "SPCX" in out2["not_in_shot"]   # 삭제 안 함, 보고만
+    mull2 = next(h for h in load_holdings() if h.get("ticker") == "MULL")
+    assert mull2["quantity"] == 10 and mull2["avg_price"] == 900.0
+    assert any(h.get("ticker") == "SPCX" for h in load_holdings())  # 여전히 존재
+
+
 def test_state_includes_cash(capsys):
     save_account({"initial_capital": 1.0, "cash": 123.0,
                   "cash_by_account": {"KB": 100, "신한": 23}, "futures_cash": 9.0})
