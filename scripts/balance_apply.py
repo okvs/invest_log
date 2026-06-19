@@ -53,16 +53,26 @@ def _load_req(req_id: str) -> dict:
 # state — 현재 보유 종목 스냅샷(스킬이 스샷과 diff)
 # ---------------------------------------------------------------------------
 def cmd_state() -> int:
-    rows = [
-        {
+    rows = []
+    for h in load_holdings():
+        if h.get("quantity", 0) <= 0:
+            continue
+        rows.append({
             "name": h.get("name", ""),
             "quantity": int(h.get("quantity", 0) or 0),
             "avg_price": round(float(h.get("avg_price", 0) or 0)),
             "credit_loan": round(float(h.get("credit_loan", 0) or 0)),
-        }
-        for h in load_holdings()
-        if h.get("quantity", 0) > 0
-    ]
+            # 계좌별 융자(스샷이 한 계좌만 보일 때 다른 계좌분을 보존·합산하기 위함)
+            "by_account": [
+                {
+                    "account": e.get("account", ""),
+                    "quantity": int(e.get("quantity", 0) or 0),
+                    "credit": round(float(e.get("credit", 0) or 0)),
+                    "funding": e.get("funding", ""),
+                }
+                for e in (h.get("by_account") or [])
+            ],
+        })
     rows.sort(key=lambda r: r["name"])
     print(json.dumps({"holdings": rows}, ensure_ascii=False, indent=2))
     return 0
@@ -71,7 +81,7 @@ def cmd_state() -> int:
 # ---------------------------------------------------------------------------
 # apply — 종목별 credit_loan 을 스샷 실측값으로 set
 # ---------------------------------------------------------------------------
-def cmd_apply(req_id: str, loan_json: str) -> int:
+def cmd_apply(req_id: str, loan_json: str, account: str | None = None) -> int:
     try:
         parsed_raw = json.loads(loan_json)
     except json.JSONDecodeError as e:
@@ -91,7 +101,14 @@ def cmd_apply(req_id: str, loan_json: str) -> int:
         parsed[name] = val
 
     holdings = load_holdings()
-    changes, unmatched = apply_credit_sync(holdings, parsed)
+    warnings: list[str] = []
+    if account:
+        # 한 계좌(KB/신한)만 보이는 스샷 — 그 계좌 by_account.credit 만 갱신하고
+        # **다른 계좌 융자는 보존**한 채 combined credit_loan = 계좌별 합으로 재계산.
+        changes, unmatched, warnings = _apply_by_account(holdings, parsed, account)
+    else:
+        # 종목 합산 credit_loan 을 직접 set (봇 `융자` 명령과 동일 — 단일계좌·합산스샷용).
+        changes, unmatched = apply_credit_sync(holdings, parsed)
     save_holdings(holdings)
 
     total = sum(
@@ -102,13 +119,54 @@ def cmd_apply(req_id: str, loan_json: str) -> int:
 
     out = {
         "req_id": req_id,
+        "account": account or "(합산)",
         "changes": [{"name": n, "old": round(o), "new": round(v)} for n, o, v in changes],
         "unmatched": unmatched,
+        "warnings": warnings,
         "total_loan": round(total),
         "dashboard_published": published,
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
+
+
+def _apply_by_account(
+    holdings: list[dict], parsed: dict[str, float], account: str,
+) -> tuple[list[tuple[str, float, float]], list[str], list[str]]:
+    """한 계좌(account)의 종목별 융자만 갱신하고 combined = 계좌별 credit 합으로 재계산.
+
+    다른 계좌(예: 신한)의 기존 credit 은 건드리지 않아 보존된다.
+    매칭은 norm_stock_name(공백/대소문자 무시), 보유수량>0 종목만.
+    반환: (changes [(name, old_combined, new_combined)], unmatched, warnings).
+    """
+    from parsers.input_parser import norm_stock_name
+
+    active = {
+        norm_stock_name(h.get("name", "")): h
+        for h in holdings if h.get("quantity", 0) > 0
+    }
+    changes: list[tuple[str, float, float]] = []
+    unmatched: list[str] = []
+    warnings: list[str] = []
+    for in_name, won in parsed.items():
+        h = active.get(norm_stock_name(in_name))
+        if h is None:
+            unmatched.append(in_name)
+            continue
+        old_combined = float(h.get("credit_loan") or 0)
+        ba = h.get("by_account") or []
+        ent = next((e for e in ba if e.get("account") == account), None)
+        if ent is None:
+            ent = {"account": account, "quantity": 0, "avg_price": 0, "credit": 0.0, "funding": ""}
+            ba.append(ent)
+            warnings.append(f"{h.get('name', '')}: {account} 계좌 항목이 없어 새로 생성(수량 0 — 보유 분해 추후 보정)")
+        ent["credit"] = won
+        h["by_account"] = ba
+        new_combined = sum(float(e.get("credit", 0) or 0) for e in ba)
+        h["credit_loan"] = new_combined
+        if round(old_combined) != round(new_combined):
+            changes.append((h.get("name", ""), old_combined, new_combined))
+    return changes, unmatched, warnings
 
 
 def _republish() -> bool:
@@ -167,6 +225,10 @@ def main(argv=None) -> int:
     ap_apply = sub.add_parser("apply", help="종목별 credit_loan set + 대시보드 재발행")
     ap_apply.add_argument("req_id")
     ap_apply.add_argument("loan_json", help='{"종목명": 융자원, ...}')
+    ap_apply.add_argument(
+        "--account", default=None,
+        help="스샷이 한 계좌만 보일 때 그 계좌(KB/신한)만 갱신하고 다른 계좌 융자는 보존(combined 재계산). 생략 시 합산값 직접 set.",
+    )
 
     ap_reply = sub.add_parser("reply", help="요청 chat_id 로 텔레그램 회신")
     ap_reply.add_argument("req_id")
@@ -176,7 +238,7 @@ def main(argv=None) -> int:
     if args.cmd == "state":
         return cmd_state()
     if args.cmd == "apply":
-        return cmd_apply(args.req_id, args.loan_json)
+        return cmd_apply(args.req_id, args.loan_json, account=args.account)
     if args.cmd == "reply":
         return cmd_reply(args.req_id, args.text)
     return 1
