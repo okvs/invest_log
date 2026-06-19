@@ -16,6 +16,9 @@ class Holding:
     buy_thesis: str = ""
     research_notes: str = ""
     credit_loan: float = 0.0
+    # 통화: "KRW"(국내, 기본) | "USD"(미국, 나무/NH). USD면 avg_price·total_invested 가
+    # USD 단위이고, 대시보드/NAV 는 실시간 USD/KRW 로 환산해 합산한다.
+    currency: str = "KRW"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     transaction_ids: list[str] = field(default_factory=list)
     # 계좌별 분해(KB/신한). 백데이터에만 기록 — PWA/대시보드는 합산(이 항목 1개)로 표시.
@@ -34,6 +37,7 @@ class Holding:
             "quantity": self.quantity,
             "total_invested": self.total_invested,
             "credit_loan": self.credit_loan,
+            "currency": self.currency,
             "buy_thesis": self.buy_thesis,
             "research_notes": self.research_notes,
             "transaction_ids": self.transaction_ids,
@@ -42,9 +46,11 @@ class Holding:
 
     @classmethod
     def from_dict(cls, data: dict) -> Holding:
-        # credit_loan이 없는 기존 데이터 하위호환
+        # credit_loan/currency 없는 기존 데이터 하위호환
         if "credit_loan" not in data:
             data = {**data, "credit_loan": 0.0}
+        if "currency" not in data:
+            data = {**data, "currency": "KRW"}
         return cls(**data)
 
     def add_buy(
