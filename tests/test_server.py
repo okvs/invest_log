@@ -73,6 +73,43 @@ def test_record_retro_links_transaction():
         service.record_retro(sell_tx["id"])
 
 
+def test_record_sector_by_name_and_ticker():
+    _seed()
+    # 국내: 이름 매칭 (섹터 비어 있던 종목 보정)
+    service.record_buy("삼성전자우", 10, 60000)  # sector 미지정 → ""
+    out = service.record_sector("반도체", name="삼성전자우")
+    assert out["sector"] == "반도체"
+    assert load_holdings()[0]["sector"] == "반도체"
+
+    # 미국: ticker 우선 매칭 ("미국주식" 기본값 → 실섹터)
+    save_holdings(load_holdings() + [
+        {"name": "스페이스X", "ticker": "SPCX", "sector": "미국주식",
+         "currency": "USD", "quantity": 5, "avg_price": 100.0},
+    ])
+    service.record_sector("우주", ticker="SPCX", name="틀린이름")
+    spcx = next(h for h in load_holdings() if h.get("ticker") == "SPCX")
+    assert spcx["sector"] == "우주"
+
+
+def test_record_sector_errors():
+    _seed()
+    service.record_buy("삼성전자", 1, 70000, sector="반도체")
+    with pytest.raises(ValueError):
+        service.record_sector("", name="삼성전자")       # 빈 섹터
+    with pytest.raises(ValueError):
+        service.record_sector("반도체", name="없는종목")  # 매칭 실패
+
+
+def test_api_sector_endpoint(client):
+    _seed()
+    service.record_buy("삼성전자우", 10, 60000)  # sector ""
+    r = client.post("/api/sector", json={"sector": "반도체", "name": "삼성전자우"})
+    assert r.status_code == 200 and r.json()["ok"]
+    assert load_holdings()[0]["sector"] == "반도체"
+    # 빈 섹터 → 400
+    assert client.post("/api/sector", json={"sector": "", "name": "삼성전자우"}).status_code == 400
+
+
 def test_get_state_shape():
     _seed()
     service.record_buy("삼성전자", 10, 70000)

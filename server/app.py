@@ -69,6 +69,12 @@ class RetroReq(BaseModel):
     lessons: str = ""
 
 
+class SectorReq(BaseModel):
+    sector: str
+    ticker: str = ""
+    name: str = ""
+
+
 class LoginReq(BaseModel):
     password: str
 
@@ -129,6 +135,15 @@ async def retro(req: RetroReq, uid: str = Depends(require_user)) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "retrospective": r}
+
+
+@app.post("/api/sector")
+async def sector_set(req: SectorReq, uid: str = Depends(require_user)) -> dict:
+    try:
+        h = service.record_sector(req.sector, ticker=req.ticker, name=req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "holding": h}
 
 
 # --- 프론트(정적 PWA) 서빙: /static 아래에 빌드 산출물을 둔다 ---

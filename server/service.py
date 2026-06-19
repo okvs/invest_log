@@ -185,6 +185,41 @@ def record_retro(
 
 
 # ---------------------------------------------------------------------------
+# 섹터 보정
+# ---------------------------------------------------------------------------
+def record_sector(sector: str, *, ticker: str = "", name: str = "") -> dict:
+    """보유 종목의 섹터를 설정/수정. ticker 우선 매칭(미국주식), 없으면 name 매칭.
+
+    save_holdings 가 대시보드 자동 재발행을 트리거하므로, 저장 즉시 '확인 필요'
+    탭에서 해당 종목이 빠지고 비중 차트에 새 섹터가 반영된다.
+    """
+    sector = (sector or "").strip()
+    if not sector:
+        raise ValueError("섹터를 입력하세요.")
+
+    holdings = store.load_holdings()
+    idx = None
+    if ticker:
+        idx = next((i for i, h in enumerate(holdings) if h.get("ticker", "") == ticker), None)
+    if idx is None and name:
+        idx = next(
+            (i for i, h in enumerate(holdings)
+             if norm_stock_name(h.get("name", "")) == norm_stock_name(name)),
+            None,
+        )
+    if idx is None:
+        raise ValueError("보유 종목을 찾을 수 없습니다.")
+
+    holdings[idx]["sector"] = sector
+    store.save_holdings(holdings)
+    return {
+        "name": holdings[idx].get("name", ""),
+        "ticker": holdings[idx].get("ticker", ""),
+        "sector": sector,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 조회
 # ---------------------------------------------------------------------------
 def get_state() -> dict:

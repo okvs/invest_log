@@ -128,6 +128,24 @@ _TAB_CSS = """
             font-size:13px; font-weight:700; font-family:inherit; cursor:pointer; }
   .dismiss-btn:hover { color:var(--accent); border-color:var(--accent); }
 
+  /* 확인 필요 탭 — 섹터 입력 카드 */
+  .check-intro { max-width:960px; margin:0 auto 12px; font-size:13px; line-height:1.6;
+            color:var(--text-dim); padding:0 2px; }
+  .sector-need-card { border:1px solid var(--border); background:var(--card);
+            border-radius:14px; padding:13px 15px; box-shadow:var(--shadow); }
+  .sector-need-card .extra-head { margin:0 0 4px; }
+  .sector-need-tkr { font-size:11px; font-weight:700; color:var(--text-dim);
+            background:var(--accent-soft); padding:2px 7px; border-radius:6px; margin-left:6px; }
+  .sector-need-msg { font-size:12.5px; color:#e5704d; font-weight:600; margin:2px 0 10px; }
+  .sector-form { display:flex; gap:8px; }
+  .sector-input { flex:1; padding:11px 12px; border:1px solid var(--border);
+            border-radius:10px; background:var(--bg); color:var(--text);
+            font-size:15px; font-family:inherit; box-sizing:border-box; min-width:0; }
+  .sector-save { flex:0 0 auto; padding:11px 18px; border:none; border-radius:10px;
+            background:var(--accent); color:#fff; font-size:14px; font-weight:700;
+            font-family:inherit; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .sector-save:disabled { opacity:.6; }
+
   /* 차트 PNG는 다크 프레임 카드로(이미지 자체가 다크 렌더라 라이트모드에서도 일관) */
   .imgcard { background:#0e1512; border-radius:14px; padding:12px;
              max-width:960px; margin:0 auto; box-shadow:var(--shadow); }
@@ -189,10 +207,14 @@ _IC_STRATEGY = (
     '<path d="M12 3a6 6 0 0 0-3.8 10.7c.7.6 1.3 1.4 1.3 2.3h5c0-.9.6-1.7 1.3-2.3'
     'A6 6 0 0 0 12 3z"/></svg>'
 )
+_IC_CHECK = (
+    '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/>'
+    '<polyline points="8 12.5 11 15.5 16.5 9"/></svg>'
+)
 _TABBAR_HTML = (
     '<div class="tabbar-wrap"><nav class="tabbar">'
     f'<button data-tab="tab-status" class="active">{_IC_STATUS}현황</button>'
-    f'<button data-tab="tab-graph">{_IC_GRAPH}그래프'
+    f'<button data-tab="tab-check">{_IC_CHECK}확인 필요'
     '<span class="tab-badge" id="graph-badge" style="display:none"></span></button>'
     f'<button data-tab="tab-history">{_IC_HISTORY}기록</button>'
     f'<button data-tab="tab-backtest">{_IC_STRATEGY}전략</button>'
@@ -622,7 +644,11 @@ async def _cached_extra(fname: str, key: str, ttl: int, render_fn) -> tuple[str,
 
 
 async def _build_graph_extras() -> tuple[str, list[str]]:
-    """그래프 탭 하단(자산그래프 아래) 부가 섹션 + 배지용 item id 목록."""
+    """확인 필요 탭의 회고/피라미딩 부가 섹션 + 배지용 item id 목록.
+
+    항목이 없으면 빈 문자열을 반환 — placeholder 표시는 섹터 카드와 합쳐
+    _wrap_with_tabs 에서 한 번만 결정한다.
+    """
     txs = load_transactions()
     # 'v2|' 접두 = data-retro 마크업 도입 시 캐시 무효화(코드 변경은 key 에 안 잡힘).
     review_key = "v2|" + "|".join(sorted(
@@ -634,17 +660,61 @@ async def _build_graph_extras() -> tuple[str, list[str]]:
     rh, rids = await _cached_extra(".graph_review.json", review_key, _GRAPH_REVIEW_TTL, _render_review_section)
     ph, pids = await _cached_extra(".graph_pyramid.json", today, _GRAPH_PYRAMID_TTL, _render_pyramid_section)
 
-    body = rh + ph
-    if not body:
-        body = '<div style="color:var(--text-dim);text-align:center;padding:32px 24px;">회고 대기·피라미딩 후보가 없습니다.</div>'
-    return body, (rids + pids)
+    return rh + ph, (rids + pids)
+
+
+def _build_sector_needed_html() -> tuple[str, int]:
+    """섹터가 비어 있거나(기타) 기본값(미국주식)인 보유 종목 = '확인 필요' 카드.
+
+    종목별로 섹터 입력 폼을 렌더한다. 저장 동작(POST /api/sector)은 app.html
+    쓰기 레이어(_WRITE_LAYER)가 담당하고, 읽기 대시보드에선 안내만 표시된다.
+    반환: (HTML, 카드 수).
+    """
+    rows = []
+    for h in load_holdings():
+        if h.get("quantity", 0) <= 0:
+            continue
+        s = (h.get("sector") or "").strip()
+        if s not in ("", "기타", "미국주식"):
+            continue
+        rows.append((
+            h.get("name", ""),
+            h.get("ticker", "") or "",
+            h.get("currency") == "USD",
+        ))
+
+    if not rows:
+        return "", 0
+
+    cards = []
+    for name, ticker, is_us in rows:
+        nm_attr = name.replace('"', "&quot;")
+        tk_attr = ticker.replace('"', "&quot;")
+        tkr_tag = f'<span class="sector-need-tkr">{ticker}</span>' if (is_us and ticker) else ""
+        placeholder = "예: 빅테크, 반도체, AI" if is_us else "예: 반도체, 2차전지, 바이오"
+        cards.append(
+            f'<div class="extra-card sector-need-card" data-name="{nm_attr}" data-ticker="{tk_attr}">'
+            f'<div class="extra-head"><span class="extra-name">{name}</span>{tkr_tag}</div>'
+            '<div class="sector-need-msg">섹터 입력이 필요합니다.</div>'
+            '<div class="sector-form">'
+            f'<input class="sector-input" type="text" placeholder="{placeholder}" '
+            'autocomplete="off" autocapitalize="off">'
+            '<button class="sector-save" type="button">저장</button>'
+            '</div></div>'
+        )
+    intro = (
+        '<div class="check-intro">아래 종목은 섹터가 비어 있어요. '
+        '섹터를 입력해 저장하면 현황 탭의 <b>섹터 비중 차트</b>에 반영됩니다.</div>'
+    )
+    return intro + "".join(cards), len(rows)
 
 
 async def _wrap_with_tabs(html: bytes) -> bytes:
-    """대시보드 HTML 을 하단 탭바(자산현황/그래프/히스토리/추후) 구조로 감싼다.
+    """대시보드 HTML 을 하단 탭바(현황/확인 필요/기록/전략) 구조로 감싼다.
 
-    기존 본문은 그대로 1번 탭(자산현황)으로 두고, 그래프/히스토리/빈 탭과
-    고정 하단 탭바·전환 스크립트를 추가한다. 구조가 안 맞으면 원본 그대로 반환.
+    기존 본문은 그대로 1번 탭(현황)으로 두고 자산 그래프를 그 맨 아래에 붙인다.
+    2번 탭(확인 필요)에는 섹터 입력이 필요한 종목 + 회고/피라미딩 부가 카드를 모은다.
+    구조가 안 맞으면 원본 그대로 반환.
     """
     import re
 
@@ -654,26 +724,35 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
 
     graph_html = await _graph_img_html()
     extras_html, graph_ids = await _build_graph_extras()
+    sector_html, sector_n = _build_sector_needed_html()
     history_html = _build_history_html()
     backtest_html = await _backtest_tab_html()
+
+    check_body = sector_html + extras_html
+    if not check_body:
+        check_body = ('<div style="color:var(--text-dim);text-align:center;padding:32px 24px;">'
+                      '확인할 항목이 없습니다.</div>')
 
     # 1) <head> 에 탭 CSS 주입
     text = text.replace("</head>", _TAB_CSS + "</head>", 1)
 
-    # 2) <body ...> 직후에 자산현황 탭 패널 시작
+    # 2) <body ...> 직후에 현황 탭 패널 시작
     text = re.sub(
         r"(<body[^>]*>)",
         r'\1<div id="tab-status" class="tab-panel active">',
         text, count=1,
     )
 
-    # 3) </body> 직전: 자산현황 닫기 + 그래프/히스토리/전략 탭 + 탭바 + 스크립트
-    #    그래프 탭 = 자산그래프(상단) + 회고/피라미딩 봉차트(하단)
+    # 3) </body> 직전: 현황(자산 그래프 추가)·확인 필요·기록·전략 탭 + 탭바 + 스크립트
     panels = (
+        # 현황 탭 맨 아래에 자산 그래프
+        '<div class="section-title" style="margin-top:28px;">📈 자산 그래프</div>'
+        f"{graph_html}"
         "</div>"  # close tab-status
-        '<div id="tab-graph" class="tab-panel">'
-        '<div class="section-title" style="margin-top:8px;">📈 자산 그래프</div>'
-        f"{graph_html}{extras_html}</div>"
+        # 확인 필요 탭 = 섹터 입력 필요 종목 + 회고/피라미딩 부가 카드
+        '<div id="tab-check" class="tab-panel">'
+        '<div class="section-title" style="margin-top:8px;">✅ 확인 필요</div>'
+        f"{check_body}</div>"
         '<div id="tab-history" class="tab-panel">'
         '<div class="section-title" style="margin-top:8px;">🧾 매수·매도 히스토리</div>'
         f"{history_html}</div>"
@@ -681,8 +760,10 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         '<div class="section-title" style="margin-top:8px;">🧪 백테스트</div>'
         f"{backtest_html}</div>"
     )
-    # 그래프 탭 새 알림 배지 — 클라이언트가 localStorage 'graph_seen' 과 대조해
-    # 미확인 개수를 빨간 동그라미로 표시, 그래프 탭을 누르면(확인) 사라진다.
+    # 확인 필요 탭 배지 — (미해결 섹터 카드 수) + (미확인 회고/피라미딩 항목 수).
+    # 섹터 카드는 .sector-need-card 가 DOM 에 남아 있는 동안 계속 카운트되고
+    # (저장 시 쓰기 레이어가 .resolved 를 붙여 제외), 회고/피라미딩은 탭을 한 번
+    # 누르면(확인) 빠진다. __refreshCheckBadge 로 쓰기 레이어가 갱신을 호출한다.
     items_json = json.dumps(graph_ids, ensure_ascii=False)
     badge_script = (
         "<script>(function(){var I=" + items_json + ";"
@@ -690,15 +771,18 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         "function ss(k,o){try{localStorage.setItem(k,JSON.stringify(o));}catch(e){}}"
         "var seen=gs('graph_seen'),dis=gs('graph_dismissed');"
         "var b=document.getElementById('graph-badge');"
+        "function sectorN(){return document.querySelectorAll('.sector-need-card:not(.resolved)').length;}"
         "function refresh(){var un=I.filter(function(x){return !seen[x]&&!dis[x];});"
-        "if(b){if(un.length){b.textContent=un.length;b.style.display='';}else{b.style.display='none';}}}"
+        "var n=un.length+sectorN();"
+        "if(b){if(n){b.textContent=n;b.style.display='';}else{b.style.display='none';}}}"
+        "window.__refreshCheckBadge=refresh;"
         "document.querySelectorAll('.extra-card[data-item]').forEach(function(c){"
         "if(dis[c.getAttribute('data-item')])c.style.display='none';});"
         "document.querySelectorAll('.dismiss-btn').forEach(function(btn){"
         "btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();"
         "var id=btn.getAttribute('data-item');dis[id]=1;ss('graph_dismissed',dis);"
         "var card=btn.closest('.extra-card');if(card)card.style.display='none';refresh();});});"
-        "var g=document.querySelector('.tabbar button[data-tab=\"tab-graph\"]');"
+        "var g=document.querySelector('.tabbar button[data-tab=\"tab-check\"]');"
         "if(g){g.addEventListener('click',function(){I.forEach(function(x){seen[x]=1;});ss('graph_seen',seen);refresh();});}"
         "refresh();})();</script>"
     )
@@ -710,8 +794,9 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
 _TUNNEL_URL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "tunnel_url.txt"
 
 # 쓰기 레이어 — app.html(쓰기 PWA)에만 주입. 읽기 대시보드와 HTML 은 동일하고,
-# 그래프 탭 '회고 대기' 카드(.retro-card[data-retro])를 탭하면 인라인 회고 폼이
-# 열려 맥 터널 API(/api/retro)로 기록한다. 폼 스타일은 대시보드 CSS 변수를 그대로 사용.
+# '확인 필요' 탭의 ① '회고 대기' 카드(.retro-card[data-retro]) 탭 → 인라인 회고 폼
+# (/api/retro), ② 섹터 입력 카드(.sector-need-card) 저장 → /api/sector 로 섹터 보정.
+# 폼 스타일은 대시보드 CSS 변수를 그대로 사용한다.
 _WRITE_LAYER = """
 <style>
   .retro-card{cursor:pointer}
@@ -804,16 +889,45 @@ _WRITE_LAYER = """
   modal.addEventListener('click',function(e){if(e.target===modal)close();});
   $('retro-submit').addEventListener('click',submit);
 })();</script>
+<script>(function(){
+  // 확인 필요 탭의 섹터 입력 카드 → POST /api/sector. 저장 성공 시 카드를 숨기고
+  // (.resolved) 배지를 갱신한다. 읽기 대시보드(API 없음)에선 동작하지 않는다.
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  if(!API) return;
+  function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
+    t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  document.querySelectorAll('.sector-need-card').forEach(function(card){
+    var inp=card.querySelector('.sector-input'), btn=card.querySelector('.sector-save');
+    if(!inp||!btn) return;
+    async function save(){
+      var sec=(inp.value||'').trim();
+      if(!sec){inp.focus();return;}
+      btn.disabled=true;
+      var body={sector:sec,ticker:card.getAttribute('data-ticker')||'',name:card.getAttribute('data-name')||''};
+      try{
+        var r=await fetch(API+'/api/sector',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
+        card.classList.add('resolved');card.style.display='none';
+        if(window.__refreshCheckBadge)window.__refreshCheckBadge();
+        toast('섹터 저장: '+sec);
+      }catch(e){toast(e.message||'저장 실패',true);btn.disabled=false;}
+    }
+    btn.addEventListener('click',save);
+    inp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();save();}});
+  });
+})();</script>
 """
 
 
 def _build_writeapp_files(dashboard_html: bytes | None) -> dict[str, bytes]:
-    """app.html(쓰기 PWA) = 읽기 대시보드(index.html)와 동일한 HTML + 회고 쓰기 레이어.
+    """app.html(쓰기 PWA) = 읽기 대시보드(index.html)와 동일한 HTML + 쓰기 레이어.
 
-    대시보드와 똑같이 보이되, 그래프 탭의 '회고 대기' 카드를 탭하면 인라인 폼이
-    열려 맥 터널 API(/api/retro)로 회고를 기록한다(__APPCFG__ 로 터널 주소 주입).
-    터널 주소(data/tunnel_url.txt)가 없으면 미발행. 완성 후엔 이 app.html 하나만
-    쓰면 된다(읽기 대시보드를 대체).
+    대시보드와 똑같이 보이되, '확인 필요' 탭에서 '회고 대기' 카드를 탭하면 회고
+    폼(/api/retro), 섹터 입력 카드를 저장하면 섹터 보정(/api/sector)이 맥 터널
+    API 로 기록된다(__APPCFG__ 로 터널 주소 주입). 터널 주소(data/tunnel_url.txt)가
+    없으면 미발행. 완성 후엔 이 app.html 하나만 쓰면 된다(읽기 대시보드를 대체).
     """
     if not dashboard_html:
         return {}
