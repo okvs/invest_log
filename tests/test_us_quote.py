@@ -1,6 +1,7 @@
 """미국주식 시세 선택 로직 + Holding 통화 라운드트립 (네트워크 없음)."""
 from __future__ import annotations
 
+import bot.html_report as hr
 from bot.us_quote import _pick_price
 from models.portfolio import Holding
 
@@ -30,3 +31,24 @@ def test_holding_currency_roundtrip():
     legacy = {"name": "삼성전자", "sector": "반도체", "buy_date": "2026-01-01",
               "avg_price": 70000, "quantity": 10, "total_invested": 700000}
     assert Holding.from_dict(legacy).currency == "KRW"
+
+
+def test_dashboard_renders_usd_holding_in_krw(monkeypatch):
+    """USD 보유가 USD가격으로 표시되고 평가/NAV는 KRW 환산되는지 (네트워크 모킹)."""
+    monkeypatch.setattr(hr, "fetch_usdkrw", lambda: 1500.0)
+    monkeypatch.setattr(hr, "fetch_us_quotes",
+                        lambda tks: {"MULL": {"price": 900.0, "change_pct": 3.0, "source": "post"}})
+    monkeypatch.setattr(hr, "fetch_current_quotes", lambda tks: {})  # 국내 시세 호출 차단
+
+    holds = [{"name": "MULL", "sector": "미국주식", "quantity": 10,
+              "avg_price": 800.0, "total_invested": 8000.0, "currency": "USD", "ticker": "MULL"}]
+    html = hr.build_html_report(
+        holds, initial_capital=20000000, show_cash=True,
+        cash_override=0, usd_cash=1000.0, cash_by_account={},
+    ).getvalue().decode("utf-8")
+
+    assert "$900.00" in html and "$800.00" in html   # USD 가격/평단 표기
+    assert "🇺🇸" in html and "나무" in html
+    # 평가 = 10 * 900 * 1500 = 13,500,000 (KRW), 예수금 미국 = 1000*1500 = 1,500,000
+    assert "13,500,000" in html or "1,350만" in html
+    assert "1,500,000" in html  # 미국 예수금 KRW 환산

@@ -9,6 +9,7 @@ from html import escape as _html_escape  # 모듈명 html 은 함수 내 지역�
 
 from bot.formatters import fetch_current_quotes, format_number, _resolve_tickers
 from bot.futures_report import build_futures_section
+from bot.us_quote import fetch_us_quotes, fetch_usdkrw
 
 
 SIZE_TABLE = {1: 40, 2: 120, 3: 280, 4: 280, 5: 280}
@@ -702,24 +703,29 @@ def _short_won(v: float) -> str:
 
 def _build_broker_breakdown_html(
     active: list[dict], rows: list[dict], cash_by_account: dict | None,
+    usd_cash_krw: float = 0.0,
 ) -> str:
-    """증권사별(KB/신한) 예수금·융자액·(평가금−융자액) 스택 막대.
+    """증권사별(KB/신한/나무) 예수금·융자액·(평가금−융자액) 스택 막대.
 
     계좌별 예수금(cash_by_account) + 보유 종목 by_account(계좌별 수량·credit)로
     계좌별 평가금(현재가×수량)·융자·순평가를 집계해 비중 스택바로 보여준다.
-    데이터(cash_by_account/by_account)가 없으면 ''(미표시).
+    미국주식(currency=USD, 나무)은 KRW 환산 평가금 + 미국 예수금(usd_cash_krw)으로 나무 계좌에 집계.
+    데이터(cash_by_account/by_account/US)가 없으면 ''(미표시).
     """
-    if not cash_by_account:
-        return ""
     name_to_cur = {r["name"]: r.get("cur_price") for r in rows}
+    us_eval_krw = sum(r["eval"] for r in rows if r.get("currency") == "USD")  # 이미 KRW 환산
+    if not cash_by_account and us_eval_krw <= 0 and usd_cash_krw <= 0:
+        return ""
     brokers: dict[str, dict] = {}
 
     def _b(acct: str) -> dict:
         return brokers.setdefault(acct, {"cash": 0.0, "loan": 0.0, "eval": 0.0})
 
-    for acct, amt in cash_by_account.items():
+    for acct, amt in (cash_by_account or {}).items():
         _b(acct)["cash"] += float(amt or 0)
     for h in active:
+        if (h.get("currency") or "KRW") == "USD":
+            continue  # 미국주식은 by_account 미사용 → 아래 나무 계좌로 별도 집계
         cur = name_to_cur.get(h.get("name"))
         for e in h.get("by_account") or []:
             acct = e.get("account")
@@ -730,6 +736,11 @@ def _build_broker_breakdown_html(
             price = cur if cur is not None else float(e.get("avg_price", 0) or 0)
             d["eval"] += float(price) * qty
             d["loan"] += float(e.get("credit", 0) or 0)
+    # 나무(NH 미국주식): KRW 환산 평가금 + 미국 예수금(KRW)
+    if us_eval_krw > 0 or usd_cash_krw > 0:
+        nm = _b("나무")
+        nm["eval"] += us_eval_krw
+        nm["cash"] += usd_cash_krw
     if not brokers:
         return ""
 
@@ -768,7 +779,10 @@ def _build_broker_breakdown_html(
         f'<span><i style="background:{C_LOAN}"></i>융자액</span>'
         '</div>'
     )
-    return ('<div class="section-title" style="margin-top:32px">증권사별 구성 (KB · 신한)</div>'
+    acct_names = " · ".join(
+        a for a, _ in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True)
+    )
+    return (f'<div class="section-title" style="margin-top:32px">증권사별 구성 ({acct_names})</div>'
             + blocks + legend)
 
 
@@ -783,6 +797,7 @@ def build_html_report(
     futures_cash: float | None = None,
     futures_maintenance_ratio: float | None = None,
     cash_by_account: dict | None = None,
+    usd_cash: float | None = None,
 ) -> io.BytesIO:
     """보유 종목 현황을 HTML 파일로 생성.
 
@@ -794,15 +809,24 @@ def build_html_report(
         cash_override: 직접 관리하는 예수금 값 (None이면 initial_capital - total_invested로 계산)
     """
     active = [h for h in holdings if h.get("quantity", 0) > 0]
+    kr_active = [h for h in active if (h.get("currency") or "KRW") != "USD"]
+    us_active = [h for h in active if (h.get("currency") or "KRW") == "USD"]
 
-    # 현재가 조회 (오늘 등락률 포함)
-    name_to_ticker, missing = _resolve_tickers(active)
+    # 국내 현재가 조회 (오늘 등락률 포함)
+    name_to_ticker, missing = _resolve_tickers(kr_active)
     tickers = list(set(name_to_ticker.values()))
     quotes = fetch_current_quotes(tickers) if tickers else {}
 
+    # 미국주식: USD 시세 + 환율(USD/KRW) — 평가/투자/손익은 KRW 로 환산해 합산,
+    # 표시는 USD 가격/평단(병기). 환율 없으면 USD 보유 평가가 불가하므로 폴백 1.0(=0 환산 방지).
+    usdkrw = fetch_usdkrw() if (us_active or (usd_cash and usd_cash > 0)) else None
+    us_tickers = [h.get("ticker") or h.get("name") for h in us_active]
+    us_quotes = fetch_us_quotes(us_tickers) if us_active else {}
+    usd_cash_krw = float(usd_cash or 0) * float(usdkrw) if (usd_cash and usdkrw) else 0.0
+
     # 종목별 데이터 계산
     rows = []
-    for h in active:
+    for h in kr_active:
         name = h["name"]
         qty = h["quantity"]
         avg = h["avg_price"]
@@ -832,6 +856,47 @@ def build_html_report(
             "eval": eval_amt,
             "pnl": pnl,
             "pnl_pct": pnl_pct,
+            "currency": "KRW",
+            "thesis": h.get("buy_thesis", ""),
+            "date": h.get("buy_date", ""),
+        })
+
+    # 미국주식 행 — USD 단가/평단을 KRW 로 환산(eval/invested/pnl 은 KRW 로 합산 일관)
+    fx = float(usdkrw) if usdkrw else 0.0
+    for h in us_active:
+        name = h["name"]
+        qty = h["quantity"]
+        avg_usd = float(h["avg_price"])
+        invested_usd = float(h.get("total_invested", avg_usd * qty))
+        tk = (h.get("ticker") or name).upper()
+        q = us_quotes.get(tk) or {}
+        price_usd = q.get("price")
+        change_pct = q.get("change_pct")
+
+        invested_krw = invested_usd * fx
+        if price_usd is not None and fx:
+            eval_krw = price_usd * qty * fx
+            pnl = eval_krw - invested_krw
+            pnl_pct = (pnl / invested_krw * 100) if invested_krw else 0
+        else:
+            eval_krw = invested_krw
+            pnl = 0
+            pnl_pct = 0
+
+        rows.append({
+            "name": name,
+            "sector": h.get("sector", "미국주식"),
+            "qty": qty,
+            "avg": avg_usd * fx,            # 정렬·합산용 KRW 환산 평단
+            "invested": invested_krw,
+            "cur_price": (price_usd * fx) if (price_usd is not None and fx) else None,  # 정렬용 KRW
+            "change_pct": change_pct,
+            "eval": eval_krw,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "currency": "USD",
+            "price_usd": price_usd,        # 표시용 USD
+            "avg_usd": avg_usd,            # 표시용 USD
             "thesis": h.get("buy_thesis", ""),
             "date": h.get("buy_date", ""),
         })
@@ -897,6 +962,8 @@ def build_html_report(
         if futures_cash_val > 0:
             sector_data["현금"] += futures_cash_val
             sector_futures["현금"] += futures_cash_val
+        if usd_cash_krw > 0:
+            sector_data["현금"] += usd_cash_krw   # NH(나무) 미국 예수금 KRW 환산
     sector_sorted = sorted(sector_data.items(), key=lambda x: x[1], reverse=True)
     sector_total = sum(v for _, v in sector_sorted)
 
@@ -921,15 +988,30 @@ def build_html_report(
         pnl_sign = "+" if r["pnl"] >= 0 else ""
         dot_color = sector_colors.get(r["sector"], "#999")
 
-        if r["cur_price"] is not None:
-            cur_display = f'{format_number(int(r["cur_price"]))}원'
-            cp = r.get("change_pct")
-            if cp is not None:
-                chg_class = "profit" if cp >= 0 else "loss"
-                chg_sign = "+" if cp >= 0 else ""
-                cur_display += f'<br><small class="{chg_class}">({chg_sign}{cp:.2f}%)</small>'
+        is_usd = r.get("currency") == "USD"
+        cp = r.get("change_pct")
+
+        def _chg_suffix(cp):
+            if cp is None:
+                return ""
+            c = "profit" if cp >= 0 else "loss"
+            s = "+" if cp >= 0 else ""
+            return f'<br><small class="{c}">({s}{cp:.2f}%)</small>'
+
+        if is_usd:
+            # 가격·평단은 USD 로 표기(원천), 평가/투자/손익은 KRW(환산 합산)
+            pu = r.get("price_usd")
+            cur_display = (f'${pu:,.2f}{_chg_suffix(cp)}') if pu is not None else "-"
+            avg_display = f'${r.get("avg_usd", 0):,.2f}'
+            name_html = f'<span class="hnm">{r["name"]}</span> <small style="opacity:.6">🇺🇸</small>'
+        elif r["cur_price"] is not None:
+            cur_display = f'{format_number(int(r["cur_price"]))}원{_chg_suffix(cp)}'
+            avg_display = f'{format_number(int(r["avg"]))}원'
+            name_html = f'<span class="hnm">{r["name"]}</span>'
         else:
             cur_display = "-"
+            avg_display = f'{format_number(int(r["avg"]))}원'
+            name_html = f'<span class="hnm">{r["name"]}</span>'
 
         cur_raw = r["cur_price"] if r["cur_price"] is not None else 0
         stock_rows_html += f"""
@@ -937,12 +1019,12 @@ def build_html_report(
             data-avg="{r["avg"]}" data-cur="{cur_raw}" data-invested="{r["invested"]}"
             data-eval="{r["eval"]}" data-pnl="{r["pnl"]}" data-pnlpct="{r["pnl_pct"]:.2f}">
           <td><span class="dot" style="background:{dot_color}"></span>{r["sector"]}</td>
-          <td><span class="hnm">{r["name"]}</span></td>
+          <td>{name_html}</td>
           <td class="num">{_format_man(r["eval"])}</td>
           <td class="thesis">{r["thesis"]}</td>
           <td class="num {pnl_class}">{pnl_sign}{format_number(int(r["pnl"]))}원<br><small>{pnl_sign}{int(r["pnl_pct"])}%</small></td>
           <td class="num">{cur_display}</td>
-          <td class="num">{format_number(int(r["avg"]))}원</td>
+          <td class="num">{avg_display}</td>
           <td class="num">{r["qty"]}주</td>
           <td class="num">{format_number(int(r["invested"]))}원</td>
         </tr>"""
@@ -1054,7 +1136,7 @@ def build_html_report(
     fut_financing = total_futures_entry_notional - total_margin  # 선물 차입(빌린 노출, 고정)
     fut_notional = total_futures_notional                        # 선물 현재 명목금(레버리지 포함)
     # 예수금 = 현물 cash + 선물 가용예수금(별도 버킷). 둘 다 청산 시 손에 쥐는 현금.
-    _cash = (cash_remaining + futures_cash_val) if show_cash else 0.0
+    _cash = (cash_remaining + futures_cash_val + usd_cash_krw) if show_cash else 0.0
 
     # 총자산(전부청산 순자산) = 순 구성요소의 합 (전부 +, 부호 혼동 없음)
     spot_net = total_eval - total_credit                         # 현물 순(평가 − 신용상환)
@@ -1105,18 +1187,19 @@ def build_html_report(
     else:
         asset_card_html = ""
 
-    # 예수금 / 총투자금 카드 — 현물 cash + 선물 가용예수금(별도 버킷) 합산
+    # 예수금 / 총투자금 카드 — 현물 cash + 선물 가용예수금 + 미국(USD) 예수금(KRW환산) 합산
     if show_cash and initial_capital:
-        total_cash = cash_remaining + futures_cash_val
+        total_cash = cash_remaining + futures_cash_val + usd_cash_krw
+        sub_bits = []
         if futures_cash_val > 0:
-            cash_sub = (
-                "<div class='sub' style='color:#9ca3af'>현물 "
-                f"{format_number(int(cash_remaining))} / 선물 {format_number(int(futures_cash_val))}</div>"
-            )
-        else:
-            cash_sub = ""
+            sub_bits.append(f"현물 {format_number(int(cash_remaining))} / 선물 {format_number(int(futures_cash_val))}")
+        if usd_cash_krw > 0:
+            sub_bits.append(f"미국 ${float(usd_cash or 0):,.0f}(₩{format_number(int(usd_cash_krw))})")
+        cash_sub = (
+            "<div class='sub' style='color:#9ca3af'>" + " · ".join(sub_bits) + "</div>"
+        ) if sub_bits else ""
         cash_card_html = (
-            "<div class='card'><div class='label'>예수금 (현물+선물)</div>"
+            "<div class='card'><div class='label'>예수금 (현물+선물+미국)</div>"
             f"<div class='value'>{format_number(int(total_cash))}원</div>{cash_sub}</div>"
         )
     else:
@@ -1152,7 +1235,7 @@ def build_html_report(
 
     # 증권사별(KB/신한) 예수금·융자·순평가 비중 막대 (show_cash + cash_by_account 있을 때만)
     broker_section_html = (
-        _build_broker_breakdown_html(active, rows, cash_by_account) if show_cash else ""
+        _build_broker_breakdown_html(active, rows, cash_by_account, usd_cash_krw) if show_cash else ""
     )
 
     html = f"""<!DOCTYPE html>
