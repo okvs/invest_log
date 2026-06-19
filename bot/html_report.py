@@ -1359,7 +1359,8 @@ def build_html_report(
   th {{ background:#1a1a24; color:#888; font-size:11px; text-transform:uppercase; letter-spacing:1px;
         padding:10px 12px; text-align:left; white-space:nowrap; position:sticky; top:0; cursor:pointer; user-select:none; }}
   th:hover {{ color:#fff; }}
-  th .arrow {{ font-size:10px; margin-left:4px; color:#555; }}
+  /* 정렬표시(▲▼)만 작게 — th 의 letter-spacing 도 0 으로 눌러 열 너비 차지 최소화 */
+  th .arrow {{ font-size:7px; margin-left:2px; color:#555; letter-spacing:0; }}
   th.sorted .arrow {{ color:#4A90D9; }}
   td {{ padding:10px 12px; border-bottom:1px solid #1a1a24; vertical-align:middle; }}
   tr:hover td {{ background:#1a1a24; }}
