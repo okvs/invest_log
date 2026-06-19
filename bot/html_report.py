@@ -1423,9 +1423,10 @@ def build_html_report(
   .qd-pt-label {{ fill:var(--qd-text); }}
   /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 11px) */
   #holdings table {{ font-size:var(--hold-fs, 11px); }}
-  /* 종목명 컬럼 — 폭 제한 후 줄바꿈. 한 줄에 한글 약 8글자(8.5em)까지 보이게
-     (이전 6.5em 대비 두 글자 더). 더 길면 두 줄로 */
-  #holdings .hnm {{ display:inline-block; max-width:8.5em; white-space:normal;
+  /* 종목명 컬럼 — 한 줄에 한글 약 8글자(8.5em). table{{width:100%}} 라 좁은 화면에선
+     열이 압축돼 max-width 만으론 안 넓어지므로 min-width 로 폭을 확보(이전 6.5em 대비
+     두 글자 더). 필요하면 .table-wrap(overflow-x:auto)이 가로 스크롤. 더 길면 두 줄 */
+  #holdings .hnm {{ display:inline-block; min-width:8.5em; max-width:8.5em; white-space:normal;
                     overflow-wrap:anywhere; line-height:1.25; vertical-align:middle; }}
   .fs-ctrl {{ float:right; display:inline-flex; gap:6px; }}
   .fs-ctrl button {{ background:var(--card); color:var(--text-dim); border:1px solid var(--border);
