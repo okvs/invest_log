@@ -815,6 +815,11 @@ _WRITE_LAYER = """
        border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);
        font-size:15px;font-family:inherit;box-sizing:border-box}
   .retro-sheet textarea{min-height:60px;resize:vertical}
+  .retro-btns{display:flex;gap:8px}
+  .retro-opt{flex:1;padding:11px 8px;border:1px solid var(--border);border-radius:10px;
+       background:var(--bg);color:var(--text);font-size:14px;font-weight:600;font-family:inherit;
+       cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .12s,color .12s}
+  .retro-opt.active{background:var(--accent);color:#fff;border-color:var(--accent)}
   .retro-submit{width:100%;padding:13px;border:none;border-radius:12px;background:var(--accent);
        color:#fff;font-size:15px;font-weight:700;margin-top:16px;cursor:pointer}
   .retro-submit:disabled{opacity:.6}
@@ -832,7 +837,11 @@ _WRITE_LAYER = """
 <div class="retro-modal" id="retro-modal"><div class="retro-sheet">
   <div class="retro-hd"><b id="retro-title">회고</b><button class="retro-x" id="retro-close">&times;</button></div>
   <label>매수 근거가 맞았나?</label>
-  <select id="retro-correct"><option value="">(부분적/모름)</option><option value="true">맞았다</option><option value="false">틀렸다</option></select>
+  <div class="retro-btns" id="retro-correct">
+    <button type="button" class="retro-opt" data-val="true">맞았다</button>
+    <button type="button" class="retro-opt" data-val="false">틀렸다</button>
+    <button type="button" class="retro-opt active" data-val="">부분적·모름</button>
+  </div>
   <label>잘한 점</label><textarea id="retro-well"></textarea>
   <label>아쉬운 점</label><textarea id="retro-regret"></textarea>
   <label>피할 수 있었나</label><input id="retro-avoid" placeholder="피할 수 있었다 / 통제 불가 / 모르겠다">
@@ -847,11 +856,15 @@ _WRITE_LAYER = """
   function toast(m,bad){var t=$('retro-toast');t.textContent=m;
     t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
     setTimeout(function(){t.classList.remove('show');},2600);}
+  function correctBtns(){return $('retro-correct').querySelectorAll('.retro-opt');}
+  function setCorrect(v){correctBtns().forEach(function(b){b.classList.toggle('active',b.getAttribute('data-val')===v);});}
+  function getCorrect(){var a=$('retro-correct').querySelector('.retro-opt.active');return a?a.getAttribute('data-val'):'';}
+  correctBtns().forEach(function(b){b.addEventListener('click',function(){setCorrect(b.getAttribute('data-val'));});});
   function open(card){var raw=card.getAttribute('data-retro');if(!raw)return;
     try{cur={card:card,items:JSON.parse(raw)};}catch(e){return;}
     var nm=(cur.items[0]&&cur.items[0].name)||'';
     $('retro-title').textContent=nm+' 회고'+(cur.items.length>1?(' · '+cur.items.length+'건'):'');
-    $('retro-correct').value='';['retro-well','retro-regret','retro-avoid','retro-lesson'].forEach(function(i){$(i).value='';});
+    setCorrect('');['retro-well','retro-regret','retro-avoid','retro-lesson'].forEach(function(i){$(i).value='';});
     modal.classList.add('show');}
   function close(){modal.classList.remove('show');cur=null;}
   function val(id){return ($(id).value||'').trim();}
@@ -862,7 +875,7 @@ _WRITE_LAYER = """
   function decBadge(n){var b=document.getElementById('graph-badge');if(!b)return;
     var v=(parseInt(b.textContent,10)||0)-n;if(v>0){b.textContent=v;}else{b.style.display='none';}}
   async function submit(){if(!cur)return;var btn=$('retro-submit');btn.disabled=true;
-    var tc=$('retro-correct').value;
+    var tc=getCorrect();
     var base={thesis_correct:tc===''?null:(tc==='true'),what_went_well:val('retro-well'),
       regrets:val('retro-regret'),avoidable:val('retro-avoid'),lessons:val('retro-lesson')};
     try{
