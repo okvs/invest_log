@@ -25,6 +25,7 @@ from bot.handlers.buy import buy_conversation
 from bot.handlers.cash import cash_conversation
 from bot.handlers.asset_graph import asset_graph_handler
 from bot.handlers.backtest import backtest_handler
+from bot.handlers.balance_shot import balance_shot_handler
 from bot.handlers.credit_sync import credit_sync_conversation
 from bot.handlers.cash_event import (
     delete_cash_event,
@@ -183,6 +184,9 @@ def main() -> None:
     app.add_handler(MessageHandler(_korean_command("만기점검"), expiry_check_handler))
     app.add_handler(MessageHandler(_korean_command("담보"), collateral_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^닉네임"), nickname_handler))
+
+    # 잔고 스크린샷(사진) → 융자 자동반영 트리거 (Claude 세션에 스킬 주입)
+    app.add_handler(MessageHandler(filters.PHOTO, balance_shot_handler))
 
     # ConversationHandler — 증권사 메시지가 먼저 매칭되도록 순서 중요
     app.add_handler(broker_conversation())

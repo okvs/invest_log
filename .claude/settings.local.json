@@ -40,7 +40,10 @@
       "Bash(git stash:*)",
       "Bash(ls /Users/seung/.openclaw/workspace/invest_log/*.log)",
       "Bash(ls:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cd:*)",
+      "Bash(.venv/bin/python scripts/balance_apply.py:*)",
+      "Bash(cd /Users/seung/.openclaw/workspace/invest_log && .venv/bin/python scripts/balance_apply.py:*)"
     ]
   }
 }
