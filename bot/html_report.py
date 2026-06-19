@@ -763,7 +763,10 @@ def _build_broker_breakdown_html(
                 f'<div class="stack-group" style="width:{pct}%" data-tip="{tip}">'
                 f'<div class="stack-seg" style="width:100%;background:{color}"></div>{lbl}</div>'
             )
-            amt_html += f'<span style="width:{pct}%;color:{color}">{_short_won(val)}</span>'
+            # 칸이 너무 좁으면(<12%) 금액 글자가 칸을 넘쳐 옆 글자와 겹치므로 생략
+            # (전체 금액은 위 broker-head 와 막대 툴팁에 있음). 칸은 폭 정렬용으로 유지.
+            amt = _short_won(val) if pct >= 12 else ""
+            amt_html += f'<span style="width:{pct}%;color:{color}">{amt}</span>'
         blocks += (
             f'<div class="broker-head"><b>{_html_escape(acct)}</b>'
             f'<span class="broker-sub">예수금 {format_number(int(round(cash)))} · '
@@ -1307,7 +1310,8 @@ def build_html_report(
   .broker-stack {{ margin-bottom:3px; height:30px; }}
   .broker-amts {{ display:flex; margin:0 0 18px; }}
   .broker-amts span {{ text-align:center; font-size:10px; font-weight:700;
-                      white-space:nowrap; overflow:visible; min-width:0; }}
+                      white-space:nowrap; overflow:hidden; text-overflow:clip;
+                      box-sizing:border-box; padding:0 1px; min-width:0; }}
   .broker-legend {{ display:flex; gap:16px; flex-wrap:wrap; margin:-4px 2px 8px;
                    font-size:12px; color:#aaa; }}
   .broker-legend span {{ display:inline-flex; align-items:center; gap:5px; }}

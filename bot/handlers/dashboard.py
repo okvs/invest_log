@@ -921,27 +921,27 @@ _WRITE_LAYER = """
 """
 
 
-def _build_writeapp_files(dashboard_html: bytes | None) -> dict[str, bytes]:
-    """app.html(쓰기 PWA) = 읽기 대시보드(index.html)와 동일한 HTML + 쓰기 레이어.
+def _inject_write_layer(dashboard_html: bytes | None) -> bytes | None:
+    """대시보드 HTML 에 쓰기 레이어(__APPCFG__ + _WRITE_LAYER)를 주입해 반환.
 
-    대시보드와 똑같이 보이되, '확인 필요' 탭에서 '회고 대기' 카드를 탭하면 회고
-    폼(/api/retro), 섹터 입력 카드를 저장하면 섹터 보정(/api/sector)이 맥 터널
-    API 로 기록된다(__APPCFG__ 로 터널 주소 주입). 터널 주소(data/tunnel_url.txt)가
-    없으면 미발행. 완성 후엔 이 app.html 하나만 쓰면 된다(읽기 대시보드를 대체).
+    '확인 필요' 탭에서 '회고 대기' 카드를 탭하면 인라인 회고 폼(/api/retro),
+    섹터 입력 카드를 저장하면 섹터 보정(/api/sector)이 맥 터널 API 로 기록된다
+    (__APPCFG__ 로 터널 주소 주입). 터널 주소(data/tunnel_url.txt)가 없으면 None
+    (읽기 전용 유지).
     """
     if not dashboard_html:
-        return {}
+        return None
     try:
         tunnel = _TUNNEL_URL_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         tunnel = ""
     if not tunnel:
-        return {}
+        return None
     text = dashboard_html.decode("utf-8")
     cfg = json.dumps({"api": tunnel}, ensure_ascii=False)
     layer = f"<script>window.__APPCFG__={cfg};</script>" + _WRITE_LAYER
     text = text.replace("</body>", layer + "</body>", 1)
-    return {"/app.html": text.encode("utf-8")}
+    return text.encode("utf-8")
 
 
 def _pwa_assets() -> dict[str, bytes]:
@@ -1389,7 +1389,12 @@ async def build_all_dashboard_html() -> dict[str, bytes]:
         for path, content in files.items()
     }
     files.update(_pwa_assets())
-    # 쓰기 PWA(app.html) = 읽기 대시보드(index.html)와 동일 HTML + 회고 쓰기 레이어
-    files.update(_build_writeapp_files(files.get("/index.html")))
+    # 루트 대시보드(index.html)와 app.html 모두에 쓰기 레이어 주입 — 어느 주소로
+    # 열어도 그 자리에서 회고 폼·섹터 저장이 동작한다(터널 있을 때). 터널이 없으면
+    # index.html 은 읽기 전용 그대로 두고 app.html 은 미발행.
+    writable = _inject_write_layer(files.get("/index.html"))
+    if writable is not None:
+        files["/index.html"] = writable
+        files["/app.html"] = writable
 
     return files
