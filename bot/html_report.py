@@ -1521,14 +1521,20 @@ def build_html_report(
                   gap:10px; margin:0 28px 22px 2px; }}
   .cmodal-title {{ font-size:15px; font-weight:700; color:var(--text-strong); }}
   .cmodal-total {{ font-size:18px; font-weight:800; color:var(--accent); white-space:nowrap; }}
-  .cbars {{ display:flex; align-items:flex-end; justify-content:center; gap:20px; min-height:172px; }}
-  .cbar {{ display:flex; flex-direction:column; align-items:center; justify-content:flex-end; width:74px; }}
-  .cbar-val {{ font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:6px; white-space:nowrap; }}
-  .cbar-fill {{ width:100%; border-radius:8px 8px 0 0; min-height:4px; }}
-  .clabels {{ display:flex; justify-content:center; gap:20px; margin-top:9px; }}
-  .clabel {{ width:74px; text-align:center; }}
-  .cbar-label {{ font-size:12px; font-weight:700; color:var(--text); }}
-  .cbar-note {{ font-size:10px; color:var(--text-dim); margin-top:2px; line-height:1.3; }}
+  .cbars {{ display:flex; justify-content:center; min-height:280px; }}
+  .cstack-wrap {{ display:flex; gap:22px; align-items:center; justify-content:center; }}
+  .cstack {{ width:124px; height:280px; border-radius:12px; overflow:hidden;
+             box-shadow:var(--shadow); flex-shrink:0; }}
+  .cseg {{ display:flex; flex-direction:column; align-items:center; justify-content:center;
+           color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.6); overflow:hidden; line-height:1.2; }}
+  .cseg-label {{ font-size:12px; font-weight:700; white-space:nowrap; }}
+  .cseg-pct {{ font-size:14px; font-weight:800; margin-top:1px; }}
+  .clegend {{ display:flex; flex-direction:column; gap:12px; justify-content:center; min-width:0; }}
+  .cleg-item {{ display:flex; align-items:flex-start; gap:8px; font-size:12px; }}
+  .cleg-dot {{ width:12px; height:12px; border-radius:3px; flex-shrink:0; margin-top:3px; }}
+  .cleg-name {{ font-weight:700; color:var(--text); }}
+  .cleg-amt {{ color:var(--text-dim); }}
+  .cleg-note {{ color:var(--text-dim); font-size:10px; }}
 </style>
 </head>
 <body>
@@ -1599,7 +1605,6 @@ def build_html_report(
         <span class="cmodal-total" id="cmodal-total"></span>
       </div>
       <div class="cbars" id="cmodal-bars"></div>
-      <div class="clabels" id="cmodal-labels"></div>
     </div>
   </div>
 
@@ -1684,26 +1689,36 @@ function holdFs(delta) {{
   if (!isNaN(s)) el.style.setProperty('--hold-fs', s + 'px');
 }})();
 
-// 카드 클릭 → 세로 막대그래프 모달
+// 카드 클릭 → 세로 누적막대(한 막대 안에서 비율) 모달
 function openCardChart(key) {{
   var data = (window.__CARD_CHARTS__ || {{}})[key];
   if (!data) return;
-  var max = 1;
-  data.bars.forEach(function(b) {{ var a = Math.abs(b.value); if (a > max) max = a; }});
-  var FILL = 150;
-  var barsHtml = data.bars.map(function(b) {{
-    var h = Math.max(4, Math.round(Math.abs(b.value) / max * FILL));
-    return '<div class="cbar"><div class="cbar-val">' + b.disp + '</div>'
-      + '<div class="cbar-fill" style="height:' + h + 'px;background:' + b.color + '"></div></div>';
+  var sum = 0;
+  data.bars.forEach(function(b) {{ if (b.value > 0) sum += b.value; }});
+  if (sum <= 0) sum = 1;
+  var segHtml = data.bars.map(function(b) {{
+    var v = b.value > 0 ? b.value : 0;
+    var pct = v / sum * 100;
+    var pctStr = (pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10) + '%';
+    var inner = pct >= 6
+      ? '<div class="cseg-label">' + b.label + '</div><div class="cseg-pct">' + pctStr + '</div>'
+      : '';
+    return '<div class="cseg" style="height:' + pct + '%;background:' + b.color + '">' + inner + '</div>';
   }}).join('');
-  var labelsHtml = data.bars.map(function(b) {{
-    return '<div class="clabel"><div class="cbar-label">' + b.label + '</div>'
-      + (b.note ? '<div class="cbar-note">' + b.note + '</div>' : '') + '</div>';
+  var legHtml = data.bars.map(function(b) {{
+    var v = b.value > 0 ? b.value : 0;
+    var pct = Math.round(v / sum * 100);
+    return '<div class="cleg-item"><span class="cleg-dot" style="background:' + b.color + '"></span>'
+      + '<span><span class="cleg-name">' + b.label + '</span> '
+      + '<span class="cleg-amt">' + b.disp + ' · ' + pct + '%</span>'
+      + (b.note ? '<br><span class="cleg-note">' + b.note + '</span>' : '')
+      + '</span></div>';
   }}).join('');
   document.getElementById('cmodal-title').textContent = data.title;
   document.getElementById('cmodal-total').textContent = data.total;
-  document.getElementById('cmodal-bars').innerHTML = barsHtml;
-  document.getElementById('cmodal-labels').innerHTML = labelsHtml;
+  document.getElementById('cmodal-bars').innerHTML =
+    '<div class="cstack-wrap"><div class="cstack">' + segHtml + '</div>'
+    + '<div class="clegend">' + legHtml + '</div></div>';
   document.getElementById('cmodal').classList.add('open');
 }}
 function closeCardChart() {{ document.getElementById('cmodal').classList.remove('open'); }}
