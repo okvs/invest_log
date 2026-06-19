@@ -1423,8 +1423,9 @@ def build_html_report(
   .qd-pt-label {{ fill:var(--qd-text); }}
   /* 보유 종목 글자크기 — 이 섹션에만 적용(기본 11px) */
   #holdings table {{ font-size:var(--hold-fs, 11px); }}
-  /* 종목명 컬럼 — 'SK하이닉스'급은 한 줄, 더 길면 두 줄로 (폭 제한 후 줄바꿈) */
-  #holdings .hnm {{ display:inline-block; max-width:6.5em; white-space:normal;
+  /* 종목명 컬럼 — 폭 제한 후 줄바꿈. 한 줄에 한글 약 8글자(8.5em)까지 보이게
+     (이전 6.5em 대비 두 글자 더). 더 길면 두 줄로 */
+  #holdings .hnm {{ display:inline-block; max-width:8.5em; white-space:normal;
                     overflow-wrap:anywhere; line-height:1.25; vertical-align:middle; }}
   .fs-ctrl {{ float:right; display:inline-flex; gap:6px; }}
   .fs-ctrl button {{ background:var(--card); color:var(--text-dim); border:1px solid var(--border);
