@@ -894,32 +894,29 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         '<div class="section-title" style="margin-top:8px;">🧪 백테스트</div>'
         f"{backtest_html}</div>"
     )
-    # 확인 필요 탭 배지 — (미해결 섹터 카드 수) + (미확인 회고/피라미딩 항목 수).
-    # 섹터 카드는 .sector-need-card 가 DOM 에 남아 있는 동안 계속 카운트되고
-    # (저장 시 쓰기 레이어가 .resolved 를 붙여 제외), 회고/피라미딩은 탭을 한 번
-    # 누르면(확인) 빠진다. __refreshCheckBadge 로 쓰기 레이어가 갱신을 호출한다.
-    items_json = json.dumps(graph_ids, ensure_ascii=False)
+    # 확인 필요 탭 배지 = 백엔드 기준 '섹터 입력 필요' 종목 수 — 모든 기기 동일(기기별
+    # localStorage 'seen' 의존 제거, 사용자 결정 2026-06-23). 섹터를 실제 입력하면(.resolved)
+    # 줄고, 단순히 탭을 봤다고 사라지지 않는다. 회고·피라미딩은 배지에서 빼고 탭에서 골라봄
+    # (피라미딩 '확인(숨기기)'는 이 기기 한정 카드 숨김일 뿐 배지/데이터엔 영향 없음).
     badge_script = (
-        "<script>(function(){var I=" + items_json + ";"
+        "<script>(function(){"
+        "var b=document.getElementById('graph-badge');"
         "function gs(k){var o={};try{o=JSON.parse(localStorage.getItem(k)||'{}');}catch(e){}return o;}"
         "function ss(k,o){try{localStorage.setItem(k,JSON.stringify(o));}catch(e){}}"
-        "var seen=gs('graph_seen'),dis=gs('graph_dismissed');"
-        "var b=document.getElementById('graph-badge');"
         "function sectorN(){return document.querySelectorAll('.sector-need-card:not(.resolved)').length;}"
-        "function refresh(){var un=I.filter(function(x){return !seen[x]&&!dis[x];});"
-        "var n=un.length+sectorN();"
+        "function refresh(){var n=sectorN();"
         "if(b){if(n){b.textContent=n;b.style.display='';}else{b.style.display='none';}}}"
         "window.__refreshCheckBadge=refresh;"
+        "var dis=gs('graph_dismissed');"
         "document.querySelectorAll('.extra-card[data-item]').forEach(function(c){"
         "if(dis[c.getAttribute('data-item')])c.style.display='none';});"
         "document.querySelectorAll('.dismiss-btn').forEach(function(btn){"
         "btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();"
         "var id=btn.getAttribute('data-item');dis[id]=1;ss('graph_dismissed',dis);"
-        "var card=btn.closest('.extra-card');if(card)card.style.display='none';refresh();});});"
-        "var g=document.querySelector('.tabbar button[data-tab=\"tab-check\"]');"
-        "if(g){g.addEventListener('click',function(){I.forEach(function(x){seen[x]=1;});ss('graph_seen',seen);refresh();});}"
+        "var card=btn.closest('.extra-card');if(card)card.style.display='none';});});"
         "refresh();})();</script>"
     )
+    _ = graph_ids  # 배지에서 더는 쓰지 않음(회고·피라미딩 제외) — 섹션 렌더는 extras_html 에 포함
     tail = panels + _TABBAR_HTML + _TAB_SCRIPT + badge_script + _ZOOM_LAYER
     text = text.replace("</body>", tail + "</body>", 1)
     return text.encode("utf-8")
