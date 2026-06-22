@@ -235,6 +235,17 @@ class FuturesBrokerMessage:
         return self.raw_amount * self.quantity * self.multiplier
 
 
+@dataclass
+class CashTransfer:
+    """증권사 입출금/이체 알림(체결 아님). 예수금 버킷 자동반영용."""
+    broker: str                  # "KB" | "신한"
+    direction: str               # "in"(입금) | "out"(출금)
+    amount: float                # 원
+    account_raw: str = ""        # 계좌번호 원문(마스킹) — KB 선물/주식 구분용
+    final_balance: float | None = None  # 신한: 최종잔액(있으면 ground truth)
+    counterparty: str = ""       # 상대계좌명(본인=계좌간 이체 판단 참고용)
+
+
 def _parse_kb_message(text: str) -> BrokerMessage:
     """KB증권 체결 알림 메시지 파싱. 체결금액은 주당 가격."""
     name_match = re.search(r"■\s*종목명:\s*(.+)", text)
@@ -408,6 +419,44 @@ def parse_broker_message(text: str) -> BrokerMessage | FuturesBrokerMessage:
     if stripped.startswith("계좌명"):
         return _parse_shinhan_message(text)
     raise ValueError("지원하는 증권사 메시지 형식이 아닙니다.")
+
+
+def parse_cash_transfer(text: str) -> CashTransfer | None:
+    """증권사 입출금/이체 알림 → CashTransfer. 입출금 메시지가 아니면 None.
+
+    · 신한 '입출금 알리미': 입출구분/금액/최종잔액(ground truth)/상대계좌명.
+    · KB '출금 안내'/'입금 안내': 금액/계좌번호(선물 384-…-28 vs 주식 구분용).
+    """
+    s = text.strip()
+    if s.startswith("[신한투자증권]") and "입출금" in s:
+        m_div = re.search(r"입출구분\s*[:：]\s*(.+)", s)
+        m_amt = re.search(r"금액\s*[:：]\s*([\d,]+)\s*원", s)
+        if not (m_div and m_amt):
+            return None
+        div = m_div.group(1)
+        direction = "in" if "입금" in div else ("out" if "출금" in div else None)
+        if direction is None:
+            return None
+        m_bal = re.search(r"최종잔액\s*[:：]\s*([\d,]+)\s*원", s)
+        m_acc = re.search(r"계좌번호\s*[:：]\s*(\S+)", s)
+        m_cp = re.search(r"상대계좌명\s*[:：]?\s*(\S+)", s)
+        return CashTransfer(
+            broker="신한", direction=direction, amount=_parse_number(m_amt.group(1)),
+            account_raw=(m_acc.group(1) if m_acc else ""),
+            final_balance=(_parse_number(m_bal.group(1)) if m_bal else None),
+            counterparty=(m_cp.group(1) if m_cp else ""),
+        )
+    if s.startswith("[KB증권]") and ("출금 안내" in s or "입금 안내" in s):
+        direction = "in" if "입금 안내" in s else "out"
+        m_amt = re.search(r"(?:출금|입금)금액\s*[:：]\s*([\d,]+)\s*원", s)
+        if not m_amt:
+            return None
+        m_acc = re.search(r"계좌번호\s*[:：]\s*(\S+)", s)
+        return CashTransfer(
+            broker="KB", direction=direction, amount=_parse_number(m_amt.group(1)),
+            account_raw=(m_acc.group(1) if m_acc else ""),
+        )
+    return None
 
 
 def _strip_spaces(name: str) -> str:

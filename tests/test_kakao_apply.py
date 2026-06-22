@@ -375,3 +375,59 @@ def test_nh_us_buy_adds_to_existing_and_sell():
     assert load_account()["usd_cash"] == -4500.0 + 6000.0
     sell_tx = [t for t in load_transactions() if t.get("type") == "sell" and t.get("currency") == "USD"]
     assert sell_tx and sell_tx[-1]["total_amount"] == 6000.0
+
+
+# ---------------------------------------------------------------------------
+# 입출금/이체 자동반영
+# ---------------------------------------------------------------------------
+def _shinhan_cash(word: str, amount: int, final_bal: int, cp: str = "정승민") -> str:
+    return (
+        "[신한투자증권] 입출금 알리미\n\n"
+        "계좌번호 : 270828***75\n계좌명 : 정승민\n"
+        f"입출구분 : 은행이체{word}\n금액 : {amount:,}원\n"
+        f"상대계좌명:{cp}\n최종잔액 : {final_bal:,}원\n"
+    )
+
+
+def _kb_cash(kind: str, amount: int, acct: str) -> str:
+    return (
+        f"[KB증권] {kind} 안내\n\n"
+        f"■ 계좌번호: {acct} [01]\n■ {kind}금액: {amount:,}원\n■ 내용: {kind}(NO.1)\n"
+    )
+
+
+def test_cash_shinhan_deposit_sets_final_balance():
+    save_account({"initial_capital": 155000000.0, "cash": 100000000.0,
+                  "cash_by_account": {"KB": 80000000.0, "신한": 67117018.0},
+                  "futures_cash": 48763854.0})
+    res = ka.apply_message(_shinhan_cash("입금", 48766794, 115883812))
+    assert res is not None and res.applied and res.action == "입출금"
+    acc = load_account()
+    assert acc["cash_by_account"]["신한"] == 115883812          # 최종잔액 = ground truth
+    assert acc["cash"] == pytest.approx(100000000.0 + (115883812 - 67117018))  # cash += 델타
+
+
+def test_cash_kb_futures_withdraw_reduces_futures_cash():
+    save_account({"initial_capital": 155000000.0, "cash": 100000000.0,
+                  "cash_by_account": {"KB": 80000000.0}, "futures_cash": 48763854.0})
+    res = ka.apply_message(_kb_cash("출금", 48766794, "***-*28"))  # 384-…-28 = 선물계좌
+    assert res is not None and res.applied
+    acc = load_account()
+    assert acc["futures_cash"] == 0.0          # 48,763,854 - 48,766,794 < 0 → 0 clamp
+    assert acc["cash"] == 100000000.0          # 현물 cash 불변(선물 버킷만 변경)
+
+
+def test_cash_kb_stock_withdraw_reduces_kb_and_cash():
+    save_account({"initial_capital": 155000000.0, "cash": 100000000.0,
+                  "cash_by_account": {"KB": 80000000.0}, "futures_cash": 0.0})
+    res = ka.apply_message(_kb_cash("출금", 5000000, "277-***-*12"))  # 주식계좌
+    assert res is not None and res.applied
+    acc = load_account()
+    assert acc["cash_by_account"]["KB"] == 75000000.0
+    assert acc["cash"] == 95000000.0
+
+
+def test_cash_transfer_parser_ignores_trades():
+    from parsers.input_parser import parse_cash_transfer
+    assert parse_cash_transfer(kb_stock("buy", "삼성전자", 10, 70000)) is None
+    assert parse_cash_transfer("그냥 안내 메시지") is None

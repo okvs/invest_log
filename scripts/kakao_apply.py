@@ -49,10 +49,13 @@ for _p in (PROJECT_ROOT, SCRIPTS_DIR):
 from parsers.input_parser import (  # noqa: E402
     BrokerMessage,
     BuyInput,
+    CashTransfer,
     FuturesBrokerMessage,
     parse_broker_message,
+    parse_cash_transfer,
     resolve_name,
 )
+import re  # noqa: E402
 from models.futures_position import FuturesPosition  # noqa: E402
 from models.futures_transaction import FuturesTransaction  # noqa: E402
 from models.portfolio import Holding  # noqa: E402
@@ -534,16 +537,66 @@ def _apply_futures(msg: FuturesBrokerMessage, *, ts_kst: str, dry_run: bool) -> 
 # ---------------------------------------------------------------------------
 # 메시지 → 적용
 # ---------------------------------------------------------------------------
+_KB_FUTURES_ACCT_TAILS = {"28"}  # KB 선물계좌 384-…-28 (끝 2자리). 그 외 KB 계좌는 주식.
+
+
+def _kb_is_futures(account_raw: str) -> bool:
+    digits = re.sub(r"[^0-9]", "", account_raw or "")
+    return digits[-2:] in _KB_FUTURES_ACCT_TAILS if len(digits) >= 2 else False
+
+
+def _apply_cash(ct: CashTransfer, *, dry_run: bool) -> ApplyResult:
+    """입출금/이체를 예수금 버킷에 반영.
+
+    · 신한: 최종잔액이 있으면 그 값으로 set(ground truth) + 현물 cash 를 델타만큼 가감.
+    · KB 선물계좌(…-28) 출금/입금: 선물예수금(futures_cash) 가감.
+    · KB 주식계좌: cash_by_account['KB'] + 현물 cash 가감.
+    본인계좌 간 이체는 양쪽(출금·입금) 메시지가 각각 와서 버킷만 옮겨지므로 NAV 불변.
+    """
+    amount = float(ct.amount)
+    verb = "입금" if ct.direction == "in" else "출금"
+    acc = load_account()
+    if ct.broker == "신한":
+        cur = float(acc.get("cash_by_account", {}).get("신한", 0) or 0)
+        new_bal = ct.final_balance if ct.final_balance is not None else (
+            cur + (amount if ct.direction == "in" else -amount))
+        delta = new_bal - cur
+        if not dry_run:
+            acc.setdefault("cash_by_account", {})["신한"] = new_bal
+            acc["cash"] = float(acc.get("cash", 0) or 0) + delta
+            save_account(acc)
+        tail = f" → 신한 예수금 {int(new_bal):,}원" if ct.final_balance is not None else ""
+        return ApplyResult(True, "입출금", f"신한 {verb} {int(amount):,}원{tail}", "")
+    if ct.broker == "KB":
+        sign = 1 if ct.direction == "in" else -1
+        if _kb_is_futures(ct.account_raw):
+            if not dry_run:
+                acc["futures_cash"] = max(0.0, float(acc.get("futures_cash", 0) or 0) + sign * amount)
+                save_account(acc)
+            return ApplyResult(True, "입출금",
+                               f"선물계좌 {verb} {int(amount):,}원 → 선물예수금 {int(acc.get('futures_cash', 0)):,}원", "")
+        if not dry_run:
+            acc.setdefault("cash_by_account", {})["KB"] = float(
+                acc.get("cash_by_account", {}).get("KB", 0) or 0) + sign * amount
+            acc["cash"] = float(acc.get("cash", 0) or 0) + sign * amount
+            save_account(acc)
+        return ApplyResult(True, "입출금", f"KB {verb} {int(amount):,}원", "")
+    return ApplyResult(False, "skip", f"입출금 {int(amount):,}원 ({ct.broker})", "계좌 매핑 불가 — 수동 확인")
+
+
 def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False,
                   account: str = "") -> ApplyResult | None:
-    """카톡 1건(원문 상세)을 적용. 체결이 아니면(파싱 실패) None 반환.
+    """카톡 1건(원문 상세)을 적용. 체결/입출금이 아니면(파싱 실패) None 반환.
 
     account: 출처 계좌(KB/신한) — 현물 by_account 분해 갱신용(선물은 미사용).
     """
+    ct = parse_cash_transfer(detail)
+    if ct is not None:
+        return _apply_cash(ct, dry_run=dry_run)
     try:
         msg = parse_broker_message(detail)
     except ValueError:
-        return None  # 입출금/안내/비지원 등 — 적용 대상 아님
+        return None  # 안내/비지원 등 — 적용 대상 아님
     if isinstance(msg, FuturesBrokerMessage):
         msg.name = resolve_name(msg.name, nickname_map=load_nickname_map())
         return _apply_futures(msg, ts_kst=ts_kst, dry_run=dry_run)
