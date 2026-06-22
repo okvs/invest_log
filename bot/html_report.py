@@ -756,8 +756,11 @@ def _build_broker_breakdown_html(
         return ""
 
     C_CASH, C_NET, C_LOAN = "#6b7280", "var(--accent)", "#d83c3c"
+    # 증권사 표시 순서 고정: KB → 신한 → 나무 (그 외는 뒤에 이름순)
+    _ORDER = {"KB": 0, "신한": 1, "나무": 2}
+    _by_order = lambda kv: (_ORDER.get(kv[0], 99), kv[0])
     blocks = ""
-    for acct, d in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True):
+    for acct, d in sorted(brokers.items(), key=_by_order):
         cash, loan = d["cash"], d["loan"]
         net = d["eval"] - loan          # 평가금 − 융자액 = 순평가(내 돈)
         total = cash + d["eval"]        # = 예수금 + (평가금−융자액) + 융자액
@@ -791,9 +794,7 @@ def _build_broker_breakdown_html(
             f'<div class="broker-amts">{amt_html}</div>'
         )
 
-    acct_names = " · ".join(
-        a for a, _ in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True)
-    )
+    acct_names = " · ".join(a for a, _ in sorted(brokers.items(), key=_by_order))
     return (f'<div class="section-title" style="margin-top:32px">증권사별 구성 ({acct_names})</div>'
             + blocks)
 
