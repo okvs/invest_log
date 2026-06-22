@@ -167,13 +167,18 @@ _TAB_CSS = """
   .b-close { background:rgba(21,146,74,.16); color:var(--profit); }
   .hist-date { color:var(--text-dim); font-size:12px; font-weight:700;
                max-width:760px; margin:18px auto 8px; }
-  /* 연금 거래 — 기록 탭에만 보이고 모든 계산서 제외. 행은 흐리게, '연금' 칩으로 토글. */
-  .hist-row.is-pension { opacity:.6; }
-  .pen-toggle { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
-                border:1px solid var(--border); background:transparent; color:var(--text-dim);
-                cursor:pointer; white-space:nowrap; font-family:inherit; line-height:1.4;
-                opacity:.5; -webkit-tap-highlight-color:transparent; flex:none; }
-  .pen-toggle.is-on { background:var(--accent); border-color:var(--accent); color:#fff; opacity:1; }
+  /* 연금 거래 — 기록 탭에만 보이고 모든 계산서 제외. 연금으로 설정된 행만 '연금' 라벨이
+     붙고, 토글 버튼은 평소 숨김 → 행을 꾹 누르면(long-press) 나타난다. */
+  .hist-row.is-pension { opacity:.62; }
+  .hist-row .r1 { -webkit-user-select:none; user-select:none; }  /* 롱프레스 시 텍스트선택 방지 */
+  .pen-label { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
+               background:var(--accent); color:#fff; white-space:nowrap; flex:none; }
+  .pen-toggle { display:none; font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
+                border:1px solid var(--accent); background:transparent; color:var(--accent);
+                cursor:pointer; white-space:nowrap; font-family:inherit; line-height:1.4; flex:none;
+                -webkit-tap-highlight-color:transparent; }
+  .hist-row.pen-armed { opacity:1; background:var(--accent-soft,rgba(31,122,82,.14)); }
+  .hist-row.pen-armed .pen-toggle { display:inline-flex; align-items:center; }
 </style>
 """
 
@@ -328,11 +333,15 @@ def _build_history_html() -> str:
             pnl_html = f'<span class="pnl {cls}">{amt}{pct_s}</span>'
         tm = it["date"][11:16]
         is_pension = it.get("pension")
-        pen_chip = ""
+        pen_html = ""
         if it.get("pensionable") and it.get("txid"):
-            pen_chip = (
-                f'<button type="button" class="pen-toggle{" is-on" if is_pension else ""}" '
-                f'data-pension-tx="{it["txid"]}">연금</button>'
+            # 연금 설정된 행만 '연금' 라벨(정적). 토글 버튼은 숨김(롱프레스로 노출).
+            label = '<span class="pen-label">연금</span>' if is_pension else ""
+            btn_txt = "연금 해제" if is_pension else "연금"
+            pen_html = (
+                label
+                + f'<button type="button" class="pen-toggle" '
+                  f'data-pension-tx="{it["txid"]}">{btn_txt}</button>'
             )
         row_cls = "hist-row is-pension" if is_pension else "hist-row"
         out.append(
@@ -340,7 +349,7 @@ def _build_history_html() -> str:
             '<div class="r1">'
             f'<span class="hbadge {it["cls"]}">{it["label"]}</span>'
             f'<span class="nm">{it["name"]}</span>'
-            f'{pen_chip}'
+            f'{pen_html}'
             f'{pnl_html}'
             '</div>'
             f'<div class="r2">{tm} · {it["detail"]}</div>'
@@ -960,15 +969,29 @@ _WRITE_LAYER = """
   });
 })();</script>
 <script>(function(){
-  // 기록 탭의 '연금' 칩 → POST /api/pension. 토글하면 그 거래가 보유/평가/총자산/
-  // 예수금/섹터/그래프/실현손익 등 모든 계산에서 빠지거나(켜기) 다시 포함된다(끄기).
-  // 기록 탭에는 계속 보이며, 다른 탭은 다음 새로고침 때 반영(서버가 자동 재발행).
+  // 기록 탭: 거래 행을 '꾹 누르면(long-press)' 연금 토글 버튼이 나타나고, 탭하면
+  // POST /api/pension. 연금 설정된 행만 '연금' 라벨이 정적으로 붙는다. 토글하면 그 거래가
+  // 보유/평가/총자산/예수금/섹터/그래프/실현손익 등 모든 계산에서 빠지거나(켜기) 다시
+  // 포함되며(끄기), 기록 탭엔 계속 보인다(다른 탭은 다음 새로고침 때 반영).
   var CFG=window.__APPCFG__||{}, API=CFG.api||'';
   if(!API) return;
   function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
     t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
     setTimeout(function(){t.classList.remove('show');},2600);}
-  document.querySelectorAll('.pen-toggle[data-pension-tx]').forEach(function(btn){
+  var LONG=480, timer=null, armed=null;
+  function disarm(){ if(armed){armed.classList.remove('pen-armed');armed=null;} }
+  function arm(row){ if(armed===row)return; disarm(); row.classList.add('pen-armed'); armed=row; }
+  document.querySelectorAll('.hist-row .pen-toggle[data-pension-tx]').forEach(function(btn){
+    var row=btn.closest('.hist-row'); if(!row) return;
+    function start(){ cancel(); timer=setTimeout(function(){ arm(row); }, LONG); }
+    function cancel(){ if(timer){clearTimeout(timer);timer=null;} }
+    row.addEventListener('touchstart',start,{passive:true});
+    row.addEventListener('touchend',cancel);
+    row.addEventListener('touchmove',cancel);
+    row.addEventListener('mousedown',start);
+    row.addEventListener('mouseup',cancel);
+    row.addEventListener('mouseleave',cancel);
+    row.addEventListener('contextmenu',function(e){e.preventDefault();});  // 롱프레스 콜아웃 차단
     btn.addEventListener('click',async function(e){
       e.preventDefault();e.stopPropagation();
       var id=btn.getAttribute('data-pension-tx');
@@ -978,12 +1001,18 @@ _WRITE_LAYER = """
           headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:id})});
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
         var jj=await r.json();var on=!!(jj.transaction&&jj.transaction.is_pension);
-        btn.classList.toggle('is-on',on);
-        var row=btn.closest('.hist-row');if(row)row.classList.toggle('is-pension',on);
+        row.classList.toggle('is-pension',on);
+        var lab=row.querySelector('.pen-label');
+        if(on){ if(!lab){lab=document.createElement('span');lab.className='pen-label';
+                 lab.textContent='연금';btn.parentNode.insertBefore(lab,btn);} btn.textContent='연금 해제'; }
+        else { if(lab)lab.remove(); btn.textContent='연금'; }
         toast(on?'연금으로 표시 — 계산에서 제외':'연금 해제 — 다시 포함');
+        disarm();
       }catch(e2){toast(e2.message||'실패',true);}finally{btn.disabled=false;}
     });
   });
+  // 무장된 행 바깥을 탭하면 닫기(버튼 탭은 위에서 처리되어 유지)
+  document.addEventListener('click',function(e){ if(!e.target.closest('.pen-armed')) disarm(); },true);
 })();</script>
 """
 
