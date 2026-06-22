@@ -546,7 +546,11 @@ def _render_review_section() -> tuple[str, list[str]]:
     txs = load_transactions()
     holdings = load_holdings()
     tmap = load_ticker_map()
-    unrev = [t for t in txs if t.get("type") == "sell" and not t.get("retrospective_id")]
+    unrev = [
+        t for t in txs
+        if t.get("type") == "sell" and not t.get("retrospective_id")
+        and not t.get("is_pension")  # 연금 매도는 회고 대상 아님(기록 탭에만 노출)
+    ]
     if not unrev:
         return "", []
 
@@ -674,9 +678,10 @@ async def _build_graph_extras() -> tuple[str, list[str]]:
     """
     txs = load_transactions()
     # 'v2|' 접두 = data-retro 마크업 도입 시 캐시 무효화(코드 변경은 key 에 안 잡힘).
-    review_key = "v2|" + "|".join(sorted(
+    review_key = "v3|" + "|".join(sorted(
         str(t.get("id", "")) for t in txs
         if t.get("type") == "sell" and not t.get("retrospective_id")
+        and not t.get("is_pension")
     ))
     today = datetime.now().strftime("%Y-%m-%d")
 

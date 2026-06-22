@@ -176,6 +176,18 @@ def test_toggle_pension_sell_readds_shares_and_costbasis():
     assert load_account()["cash"] == pytest.approx(cash_after_sell - (total - fee))
 
 
+def test_pension_sell_excluded_from_unreviewed():
+    """연금 매도는 회고 대기(unreviewed_sells)에 안 나온다 — 기록 탭에만."""
+    _seed()
+    service.record_buy("삼성전자", 10, 70000)
+    s1 = service.record_sell("삼성전자", 5, 90000)   # 일반 매도
+    service.record_buy("연금주", 10, 1000)
+    s2 = service.record_sell("연금주", 10, 2000)
+    service.toggle_pension(s2["id"])                 # 연금 처리
+    ids = {t["id"] for t in service.get_state()["unreviewed_sells"]}
+    assert s1["id"] in ids and s2["id"] not in ids
+
+
 def test_pension_excluded_from_realized_profit_trend(monkeypatch):
     """연금 매도의 실현손익은 자산그래프(누적 실현)에서 제외된다."""
     from bot import asset_history

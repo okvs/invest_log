@@ -333,7 +333,9 @@ def get_state() -> dict:
     txs = store.load_transactions()
     recent = sorted(txs, key=lambda t: t.get("date", ""), reverse=True)[:30]
     unreviewed = [
-        t for t in txs if t.get("type") == "sell" and not t.get("retrospective_id")
+        t for t in txs
+        if t.get("type") == "sell" and not t.get("retrospective_id")
+        and not t.get("is_pension")  # 연금 매도는 회고 대상 아님
     ]
     return {
         "holdings": holdings,
