@@ -156,8 +156,12 @@ def pending_input_counts() -> tuple[int, int]:
 
 
 def notify_pending_inputs_if_new() -> bool:
-    """'확인 필요' 건수가 직전보다 늘었으면 푸시(늘면 True). 최초 호출은 baseline 만 잡고 미발송."""
-    sector_n, retro_n = pending_input_counts()
+    """섹터 입력 필요 종목이 직전보다 늘었으면 푸시(늘면 True). 최초 호출은 baseline 만 잡고 미발송.
+
+    회고 대기는 푸시하지 않는다 — 선택적 복기이고 과거분이 많아 노이즈이며, 매도 자체는
+    '체결 반영' 푸시로 이미 알림이 간다(사용자 결정 2026-06-23). 섹터 입력만 '진짜 입력 필요'.
+    """
+    sector_n, _retro_n = pending_input_counts()
     fp = _push_state_file()
     first = not fp.exists()
     prev = {}
@@ -166,19 +170,11 @@ def notify_pending_inputs_if_new() -> bool:
             prev = json.loads(fp.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             prev = {}
-    fp.write_text(json.dumps({"sector_n": sector_n, "retro_n": retro_n}), encoding="utf-8")
+    fp.write_text(json.dumps({"sector_n": sector_n}), encoding="utf-8")
     if first:
         return False
-    grew = sector_n > prev.get("sector_n", 0) or retro_n > prev.get("retro_n", 0)
-    if not grew:
-        return False
-    parts = []
-    if sector_n:
-        parts.append(f"섹터입력 {sector_n}")
-    if retro_n:
-        parts.append(f"회고 {retro_n}")
-    if not parts:
-        return False
-    send_push("📝 확인 필요", " · ".join(parts) + "건이 있어요 — 앱에서 확인하세요")
-    return True
+    if sector_n > prev.get("sector_n", 0):
+        send_push("📝 섹터 입력 필요", f"섹터 입력이 필요한 종목 {sector_n}개 — 앱에서 확인하세요")
+        return True
+    return False
 

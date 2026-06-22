@@ -728,7 +728,9 @@ async def _build_graph_extras() -> tuple[str, list[str]]:
     rh, rids = await _cached_extra(".graph_review.json", review_key, _GRAPH_REVIEW_TTL, _render_review_section)
     ph, pids = await _cached_extra(".graph_pyramid.json", today, _GRAPH_PYRAMID_TTL, _render_pyramid_section)
 
-    return rh + ph, (rids + pids)
+    # 회고 대기(rids)는 '확인 필요' 배지에서 제외 — 회고는 모든 매도를 하는 게 아니라
+    # 골라서 하는 선택적 복기라(사용자 결정 2026-06-23) 카드만 두고 배지로 재촉하지 않는다.
+    return rh + ph, pids
 
 
 def _build_sector_needed_html() -> tuple[str, int]:
@@ -1017,7 +1019,7 @@ _WRITE_LAYER = """
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
       }
-      markDismissed(cur.items);decBadge(cur.items.length);
+      markDismissed(cur.items);
       cur.card.style.display='none';toast('회고 저장 완료');close();
     }catch(e){toast(e.message||'저장 실패',true);}finally{btn.disabled=false;}}
   document.querySelectorAll('.retro-card').forEach(function(card){
@@ -1028,7 +1030,7 @@ _WRITE_LAYER = """
     var sk=document.createElement('button');sk.type='button';sk.className='retro-skip';
     sk.textContent='건너뛰기 (이 종목 회고 안 함)';
     sk.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();
-      markDismissed(items);decBadge(items.length);card.style.display='none';toast('건너뛰었어요');});
+      markDismissed(items);card.style.display='none';toast('건너뛰었어요');});
     card.appendChild(sk);});  // 카드 안에 넣어야 카드 숨길 때 버튼도 함께 사라짐
   $('retro-close').addEventListener('click',close);
   modal.addEventListener('click',function(e){if(e.target===modal)close();});

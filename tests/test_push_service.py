@@ -75,7 +75,7 @@ def test_pending_input_counts():
     assert retro_n == 1
 
 
-def test_notify_pending_seeds_then_pushes_on_growth(monkeypatch):
+def test_notify_pending_pushes_on_sector_growth_only(monkeypatch):
     sent = []
     monkeypatch.setattr(push_service, "send_push", lambda t, b, url="": sent.append((t, b)) or 1)
     save_holdings([{"name": "A", "sector": "", "quantity": 10}])
@@ -83,13 +83,30 @@ def test_notify_pending_seeds_then_pushes_on_growth(monkeypatch):
     # 첫 호출 = baseline 시드(미발송)
     assert push_service.notify_pending_inputs_if_new() is False
     assert sent == []
-    # 섹터 필요 종목 1개 추가 → 증가 → 발송
+    # 섹터 필요 종목 1개 추가 → 증가 → 발송('섹터 입력' 제목)
     save_holdings([
         {"name": "A", "sector": "", "quantity": 10},
         {"name": "E", "sector": "", "quantity": 1},
     ])
     assert push_service.notify_pending_inputs_if_new() is True
-    assert len(sent) == 1 and "확인 필요" in sent[0][0]
+    assert len(sent) == 1 and "섹터" in sent[0][0]
     # 변동 없음 → 미발송
     assert push_service.notify_pending_inputs_if_new() is False
     assert len(sent) == 1
+
+
+def test_notify_pending_ignores_retro_growth(monkeypatch):
+    """미회고 매도가 늘어도 푸시하지 않는다(회고는 선택적·체결푸시로 커버)."""
+    sent = []
+    monkeypatch.setattr(push_service, "send_push", lambda t, b, url="": sent.append((t, b)) or 1)
+    save_holdings([])  # 섹터 필요 0
+    save_transactions([])
+    assert push_service.notify_pending_inputs_if_new() is False  # baseline
+    # 미회고 매도 3건 추가 → 회고대기 증가하지만 푸시 안 함
+    save_transactions([
+        {"type": "sell", "retrospective_id": "", "is_pension": False},
+        {"type": "sell", "retrospective_id": "", "is_pension": False},
+        {"type": "sell", "retrospective_id": "", "is_pension": False},
+    ])
+    assert push_service.notify_pending_inputs_if_new() is False
+    assert sent == []
