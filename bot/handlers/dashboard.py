@@ -746,6 +746,70 @@ def _build_sector_needed_html() -> tuple[str, int]:
     return intro + "".join(cards), len(rows)
 
 
+# 그림 확대(라이트박스) — 자산그래프·4사분면·백테스트(.imgcard / .qd-chart-wrap) 탭하면
+# 화면 꽉 차게 확대. 가로로 긴 그림은 세로 화면에서 90° 회전해 더 크게. 읽기 대시보드에도
+# 들어가도록 tail(_wrap_with_tabs)에서 모든 대시보드에 주입한다.
+_ZOOM_LAYER = """
+<style>
+  .zoomable { cursor:zoom-in; }
+  .zoom-modal { position:fixed; inset:0; z-index:4000; display:none;
+       background:rgba(0,0,0,.97); -webkit-tap-highlight-color:transparent; }
+  .zoom-modal.show { display:block; }
+  .zoom-stage { position:absolute; left:50%; top:50%; transform-origin:center center; will-change:transform; }
+  .zoom-stage > * { display:block; }
+  .zoom-close { position:fixed; top:calc(8px + env(safe-area-inset-top)); right:14px; z-index:4001;
+       width:42px; height:42px; border-radius:50%; border:none; background:rgba(255,255,255,.16);
+       color:#fff; font-size:24px; line-height:42px; text-align:center; cursor:pointer; padding:0; }
+  .zoom-hint { position:fixed; left:50%; transform:translateX(-50%); z-index:4001; pointer-events:none;
+       bottom:calc(18px + env(safe-area-inset-bottom)); color:rgba(255,255,255,.55); font-size:12px; }
+</style>
+<div class="zoom-modal" id="zoom-modal">
+  <button class="zoom-close" id="zoom-close" aria-label="닫기">&times;</button>
+  <div class="zoom-stage" id="zoom-stage"></div>
+  <div class="zoom-hint">탭하면 닫기</div>
+</div>
+<script>(function(){
+  var modal=document.getElementById('zoom-modal'), stage=document.getElementById('zoom-stage');
+  if(!modal||!stage) return;
+  function close(){ modal.classList.remove('show'); stage.innerHTML=''; document.body.style.overflow=''; }
+  function fit(w,h){
+    var vw=window.innerWidth, vh=window.innerHeight, rot=(w>h && vh>vw);
+    var s=rot ? Math.min(vh/w, vw/h) : Math.min(vw/w, vh/h); if(!(s>0)) s=1;
+    stage.style.transform='translate(-50%,-50%)'+(rot?' rotate(90deg)':'')+' scale('+s+')';
+    stage.dataset.w=w; stage.dataset.h=h;
+  }
+  function open(srcEl){
+    var media=srcEl.querySelector('img, svg'); if(!media) return;
+    var w,h;
+    if(media.tagName.toLowerCase()==='img'){ w=media.naturalWidth||media.clientWidth; h=media.naturalHeight||media.clientHeight; }
+    else { var vb=media.viewBox&&media.viewBox.baseVal; if(vb&&vb.width){w=vb.width;h=vb.height;}
+           else {var r=media.getBoundingClientRect(); w=r.width; h=r.height;} }
+    if(!(w>0&&h>0)) return;
+    var clone=media.cloneNode(true); clone.removeAttribute('style');
+    clone.style.width=w+'px'; clone.style.height=h+'px';
+    if(media.tagName.toLowerCase()==='svg'){  // 클론 시 잃은 배경 복원(투명 SVG 뒤로 페이지 비침 방지)
+      var bg=getComputedStyle(media).backgroundColor;
+      clone.style.background=(bg&&bg!=='rgba(0, 0, 0, 0)'&&bg!=='transparent')?bg:'#0e1512';
+    }
+    stage.innerHTML=''; stage.appendChild(clone);
+    modal.classList.add('show'); document.body.style.overflow='hidden';
+    fit(w,h);
+  }
+  document.querySelectorAll('.imgcard, .qd-chart-wrap').forEach(function(el){
+    el.classList.add('zoomable');
+    el.addEventListener('click', function(e){
+      if(e.target.closest('[data-tip], .qd-toggle, a, button')) return;  // 포인트/토글 탭은 확대 제외
+      open(el);
+    });
+  });
+  document.getElementById('zoom-close').addEventListener('click', function(e){ e.stopPropagation(); close(); });
+  modal.addEventListener('click', close);
+  window.addEventListener('resize', function(){ if(modal.classList.contains('show')&&stage.dataset.w) fit(+stage.dataset.w, +stage.dataset.h); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape') close(); });
+})();</script>
+"""
+
+
 async def _wrap_with_tabs(html: bytes) -> bytes:
     """대시보드 HTML 을 하단 탭바(현황/확인 필요/기록/전략) 구조로 감싼다.
 
@@ -823,7 +887,7 @@ async def _wrap_with_tabs(html: bytes) -> bytes:
         "if(g){g.addEventListener('click',function(){I.forEach(function(x){seen[x]=1;});ss('graph_seen',seen);refresh();});}"
         "refresh();})();</script>"
     )
-    tail = panels + _TABBAR_HTML + _TAB_SCRIPT + badge_script
+    tail = panels + _TABBAR_HTML + _TAB_SCRIPT + badge_script + _ZOOM_LAYER
     text = text.replace("</body>", tail + "</body>", 1)
     return text.encode("utf-8")
 
