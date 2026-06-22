@@ -658,6 +658,11 @@ def poll_once(
                 log(f"[{broker}] 반영 logId={log_id} {res.action}: {res.summary}")
                 if token and chat_id:
                     tg_send(token, chat_id, _confirm_text(broker, sent_kst or "", res))
+                try:  # PWA 웹 푸시(체결 자동반영)
+                    from bot.push_service import send_push
+                    send_push(f"✅ 체결 반영 · {broker}", res.summary)
+                except Exception:  # noqa: BLE001
+                    log(f"[{broker}] 체결 푸시 실패")
             else:
                 log(f"[{broker}] 보류 logId={log_id} {res.action}: {res.summary} | {res.warning}")
                 if token and chat_id and res.action.startswith("skip"):
@@ -676,6 +681,13 @@ def poll_once(
     n_total = sum(1 for *_, r in results if r.applied)
     if n_total and not dry_run:
         _republish_dashboard()
+    # '확인 필요'(섹터입력/회고대기)가 새로 생겼으면 푸시. 첫 호출은 baseline 만 잡음.
+    if not dry_run:
+        try:
+            from bot.push_service import notify_pending_inputs_if_new
+            notify_pending_inputs_if_new()
+        except Exception:  # noqa: BLE001
+            log("입력필요 푸시 체크 실패")
     return results
 
 

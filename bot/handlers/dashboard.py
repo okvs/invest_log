@@ -69,6 +69,37 @@ _PWA_MANIFEST = json.dumps(
 ).encode("utf-8")
 
 
+# 서비스워커 — 웹 푸시 수신/표시. {token}/sw.js 로 발행되어 {token}/ 스코프를 제어한다.
+_SERVICE_WORKER_JS = b"""
+self.addEventListener('install', function(e){ self.skipWaiting(); });
+self.addEventListener('activate', function(e){ e.waitUntil(self.clients.claim()); });
+self.addEventListener('push', function(event){
+  var d = {};
+  try { d = event.data ? event.data.json() : {}; }
+  catch(e){ d = { title: '\\uD22C\\uC790 \\uC54C\\uB9BC', body: (event.data && event.data.text()) || '' }; }
+  var opts = {
+    body: d.body || '',
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
+    data: { url: d.url || './app.html' }
+  };
+  event.waitUntil(self.registration.showNotification(d.title || '\\uD22C\\uC790 \\uC54C\\uB9BC', opts));
+});
+self.addEventListener('notificationclick', function(event){
+  event.notification.close();
+  var url = (event.notification.data && event.notification.data.url) || './app.html';
+  event.waitUntil(
+    self.clients.matchAll({ type:'window', includeUncontrolled:true }).then(function(list){
+      for (var i=0;i<list.length;i++){
+        if (list[i].url.indexOf('app.html') >= 0 && 'focus' in list[i]) return list[i].focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
+});
+"""
+
+
 def _inject_pwa(html: bytes) -> bytes:
     """HTML <head>에 PWA 메타/매니페스트 링크를 주입(중복 방지)."""
     text = html.decode("utf-8")
@@ -1078,6 +1109,68 @@ _WRITE_LAYER = """
   // 무장된 행 바깥을 탭하면 닫기(버튼 탭은 위에서 처리되어 유지)
   document.addEventListener('click',function(e){ if(!e.target.closest('.pen-armed')) disarm(); },true);
 })();</script>
+<style>
+  .push-card{background:var(--card);border:1px solid var(--border);border-radius:12px;
+       padding:12px 14px;margin:0 0 12px;box-shadow:var(--shadow)}
+  .push-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .push-ttl{font-weight:700;color:var(--text-strong);font-size:14px}
+  .push-actions{display:flex;gap:6px;flex:none}
+  .push-btn{font-size:12px;font-weight:700;padding:7px 12px;border-radius:9px;border:none;
+       background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+  .push-btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+  .push-btn:disabled{opacity:.6}
+  .push-sub{font-size:12px;color:var(--text-dim);margin-top:6px;line-height:1.4}
+</style>
+<script>(function(){
+  // PWA 웹 푸시 — 확인 필요 탭 상단에 '알림 켜기' 카드. 권한 요청 → 구독 → /api/push/subscribe.
+  // iOS 는 홈 화면에 추가(설치)된 PWA + iOS16.4+ 에서만 푸시 가능.
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  if(!API) return;
+  function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
+    t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  function u8(b64){ var pad='='.repeat((4-b64.length%4)%4); var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
+    var raw=atob(s),arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i); return arr; }
+  var panel=document.getElementById('tab-check'); if(!panel) return;
+  var card=document.createElement('div'); card.className='push-card';
+  card.innerHTML='<div class="push-row"><span class="push-ttl">\\uD83D\\uDD14 \\uD478\\uC2DC \\uC54C\\uB9BC</span>'
+    +'<span class="push-actions"><button class="push-btn" id="push-enable">\\uC54C\\uB9BC \\uCF1C\\uAE30</button>'
+    +'<button class="push-btn ghost" id="push-test" style="display:none">\\uD14C\\uC2A4\\uD2B8</button></span></div>'
+    +'<div class="push-sub" id="push-sub">\\uCCB4\\uACB0 \\uBC18\\uC601\\u00B7\\uD655\\uC778 \\uD544\\uC694 \\uC2DC \\uD3F0\\uC73C\\uB85C \\uC54C\\uB9BC\\uC744 \\uBC1B\\uC2B5\\uB2C8\\uB2E4.</div>';
+  panel.insertBefore(card, panel.firstChild);
+  var enableBtn=card.querySelector('#push-enable'), testBtn=card.querySelector('#push-test'), sub=card.querySelector('#push-sub');
+  var ok=('serviceWorker' in navigator)&&('PushManager' in window)&&('Notification' in window);
+  function setOn(on){
+    if(on){ enableBtn.textContent='\\uC54C\\uB9BC \\uCF1C\\uC9D0 \\u2705'; enableBtn.disabled=true; testBtn.style.display='';
+            sub.textContent='\\uC774 \\uAE30\\uAE30\\uB85C \\uC54C\\uB9BC\\uC744 \\uBC1B\\uC2B5\\uB2C8\\uB2E4.'; }
+    else { enableBtn.textContent='\\uC54C\\uB9BC \\uCF1C\\uAE30'; enableBtn.disabled=false; testBtn.style.display='none'; }
+  }
+  if(!ok){ enableBtn.disabled=true; enableBtn.textContent='\\uBBF8\\uC9C0\\uC6D0';
+    sub.textContent='iOS\\uB294 \\uD648 \\uD654\\uBA74\\uC5D0 \\uCD94\\uAC00(\\uC124\\uCE58) \\uD6C4 \\uC0AC\\uC6A9\\uD558\\uC138\\uC694.'; return; }
+  async function reg(){ return await navigator.serviceWorker.register('sw.js'); }
+  (async function(){ try{ await reg(); var r=await navigator.serviceWorker.ready;
+    var s=await r.pushManager.getSubscription(); setOn(!!s && Notification.permission==='granted'); }catch(e){} })();
+  enableBtn.addEventListener('click', async function(){
+    enableBtn.disabled=true;
+    try{
+      var perm=await Notification.requestPermission();
+      if(perm!=='granted'){ toast('\\uC54C\\uB9BC \\uAD8C\\uD55C \\uAC70\\uBD80\\uB428',true); setOn(false); return; }
+      await reg(); var r=await navigator.serviceWorker.ready;
+      var kj=await (await fetch(API+'/api/push/key')).json();
+      var s=await r.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:u8(kj.key)});
+      var pr=await fetch(API+'/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({subscription:s.toJSON()})});
+      if(!pr.ok) throw new Error('\\uAD6C\\uB3C5 \\uB4F1\\uB85D \\uC2E4\\uD328');
+      setOn(true); toast('\\uC54C\\uB9BC \\uCF1C\\uC9D0');
+    }catch(e){ toast(e.message||'\\uC2E4\\uD328',true); setOn(false); }
+  });
+  testBtn.addEventListener('click', async function(){
+    testBtn.disabled=true;
+    try{ var j=await (await fetch(API+'/api/push/test',{method:'POST'})).json();
+      toast(j.sent>0?'\\uD14C\\uC2A4\\uD2B8 \\uC54C\\uB9BC \\uBC1C\\uC1A1':'\\uAD6C\\uB3C5\\uC774 \\uC5C6\\uC2B5\\uB2C8\\uB2E4', j.sent===0); }
+    catch(e){ toast('\\uC2E4\\uD328',true); } finally{ testBtn.disabled=false; }
+  });
+})();</script>
 """
 
 
@@ -1106,7 +1199,10 @@ def _inject_write_layer(dashboard_html: bytes | None) -> bytes | None:
 
 def _pwa_assets() -> dict[str, bytes]:
     """manifest + 아이콘을 {경로: 바이트}로 반환(비밀 경로 아래로 함께 발행)."""
-    assets: dict[str, bytes] = {"/manifest.webmanifest": _PWA_MANIFEST}
+    assets: dict[str, bytes] = {
+        "/manifest.webmanifest": _PWA_MANIFEST,
+        "/sw.js": _SERVICE_WORKER_JS,
+    }
     for name in ("icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"):
         fp = _PWA_DIR / name
         if fp.exists():

@@ -279,6 +279,23 @@ def test_api_buy_bad_input(client):
     assert r.status_code == 400
 
 
+def test_api_push_key_and_subscribe(client):
+    r = client.get("/api/push/key")
+    assert r.status_code == 200 and len(r.json()["key"]) > 50
+    sub = {"endpoint": "https://push.example/abc", "keys": {"p256dh": "x", "auth": "y"}}
+    r = client.post("/api/push/subscribe", json={"subscription": sub})
+    assert r.status_code == 200 and r.json()["ok"]
+    from bot import push_service
+    assert push_service.load_subscriptions()[0]["endpoint"] == sub["endpoint"]
+    # endpoint 없는 구독 → 400
+    assert client.post("/api/push/subscribe", json={"subscription": {}}).status_code == 400
+
+
+def test_api_push_test_no_subs(client):
+    r = client.post("/api/push/test")
+    assert r.status_code == 200 and r.json()["sent"] == 0
+
+
 def test_api_pension_endpoint(client):
     _seed()
     client.post("/api/buy", json={"name": "KODEX", "quantity": 100, "price": 10000})

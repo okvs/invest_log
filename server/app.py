@@ -79,6 +79,10 @@ class PensionReq(BaseModel):
     transaction_id: str
 
 
+class PushSubReq(BaseModel):
+    subscription: dict
+
+
 class LoginReq(BaseModel):
     password: str
 
@@ -157,6 +161,30 @@ async def pension_toggle(req: PensionReq, uid: str = Depends(require_user)) -> d
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "transaction": tx}
+
+
+# --- 웹 푸시 알림 ---
+@app.get("/api/push/key")
+async def push_key(uid: str = Depends(require_user)) -> dict:
+    from bot import push_service
+    return {"key": push_service.public_key()}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(req: PushSubReq, uid: str = Depends(require_user)) -> dict:
+    from bot import push_service
+    try:
+        push_service.add_subscription(req.subscription)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@app.post("/api/push/test")
+async def push_test(uid: str = Depends(require_user)) -> dict:
+    from bot import push_service
+    n = push_service.send_push("테스트 알림", "푸시 알림이 정상 동작합니다 ✅")
+    return {"ok": True, "sent": n}
 
 
 # --- 프론트(정적 PWA) 서빙: /static 아래에 빌드 산출물을 둔다 ---
