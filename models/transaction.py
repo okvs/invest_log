@@ -25,6 +25,12 @@ class Transaction:
     buy_thesis: str = ""  # sell 시점의 원래 매수 근거 스냅샷 (회고에 사용)
     retrospective_id: str = ""
     currency: str = "KRW"  # "KRW"(기본) | "USD"(미국주식, 나무/NH). price/total_amount 의 통화.
+    # 연금계좌 거래 여부. True 면 기록(히스토리) 탭에만 '연금'으로 보이고, 보유/평가/총자산/
+    # 예수금/섹터/4사분면/증권사구성/자산그래프/실현손익 등 모든 계산에서 제외된다. 기본 off.
+    is_pension: bool = False
+    # 원가/보유 정보 없이 들어온 매도(카톡 "보유 종목 없음" 자동스킵 등). True 면 손익 계산 없이
+    # 기록에만 남기며, 보유/예수금에 영향을 주지 않는다(연금 전량매도 가시화 용도).
+    orphan: bool = False
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> dict:
@@ -38,7 +44,10 @@ class Transaction:
             "quantity": self.quantity,
             "total_amount": self.total_amount,
             "currency": self.currency,
+            "is_pension": self.is_pension,
         }
+        if self.orphan:
+            d["orphan"] = True
         if self.type == "buy":
             d["thesis"] = self.thesis
             d["research_notes"] = self.research_notes
@@ -73,4 +82,6 @@ class Transaction:
             buy_thesis=data.get("buy_thesis", ""),
             retrospective_id=data.get("retrospective_id", ""),
             currency=data.get("currency", "KRW"),
+            is_pension=data.get("is_pension", False),
+            orphan=data.get("orphan", False),
         )

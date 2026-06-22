@@ -151,6 +151,110 @@ def record_sell(name: str, quantity: int, price: float, *, reason: str = "") -> 
 
 
 # ---------------------------------------------------------------------------
+# 연금(pension) 토글 — 거래 한 건을 연금으로 표시/해제
+# ---------------------------------------------------------------------------
+def _holding_idx(holdings: list[dict], name: str) -> int | None:
+    return next(
+        (i for i, h in enumerate(holdings)
+         if norm_stock_name(h.get("name", "")) == norm_stock_name(name)),
+        None,
+    )
+
+
+def toggle_pension(transaction_id: str) -> dict:
+    """거래 한 건의 연금 플래그를 뒤집고, 그 거래가 보유·예수금에 끼친 효과를 정합 보정.
+
+    연금 ON  = 그 거래를 '추적 장부'에서 빼야 하므로 거래의 표준 효과를 **되돌린다**.
+    연금 OFF = 다시 장부에 넣어야 하므로 거래의 표준 효과를 **적용한다**.
+
+    거래의 표준 효과:
+      · 매수 → 보유 +수량 / 투자원금 +금액 / 예수금 −(금액×증거금)
+      · 매도 → 보유 −수량 / 투자원금 −(금액−손익=원가) / 예수금 +(금액−매도비용)
+
+    원가(코스트베이시스)는 거래에 박제된 값(매수금액, 매도손익)으로만 가감하므로
+    신용융자(credit_loan)·by_account 등 수동 보정값은 건드리지 않는다. 한 종목에
+    연금·일반 매수가 섞이고 그 사이 매도가 낀 드문 경우엔 평단이 근사치가 될 수 있다.
+    원가/보유 없이 들어온 orphan 매도(연금 전량매도 가시화)는 장부 효과가 없다.
+    """
+    txs = store.load_transactions()
+    tx = next((t for t in txs if t.get("id") == transaction_id), None)
+    if tx is None:
+        raise ValueError("거래를 찾을 수 없습니다.")
+
+    new_state = not tx.get("is_pension", False)
+    # 표준 효과를 되돌릴지(연금 ON) 적용할지(연금 OFF)
+    reverse = new_state
+
+    if not tx.get("orphan"):
+        holdings = store.load_holdings()
+        name = tx.get("name", "")
+        idx = _holding_idx(holdings, name)
+        qty = int(tx.get("quantity", 0) or 0)
+        amount = float(tx.get("total_amount", 0) or 0)
+
+        if tx.get("type") == "buy":
+            margin = int(tx.get("margin_ratio", 100) or 100)
+            dq = -qty if reverse else qty           # 보유 수량 변화
+            d_inv = -amount if reverse else amount   # 투자원금 변화
+            cash_delta = amount * (margin / 100)     # 매수는 예수금 차감분
+            d_cash = cash_delta if reverse else -cash_delta
+        else:  # sell
+            cost_basis = amount - float(tx.get("profit_loss", 0) or 0)
+            dq = qty if reverse else -qty
+            d_inv = cost_basis if reverse else -cost_basis
+            sell_cost = round(amount * SELL_FEE_RATE)
+            proceeds = amount - sell_cost
+            d_cash = -proceeds if reverse else proceeds
+
+        _apply_holding_delta(holdings, idx, name, tx, dq, d_inv)
+        store.save_holdings(holdings)
+
+        acc = store.load_account()
+        if acc.get("initial_capital"):
+            acc["cash"] = acc.get("cash", acc["initial_capital"]) + d_cash
+            store.save_account(acc)
+
+    tx["is_pension"] = new_state
+    store.save_transactions(txs)
+    return tx
+
+
+def _apply_holding_delta(
+    holdings: list[dict], idx: int | None, name: str, tx: dict,
+    dq: int, d_inv: float,
+) -> None:
+    """보유 종목에 수량/투자원금 델타를 적용. 잔량 0 이하면 제거, 없던 종목이면 생성."""
+    if idx is None:
+        if dq <= 0:
+            return  # 되돌릴 보유가 없음(이미 없음) — 스킵
+        h = Holding(
+            name=name.replace(" ", ""), ticker=tx.get("ticker", ""),
+            sector=tx.get("sector", ""),
+            buy_date=_date_only(tx.get("date", "")) or datetime.now().strftime("%Y-%m-%d"),
+            avg_price=round(d_inv / dq) if dq else 0,
+            quantity=dq, total_invested=d_inv,
+            buy_thesis=tx.get("buy_thesis", ""),
+            transaction_ids=[tx.get("id", "")],
+        )
+        holdings.append(h.to_dict())
+        return
+
+    h = holdings[idx]
+    new_qty = int(h.get("quantity", 0)) + dq
+    new_inv = float(h.get("total_invested", 0)) + d_inv
+    if new_qty <= 0:
+        holdings.pop(idx)
+        return
+    h["quantity"] = new_qty
+    h["total_invested"] = max(0.0, new_inv)
+    h["avg_price"] = round(h["total_invested"] / new_qty)
+
+
+def _date_only(s: str) -> str:
+    return (s or "")[:10]
+
+
+# ---------------------------------------------------------------------------
 # 회고
 # ---------------------------------------------------------------------------
 def record_retro(

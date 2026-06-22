@@ -75,6 +75,10 @@ class SectorReq(BaseModel):
     name: str = ""
 
 
+class PensionReq(BaseModel):
+    transaction_id: str
+
+
 class LoginReq(BaseModel):
     password: str
 
@@ -144,6 +148,15 @@ async def sector_set(req: SectorReq, uid: str = Depends(require_user)) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "holding": h}
+
+
+@app.post("/api/pension")
+async def pension_toggle(req: PensionReq, uid: str = Depends(require_user)) -> dict:
+    try:
+        tx = service.toggle_pension(req.transaction_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "transaction": tx}
 
 
 # --- 프론트(정적 PWA) 서빙: /static 아래에 빌드 산출물을 둔다 ---

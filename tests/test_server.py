@@ -121,6 +121,78 @@ def test_get_state_shape():
 
 
 # ---------------------------------------------------------------------------
+# 연금(pension) 토글 — 거래 단위로 켜면 보유/예수금에서 제외, 끄면 복원
+# ---------------------------------------------------------------------------
+def test_toggle_pension_buy_removes_holding_and_restores_cash():
+    _seed()
+    service.record_buy("KODEXAI반도체TOP2플러스", 829, 61810)
+    cash_after_buy = load_account()["cash"]
+    buy_tx = next(t for t in load_transactions() if t["type"] == "buy")
+
+    out = service.toggle_pension(buy_tx["id"])
+    assert out["is_pension"] is True
+    # 보유 제거 + 예수금 전액(증거금100%) 복원
+    assert load_holdings() == []
+    assert load_account()["cash"] == pytest.approx(cash_after_buy + 829 * 61810)
+    # 거래는 transactions.json 에 남아 있고 연금 플래그가 켜짐
+    saved = next(t for t in load_transactions() if t["id"] == buy_tx["id"])
+    assert saved["is_pension"] is True
+
+
+def test_toggle_pension_buy_toggles_back():
+    _seed()
+    service.record_buy("삼성전자", 10, 70000, sector="반도체")
+    buy_tx = next(t for t in load_transactions() if t["type"] == "buy")
+    service.toggle_pension(buy_tx["id"])           # on → 제거
+    assert load_holdings() == []
+    out = service.toggle_pension(buy_tx["id"])     # off → 복원
+    assert out["is_pension"] is False
+    h = load_holdings()
+    assert len(h) == 1 and h[0]["quantity"] == 10 and h[0]["avg_price"] == 70000
+    assert h[0]["sector"] == "반도체"
+
+
+def test_toggle_pension_does_not_touch_other_holdings():
+    _seed()
+    service.record_buy("삼성전자", 10, 70000, sector="반도체")
+    service.record_buy("KODEX", 100, 10000)
+    kodex_buy = next(t for t in load_transactions() if t["name"] == "KODEX")
+    service.toggle_pension(kodex_buy["id"])
+    names = [h["name"] for h in load_holdings()]
+    assert "삼성전자" in names and "KODEX" not in names
+
+
+def test_toggle_pension_sell_readds_shares_and_costbasis():
+    _seed()
+    service.record_buy("삼성전자", 10, 70000, sector="반도체")   # avg 70000
+    sell = service.record_sell("삼성전자", 4, 80000)             # qty 6, pnl=40000
+    cash_after_sell = load_account()["cash"]
+    service.toggle_pension(sell["id"])                          # 매도를 연금 → 4주 복원
+    h = load_holdings()[0]
+    assert h["quantity"] == 10
+    assert h["avg_price"] == 70000                              # 평단 원복
+    total = 80000 * 4
+    fee = round(total * service.SELL_FEE_RATE)
+    assert load_account()["cash"] == pytest.approx(cash_after_sell - (total - fee))
+
+
+def test_pension_excluded_from_realized_profit_trend(monkeypatch):
+    """연금 매도의 실현손익은 자산그래프(누적 실현)에서 제외된다."""
+    from bot import asset_history
+    _seed()
+    service.record_buy("삼성전자", 10, 70000)
+    s1 = service.record_sell("삼성전자", 5, 90000)   # pnl=100000 (일반)
+    service.record_buy("연금주", 10, 1000)
+    s2 = service.record_sell("연금주", 10, 2000)      # pnl=10000 → 연금처리
+    service.toggle_pension(s2["id"])
+    # 종가 조회를 막아 순수 실현 누적만 계산되게 한다(미실현은 0/생략).
+    monkeypatch.setattr(asset_history, "_fetch_pykrx_closes", lambda codes, s, e: {})
+    rows = asset_history.compute_profit_trend()
+    realized_final = rows[-1]["realized"] if rows else 0
+    assert realized_final == pytest.approx(100000)   # 연금 매도(10000) 제외
+
+
+# ---------------------------------------------------------------------------
 # FastAPI 엔드포인트
 # ---------------------------------------------------------------------------
 @pytest.fixture
@@ -193,3 +265,15 @@ def test_api_buy_bad_input(client):
     _seed()
     r = client.post("/api/sell", json={"name": "없는종목", "quantity": 1, "price": 100})
     assert r.status_code == 400
+
+
+def test_api_pension_endpoint(client):
+    _seed()
+    client.post("/api/buy", json={"name": "KODEX", "quantity": 100, "price": 10000})
+    buy_id = next(t for t in load_transactions() if t["type"] == "buy")["id"]
+    r = client.post("/api/pension", json={"transaction_id": buy_id})
+    assert r.status_code == 200 and r.json()["ok"]
+    assert r.json()["transaction"]["is_pension"] is True
+    assert load_holdings() == []
+    # 없는 거래 → 400
+    assert client.post("/api/pension", json={"transaction_id": "nope"}).status_code == 400

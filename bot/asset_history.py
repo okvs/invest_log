@@ -239,7 +239,8 @@ def compute_profit_trend(target_nav: float | None = None) -> list[dict]:
     pykrx↔실시세 가격차 + 시드/백로딩 포지션의 기록 밖 자본(초기자본+입금+실현
     으로 설명 안 되는 분)을 흡수한다 — 그래프 끝점을 실제 계좌와 맞추기 위함.
     """
-    transactions = load_transactions()
+    # 연금계좌 거래는 모든 자산/손익 계산에서 제외 (기록 탭에만 표시).
+    transactions = [t for t in load_transactions() if not t.get("is_pension")]
     if not transactions:
         return []
     account = load_account()

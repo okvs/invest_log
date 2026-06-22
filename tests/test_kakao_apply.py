@@ -225,12 +225,21 @@ def test_stock_sell_partial():
     assert tx["profit_loss"] == pytest.approx((1800000 - 1700000) * 5)
 
 
-def test_stock_sell_no_holding_is_skipped():
+def test_stock_sell_no_holding_recorded_as_pension_orphan():
+    """보유 안 하던 종목 매도(연금 전량매도 등) → 연금 orphan 거래로 기록.
+    보유/예수금/손익에는 영향 없고 기록 탭에만 '연금'으로 보인다."""
     save_account({"initial_capital": 155000000.0, "cash": 50000000.0})
     save_holdings([])
     res = ka.apply_message(kb_stock("sell", "없는종목", 5, 1000))
-    assert res is not None and not res.applied
-    assert load_transactions() == []
+    assert res is not None and res.applied and res.action == "연금매도"
+    txs = load_transactions()
+    assert len(txs) == 1
+    t = txs[0]
+    assert t["type"] == "sell" and t["is_pension"] is True and t["orphan"] is True
+    assert t.get("profit_loss", 0) == 0.0
+    # 보유/예수금 무변동
+    assert load_holdings() == []
+    assert load_account()["cash"] == 50000000.0
 
 
 def test_stock_sell_oversize_is_skipped():

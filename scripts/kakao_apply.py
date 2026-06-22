@@ -230,10 +230,26 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
     holdings = load_holdings()
     hd = next((h for h in holdings if _norm(h.get("name", "")) == _norm(name)), None)
     if hd is None:
+        # 보유 종목 없음 — 추적 안 하던 종목의 매도(연금계좌 전량매도 등).
+        # 손익/예수금 계산 없이 '연금' orphan 거래로만 남겨 기록 탭에 보이게 한다.
+        # (일반계좌 거래였다면 기록 탭에서 '연금' 칩을 꺼 일반으로 돌릴 수 있음)
+        summary = f"주식 매도 {name} {qty}주 @ {int(price):,}원 · 연금(보유없음)·기록만"
+        if not dry_run:
+            tx = Transaction(
+                type="sell", name=name, sector="",
+                price=price, quantity=qty, total_amount=total,
+                profit_loss=0.0, profit_loss_pct=0.0,
+                sell_reason=APPLY_REASON, date=_to_iso(ts_kst),
+                is_pension=True, orphan=True,
+            )
+            txs = load_transactions()
+            txs.append(tx.to_dict())
+            save_transactions(txs)
+        if account:
+            summary += f" · [{account}]"
         return ApplyResult(
-            False, "skip",
-            f"주식 매도 {name} {qty}주 @ {int(price):,}원",
-            "보유 종목 없음 → 미반영(수동 확인 필요)",
+            True, "연금매도", summary,
+            "보유 없던 종목 — 연금으로 기록(보유/예수금/손익 미반영). 일반거래면 기록 탭에서 연금 해제",
         )
     if qty > hd.get("quantity", 0):
         return ApplyResult(

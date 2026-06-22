@@ -167,6 +167,13 @@ _TAB_CSS = """
   .b-close { background:rgba(21,146,74,.16); color:var(--profit); }
   .hist-date { color:var(--text-dim); font-size:12px; font-weight:700;
                max-width:760px; margin:18px auto 8px; }
+  /* 연금 거래 — 기록 탭에만 보이고 모든 계산서 제외. 행은 흐리게, '연금' 칩으로 토글. */
+  .hist-row.is-pension { opacity:.6; }
+  .pen-toggle { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px;
+                border:1px solid var(--border); background:transparent; color:var(--text-dim);
+                cursor:pointer; white-space:nowrap; font-family:inherit; line-height:1.4;
+                opacity:.5; -webkit-tap-highlight-color:transparent; flex:none; }
+  .pen-toggle.is-on { background:var(--accent); border-color:var(--accent); color:#fff; opacity:1; }
 </style>
 """
 
@@ -256,6 +263,7 @@ def _build_history_html() -> str:
     for t in load_transactions():
         is_buy = t.get("type") == "buy"
         is_usd = t.get("currency") == "USD"
+        is_orphan = bool(t.get("orphan"))
         if is_usd:
             detail = f"{int(t.get('quantity', 0)):,}주 × ${float(t.get('price', 0) or 0):,.2f}"
         else:
@@ -266,9 +274,13 @@ def _build_history_html() -> str:
             "label": ("🇺🇸" if is_usd else "") + ("매수" if is_buy else "매도"),
             "name": t.get("name", ""),
             "detail": detail,
-            "pnl": None if is_buy else t.get("profit_loss"),
-            "pnl_pct": None if is_buy else t.get("profit_loss_pct"),
+            # 매수/orphan 매도는 손익 표시 없음
+            "pnl": None if (is_buy or is_orphan) else t.get("profit_loss"),
+            "pnl_pct": None if (is_buy or is_orphan) else t.get("profit_loss_pct"),
             "cur": "USD" if is_usd else "KRW",
+            "txid": t.get("id", ""),
+            "pension": bool(t.get("is_pension")),
+            "pensionable": True,  # 현물 거래는 연금 토글 대상
         })
 
     fut_label = {"open": "선물진입", "close": "선물청산",
@@ -284,6 +296,8 @@ def _build_history_html() -> str:
             "detail": f"{int(t.get('contracts', 0)):,}계약 × {_fmt_won(t.get('price'))}원",
             "pnl": None if is_open else t.get("pnl"),
             "pnl_pct": None if is_open else t.get("pnl_pct"),
+            "pensionable": False,  # 선물은 연금 토글 대상 아님
+            "pension": False,
         })
 
     items = [it for it in items if it["date"]]
@@ -313,11 +327,20 @@ def _build_history_html() -> str:
                 amt = f"{sign}{_fmt_won(pnl)}원"
             pnl_html = f'<span class="pnl {cls}">{amt}{pct_s}</span>'
         tm = it["date"][11:16]
+        is_pension = it.get("pension")
+        pen_chip = ""
+        if it.get("pensionable") and it.get("txid"):
+            pen_chip = (
+                f'<button type="button" class="pen-toggle{" is-on" if is_pension else ""}" '
+                f'data-pension-tx="{it["txid"]}">연금</button>'
+            )
+        row_cls = "hist-row is-pension" if is_pension else "hist-row"
         out.append(
-            '<div class="hist-row">'
+            f'<div class="{row_cls}">'
             '<div class="r1">'
             f'<span class="hbadge {it["cls"]}">{it["label"]}</span>'
             f'<span class="nm">{it["name"]}</span>'
+            f'{pen_chip}'
             f'{pnl_html}'
             '</div>'
             f'<div class="r2">{tm} · {it["detail"]}</div>'
@@ -929,6 +952,32 @@ _WRITE_LAYER = """
     }
     btn.addEventListener('click',save);
     inp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();save();}});
+  });
+})();</script>
+<script>(function(){
+  // 기록 탭의 '연금' 칩 → POST /api/pension. 토글하면 그 거래가 보유/평가/총자산/
+  // 예수금/섹터/그래프/실현손익 등 모든 계산에서 빠지거나(켜기) 다시 포함된다(끄기).
+  // 기록 탭에는 계속 보이며, 다른 탭은 다음 새로고침 때 반영(서버가 자동 재발행).
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  if(!API) return;
+  function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
+    t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  document.querySelectorAll('.pen-toggle[data-pension-tx]').forEach(function(btn){
+    btn.addEventListener('click',async function(e){
+      e.preventDefault();e.stopPropagation();
+      var id=btn.getAttribute('data-pension-tx');
+      btn.disabled=true;
+      try{
+        var r=await fetch(API+'/api/pension',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:id})});
+        if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
+        var jj=await r.json();var on=!!(jj.transaction&&jj.transaction.is_pension);
+        btn.classList.toggle('is-on',on);
+        var row=btn.closest('.hist-row');if(row)row.classList.toggle('is-pension',on);
+        toast(on?'연금으로 표시 — 계산에서 제외':'연금 해제 — 다시 포함');
+      }catch(e2){toast(e2.message||'실패',true);}finally{btn.disabled=false;}
+    });
   });
 })();</script>
 """
