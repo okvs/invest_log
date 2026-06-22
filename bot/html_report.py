@@ -778,26 +778,24 @@ def _build_broker_breakdown_html(
             # (전체 금액은 위 broker-head 와 막대 툴팁에 있음). 칸은 폭 정렬용으로 유지.
             amt = _short_won(val) if pct >= 12 else ""
             amt_html += f'<span style="width:{pct}%;color:{color}">{amt}</span>'
+        # 막대 위 broker-head 의 예수금/평가/융자 글자에 막대 색을 직접 넣어
+        # 별도 범례(겹침 문제)를 없애고 헤더 자체가 색 설명이 되게 한다.
         blocks += (
             f'<div class="broker-head"><b>{_html_escape(acct)}</b>'
-            f'<span class="broker-sub">예수금 {format_number(int(round(cash)))} · '
-            f'평가 {format_number(int(round(d["eval"]))) } · 융자 {format_number(int(round(loan)))}</span></div>'
+            f'<span class="broker-sub">'
+            f'<span style="color:{C_CASH};font-weight:700">예수금 {format_number(int(round(cash)))}</span> · '
+            f'<span style="color:{C_NET};font-weight:700">평가 {format_number(int(round(d["eval"])))}</span> · '
+            f'<span style="color:{C_LOAN};font-weight:700">융자 {format_number(int(round(loan)))}</span>'
+            f'</span></div>'
             f'<div class="stack broker-stack">{bar_html}</div>'
             f'<div class="broker-amts">{amt_html}</div>'
         )
 
-    legend = (
-        '<div class="broker-legend">'
-        f'<span><i style="background:{C_CASH}"></i>예수금</span>'
-        f'<span><i style="background:var(--accent)"></i>평가금−융자액</span>'
-        f'<span><i style="background:{C_LOAN}"></i>융자액</span>'
-        '</div>'
-    )
     acct_names = " · ".join(
         a for a, _ in sorted(brokers.items(), key=lambda kv: kv[1]["cash"] + kv[1]["eval"], reverse=True)
     )
     return (f'<div class="section-title" style="margin-top:32px">증권사별 구성 ({acct_names})</div>'
-            + blocks + legend)
+            + blocks)
 
 
 def build_html_report(
