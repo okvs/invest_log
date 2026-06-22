@@ -1075,7 +1075,10 @@ def build_html_report(
 
     # 스택바 (섹터 비중 한 줄) — 같은 섹터 안에서 현물/선물을 인접 두 조각으로 분리.
     # 라벨은 두 조각을 묶은 group 의 정중앙에 위치 (현물 segment 기준 X).
+    # 칸이 너무 좁아 in-bar 라벨이 안 들어가는 조각은 막대 '아래'에 인출선(leader line)으로 표시.
     stack_segments = ""
+    ext_labels: list[tuple[float, str, str]] = []  # (조각 중심 x%, 라벨텍스트, 색)
+    cum_x = 0.0
     for sector, val in sector_sorted:
         pct = (val / sector_total * 100) if sector_total else 0
         color = sector_colors[sector]
@@ -1087,6 +1090,9 @@ def build_html_report(
         if pct < 0.001:
             continue
 
+        center_x = cum_x + pct / 2
+        cum_x += pct
+
         # 라벨 — 둘 다 있으면 "총%(현%+선%)" 분해, 아니면 합계만.
         if spot_pct > 0 and fut_pct > 0:
             label_body = (
@@ -1096,10 +1102,14 @@ def build_html_report(
         else:
             label_body = f"{sector}<br>{pct:.0f}%"
             min_pct_for_breakdown = 3
+        show_inline = pct >= min_pct_for_breakdown
         label_html = (
-            f'<span class="seg-label">{label_body}</span>'
-            if pct >= min_pct_for_breakdown else ""
+            f'<span class="seg-label">{label_body}</span>' if show_inline else ""
         )
+        # in-bar 에 안 들어가면 바깥(아래) 인출선 라벨 후보로 모은다.
+        if not show_inline:
+            pct_txt = f"{pct:.1f}%" if pct < 1 else f"{pct:.0f}%"
+            ext_labels.append((center_x, f"{sector} {pct_txt}", color))
 
         # group 내부 spot/fut 비중 (group width 100% 기준)
         group_inner = ""
@@ -1128,6 +1138,59 @@ def build_html_report(
             f'<div class="stack-group" style="width:{pct}%" data-tip="{tip_attr}">'
             + group_inner + label_html + '</div>'
         )
+
+    # 바깥 라벨 레이어 — 좁아서 숨은 조각들의 라벨을 막대 아래에 펼쳐 배치하고
+    # 색 인출선으로 해당 조각과 연결. 라벨이 겹치지 않게 좌→우로 최소간격(G%)을 띄운다.
+    ext_html = ""
+    if ext_labels:
+        # 라벨 폭(%)을 글자수로 추정(모바일 ~342px 기준) — 한글/전각 ~9px, ascii ~5px,
+        # 색 swatch+gap ~12px. 인접 라벨 중심 간격이 두 라벨 반폭 합 이상이 되게 띄운다.
+        def _w_pct(text: str) -> float:
+            w = 12.0
+            for ch in text:
+                w += 9.0 if ord(ch) > 0x2000 else 5.0
+            return w / 342.0 * 100.0
+
+        widths = [_w_pct(t) for _, t, _ in ext_labels]
+        placed: list[float] = []
+        for i, (center_x, _txt, _col) in enumerate(ext_labels):
+            x = center_x
+            if placed:
+                min_x = placed[-1] + (widths[i - 1] + widths[i]) / 2 + 1.0
+                if x < min_x:
+                    x = min_x
+            placed.append(x)
+        # 오른쪽 끝 라벨이 삐져나가면 클러스터 전체를 왼쪽으로 민다.
+        over = (placed[-1] + widths[-1] / 2) - 99.0
+        if over > 0:
+            placed = [p - over for p in placed]
+        # 왼쪽 끝도 화면 안으로.
+        under = min(p - widths[i] / 2 for i, p in enumerate(placed))
+        if under < 1.0:
+            placed = [p + (1.0 - under) for p in placed]
+
+        leaders = ""
+        labels = ""
+        for (center_x, txt, color), lx in zip(ext_labels, placed):
+            leaders += (
+                f'<line x1="{center_x:.2f}" y1="0" x2="{lx:.2f}" y2="22" '
+                f'stroke="{color}" stroke-width="1" vector-effect="non-scaling-stroke" '
+                f'opacity="0.75"/>'
+            )
+            labels += (
+                f'<span class="seg-ext" style="left:{lx:.2f}%">'
+                f'<i style="background:{color}"></i>{_html_escape(txt)}</span>'
+            )
+        ext_html = (
+            f'<svg class="stack-leaders" viewBox="0 0 100 22" preserveAspectRatio="none">'
+            f'{leaders}</svg>'
+            f'<div class="stack-extlabels">{labels}</div>'
+        )
+
+    sector_stack_html = (
+        f'<div class="sector-stack-wrap{" has-ext" if ext_html else ""}">'
+        f'<div class="stack">{stack_segments}</div>{ext_html}</div>'
+    )
 
     pnl_class = "profit" if total_pnl >= 0 else "loss"
     pnl_sign = "+" if total_pnl >= 0 else ""
@@ -1364,13 +1427,24 @@ def build_html_report(
   .loss {{ color:#ef4444; }}
 
   /* 스택바 */
-  .stack {{ display:flex; height:36px; border-radius:8px; overflow:hidden; margin-bottom:32px; }}
+  .sector-stack-wrap {{ position:relative; margin-bottom:32px; }}
+  .sector-stack-wrap.has-ext {{ padding-bottom:42px; }}
+  .stack {{ display:flex; height:36px; border-radius:8px; overflow:hidden; margin-bottom:0; }}
   .stack-group {{ position:relative; display:flex; height:100%; min-width:0; }}
   .stack-seg {{ height:100%; min-width:0; }}
   .seg-label {{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
                color:#fff; font-size:10px; font-weight:600; text-align:center; line-height:1.2;
                white-space:nowrap; pointer-events:none;
                text-shadow:0 0 3px rgba(0,0,0,0.55); }}
+  /* 좁은 조각의 바깥(아래) 라벨 + 인출선 */
+  .stack-leaders {{ position:absolute; left:0; top:36px; width:100%; height:22px;
+                   overflow:visible; pointer-events:none; }}
+  .stack-extlabels {{ position:absolute; left:0; top:57px; width:100%; height:14px;
+                     pointer-events:none; }}
+  .seg-ext {{ position:absolute; top:0; transform:translateX(-50%); white-space:nowrap;
+             font-size:9px; font-weight:700; color:var(--text-strong,#e5e7eb);
+             display:inline-flex; align-items:center; gap:3px; }}
+  .seg-ext i {{ width:7px; height:7px; border-radius:2px; display:inline-block; flex:none; }}
 
   /* 증권사별 구성 */
   .broker-head {{ display:flex; align-items:baseline; justify-content:space-between;
@@ -1555,7 +1629,7 @@ def build_html_report(
     </div>
   </div>
 
-  <div class="stack">{stack_segments}</div>
+  {sector_stack_html}
   {broker_section_html}
   {('<div style="font-size:11px;color:#888;margin:-24px 0 32px;display:flex;align-items:center;gap:6px"><span class="stripe-chip" style="display:inline-block;width:14px;height:14px;border-radius:3px;background-color:#888;background-image:repeating-linear-gradient(135deg,rgba(255,255,255,0.30) 0,rgba(255,255,255,0.30) 3px,transparent 3px,transparent 8px)"></span>빗금 = 선물 명목 노출 (계약수 × 현재가 × 승수)</div>') if any(sector_futures.values()) else ''}
 
