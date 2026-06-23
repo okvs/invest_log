@@ -300,10 +300,13 @@ def _build_history_html() -> str:
         is_buy = t.get("type") == "buy"
         is_usd = t.get("currency") == "USD"
         is_orphan = bool(t.get("orphan"))
+        qty = int(t.get("quantity", 0) or 0)
+        price = float(t.get("price", 0) or 0)
+        total = float(t.get("total_amount", 0) or 0) or (price * qty)  # 총 거래금액
         if is_usd:
-            detail = f"{int(t.get('quantity', 0)):,}주 × ${float(t.get('price', 0) or 0):,.2f}"
+            detail = f"{qty:,}주 × ${price:,.2f} = ${total:,.2f}"
         else:
-            detail = f"{int(t.get('quantity', 0)):,}주 × {_fmt_won(t.get('price'))}원"
+            detail = f"{qty:,}주 × {_fmt_won(price)}원 = {_fmt_won(total)}원"
         items.append({
             "date": str(t.get("date", "")),
             "cls": "b-buy" if is_buy else "b-sell",
@@ -324,12 +327,16 @@ def _build_history_html() -> str:
     for t in load_futures_transactions():
         typ = t.get("type", "")
         is_open = typ in ("open", "roll_open")
+        f_contracts = int(t.get("contracts", 0) or 0)
+        f_price = float(t.get("price", 0) or 0)
+        f_mult = int(t.get("multiplier", 10) or 10)
+        f_notional = f_price * f_contracts * f_mult  # 명목 거래금액(단가×계약×승수)
         items.append({
             "date": str(t.get("date", "")),
             "cls": "b-open" if is_open else "b-close",
             "label": fut_label.get(typ, typ),
             "name": t.get("name", ""),
-            "detail": f"{int(t.get('contracts', 0)):,}계약 × {_fmt_won(t.get('price'))}원",
+            "detail": f"{f_contracts:,}계약 × {_fmt_won(f_price)}원 = {_fmt_won(f_notional)}원",
             "pnl": None if is_open else t.get("pnl"),
             "pnl_pct": None if is_open else t.get("pnl_pct"),
             "pensionable": False,  # 선물은 연금 토글 대상 아님
