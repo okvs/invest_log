@@ -1263,20 +1263,22 @@ def build_html_report(
     else:
         asset_card_html = ""
 
-    # 예수금 / 총투자금 카드 — 현물 cash + 선물 가용예수금 + 미국(USD) 예수금(KRW환산) 합산
+    # 평가금＋예수금 / 총투자금 카드 — 총평가금(레버리지 포함 gross)에 예수금(현물+선물+미국)을
+    # 더한 '계좌 총액' 관점. 예수금 단독값과 현물/선물/미국 분해는 sub 줄에서 그대로 확인된다.
     if show_cash and initial_capital:
         total_cash = cash_remaining + futures_cash_val + usd_cash_krw
-        sub_bits = []
+        combined_eval_cash = gross_eval + total_cash
+        cash_bits = []
         if futures_cash_val > 0:
-            sub_bits.append(f"현물 {format_number(int(cash_remaining))} / 선물 {format_number(int(futures_cash_val))}")
+            cash_bits.append(f"현물 {format_number(int(cash_remaining))} / 선물 {format_number(int(futures_cash_val))}")
         if usd_cash_krw > 0:
-            sub_bits.append(f"미국 ${float(usd_cash or 0):,.0f}(₩{format_number(int(usd_cash_krw))})")
-        cash_sub = (
-            "<div class='sub' style='color:#9ca3af'>" + " · ".join(sub_bits) + "</div>"
-        ) if sub_bits else ""
+            cash_bits.append(f"미국 ${float(usd_cash or 0):,.0f}(₩{format_number(int(usd_cash_krw))})")
+        cash_detail = ("<br>" + " · ".join(cash_bits)) if cash_bits else ""
         cash_card_html = (
-            "<div class='card'><div class='label'>예수금 (현물+선물+미국)</div>"
-            f"<div class='value'>{format_number(int(total_cash))}원</div>{cash_sub}</div>"
+            "<div class='card'><div class='label'>평가금 ＋ 예수금</div>"
+            f"<div class='value'>{format_number(int(combined_eval_cash))}원</div>"
+            "<div class='sub' style='color:#9ca3af'>"
+            f"평가금 {_eok(gross_eval)} ＋ 예수금 {_eok(total_cash)}{cash_detail}</div></div>"
         )
     else:
         cash_card_html = (
@@ -1314,21 +1316,24 @@ def build_html_report(
                 "color": color, "note": note}
 
     card_charts: dict = {}
-    # 예수금: 현물 + 선물 + 미국 (0 이하 항목 생략)
+    # 평가금＋예수금: 총평가금(gross) vs 예수금. 예수금의 현물/선물/미국 분해는 note 로 단다.
     if show_cash and initial_capital:
-        _cbars = []
+        _ccash = cash_remaining + futures_cash_val + usd_cash_krw
+        _cnote = []
         if cash_remaining > 0:
-            _cbars.append(_cbar("현물", cash_remaining, "var(--accent)"))
+            _cnote.append(f"현물 {_eok(cash_remaining)}")
         if futures_cash_val > 0:
-            _cbars.append(_cbar("선물", futures_cash_val, "#4A90D9"))
+            _cnote.append(f"선물 {_eok(futures_cash_val)}")
         if usd_cash_krw > 0:
-            _cbars.append(_cbar("미국", usd_cash_krw, "#8b5cf6"))
-        if _cbars:
-            card_charts["cash"] = {
-                "title": "예수금 구성",
-                "total": _eok(cash_remaining + futures_cash_val + usd_cash_krw),
-                "bars": _cbars,
-            }
+            _cnote.append(f"미국 {_eok(usd_cash_krw)}")
+        card_charts["cash"] = {
+            "title": "평가금 ＋ 예수금 구성",
+            "total": _eok(gross_eval + _ccash),
+            "bars": [
+                _cbar("평가금", gross_eval, "var(--accent)"),
+                _cbar("예수금", _ccash, "#6b7280", " · ".join(_cnote)),
+            ],
+        }
     # 총평가금: 내 자본 vs 융자(신용 + 선물차입)
     _loan = total_credit + fut_financing
     _ebars = [_cbar("내 자본", pos_equity, "var(--accent)")]
