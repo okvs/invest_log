@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from core import ledger
+from core.ledger import SELL_FEE_RATE  # noqa: F401 — 하위호환 재노출(산식 정본은 core.ledger)
 from models.portfolio import Holding
 from models.retrospective import Retrospective
 from models.transaction import Transaction
 from parsers.input_parser import norm_stock_name
 from storage import json_store as store
-
-SELL_FEE_RATE = 0.002  # 매도세+수수료 근사 (bot.handlers.sell 과 동일)
 
 
 # ---------------------------------------------------------------------------
@@ -98,56 +98,8 @@ def record_buy(
 # 매도
 # ---------------------------------------------------------------------------
 def record_sell(name: str, quantity: int, price: float, *, reason: str = "") -> dict:
-    """현물 매도 기록. 봇 sell 과 동일(보유 차감·예수금 가산−매도비용−대출상환·실현손익)."""
-    qty = int(quantity)
-    price = float(price)
-    if qty <= 0 or price <= 0:
-        raise ValueError("수량/단가는 0보다 커야 합니다.")
-
-    holdings = store.load_holdings()
-    idx = next(
-        (i for i, h in enumerate(holdings)
-         if norm_stock_name(h.get("name", "")) == norm_stock_name(name)),
-        None,
-    )
-    if idx is None:
-        raise ValueError(f"보유 종목이 없습니다: {name}")
-    hd = holdings[idx]
-    if qty > hd.get("quantity", 0):
-        raise ValueError(f"보유량({hd.get('quantity', 0)})을 초과합니다.")
-
-    avg = hd.get("avg_price", 0)
-    total = price * qty
-    pnl = (price - avg) * qty
-    pnl_pct = (pnl / (avg * qty) * 100) if (avg and qty) else 0.0
-
-    h = Holding.from_dict(hd)
-    loan_repay = h.remove_sell(qty)
-    if h.quantity > 0:
-        holdings[idx] = h.to_dict()
-    else:
-        holdings.pop(idx)
-    store.save_holdings(holdings)
-
-    sell_cost = round(total * SELL_FEE_RATE)
-    acc = store.load_account()
-    if acc.get("initial_capital"):
-        cash = acc.get("cash", acc["initial_capital"])
-        acc["cash"] = cash + total - sell_cost - loan_repay
-        store.save_account(acc)
-
-    tx = Transaction(
-        type="sell", name=name, sector=hd.get("sector", ""),
-        price=price, quantity=qty, total_amount=total,
-        profit_loss=pnl, profit_loss_pct=round(pnl_pct, 2),
-        sell_reason=reason, holding_id=hd.get("id", ""),
-        buy_thesis=hd.get("buy_thesis", ""),
-    )
-    txs = store.load_transactions()
-    txs.append(tx.to_dict())
-    store.save_transactions(txs)
-
-    return tx.to_dict()
+    """현물 매도 기록 — 산식은 core.ledger.sell_spot(정본)에 위임."""
+    return ledger.sell_spot(name, quantity, price, reason=reason)
 
 
 # ---------------------------------------------------------------------------

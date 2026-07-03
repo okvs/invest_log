@@ -78,7 +78,7 @@ from storage.json_store import (  # noqa: E402
 )
 
 KST = timezone(timedelta(hours=9))
-SELL_FEE_RATE = 0.002  # 매도세+수수료 근사 (bot.handlers.sell 과 동일)
+from core.ledger import SELL_FEE_RATE  # noqa: E402 — 산식 정본 재노출(테스트 하위호환)
 APPLY_REASON = "카톡 자동반영"
 
 STATE_FILE = os.path.join(PROJECT_ROOT, "data", "kakao_apply_state.json")
@@ -162,33 +162,6 @@ def _update_by_account_buy(name: str, account: str, qty: int, price: float) -> N
         else:
             ba.append({"account": account, "quantity": qty,
                        "avg_price": round(price), "total_invested": amt, "funding": ""})
-        h["by_account"] = ba
-        save_holdings(holdings)
-        return
-
-
-def _update_by_account_sell(name: str, account: str, qty: int) -> None:
-    """매도분을 해당 계좌의 by_account 에서 차감(평단 유지, 전량 시 항목 제거).
-
-    해당 계좌에 by_account 기록이 없으면 건너뛴다(아직 미기록 — 추후 reconcile).
-    종목 전량매도로 holding 자체가 사라졌으면 by_account도 함께 사라져 처리 불필요.
-    """
-    if not account:
-        return
-    holdings = load_holdings()
-    for h in holdings:
-        if _norm(h.get("name", "")) != _norm(name):
-            continue
-        ba = h.get("by_account") or []
-        ent = next((x for x in ba if x.get("account") == account), None)
-        if not ent:
-            return
-        rem = int(ent.get("quantity", 0)) - qty
-        if rem > 0:
-            ent["quantity"] = rem
-            ent["total_invested"] = ent.get("avg_price", 0) * rem
-        else:
-            ba.remove(ent)
         h["by_account"] = ba
         save_holdings(holdings)
         return
@@ -290,36 +263,10 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
         f"손익 {int(pnl):+,}원 ({pnl_pct:+.2f}%)"
     )
     if not dry_run:
-        holding = Holding.from_dict(hd)
-        loan_repay = holding.remove_sell(qty)
-        new_holdings = []
-        for h in holdings:
-            if _norm(h.get("name", "")) == _norm(name):
-                if holding.quantity > 0:
-                    new_holdings.append(holding.to_dict())
-            else:
-                new_holdings.append(h)
-        save_holdings(new_holdings)
-
-        sell_cost = round(total * SELL_FEE_RATE)
-        acc = load_account()
-        if acc.get("initial_capital"):
-            cash = acc.get("cash", acc["initial_capital"])
-            acc["cash"] = cash + total - sell_cost - loan_repay
-            save_account(acc)
-        _adjust_cash_by_account(account, total - sell_cost - loan_repay)  # 계좌 버킷 가산
-
-        tx = Transaction(
-            type="sell", name=name, sector=hd.get("sector", ""),
-            price=price, quantity=qty, total_amount=total,
-            profit_loss=pnl, profit_loss_pct=round(pnl_pct, 2),
-            sell_reason=APPLY_REASON, holding_id=hd.get("id", ""),
-            buy_thesis=hd.get("buy_thesis", ""), date=_to_iso(ts_kst),
-        )
-        txs = load_transactions()
-        txs.append(tx.to_dict())
-        save_transactions(txs)
-        _update_by_account_sell(name, account, qty)  # 계좌별 분해 차감
+        # 산식 정본(core.ledger) — 보유 차감·융자 상환·예수금(+계좌 버킷/분해)·거래 기록
+        from core.ledger import sell_spot
+        sell_spot(name, qty, price, reason=APPLY_REASON,
+                  date=_to_iso(ts_kst), account=account)
     if account:
         summary += f" · [{account}]"
     return ApplyResult(True, "주식매도", summary, "")

@@ -25,18 +25,11 @@ from bot.keyboards import (
     holdings_select_keyboard,
     reason_select_keyboard,
 )
-from models.portfolio import Holding
-from models.transaction import Transaction
 from parsers.input_parser import parse_sell_input, resolve_name
 from storage.json_store import (
     get_recent_reasons,
-    load_account,
     load_holdings,
     load_nickname_map,
-    load_transactions,
-    save_account,
-    save_holdings,
-    save_transactions,
 )
 
 # ConversationHandler states
@@ -44,7 +37,7 @@ SELECT, INPUT, REASON = range(3)
 
 # 매도 비용(수수료+증권거래세) 근사 — 매도 시 예수금에서 차감.
 # 실제 증권사 예수금과의 누적 괴리를 줄이려는 단순 보정(정밀 계산 X).
-SELL_FEE_RATE = 0.002  # 0.2%
+from core.ledger import SELL_FEE_RATE  # noqa: E402 — 산식 정본 재노출
 
 
 async def _start_sell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -124,49 +117,12 @@ async def _process_sell(
         )
         return error_state
 
-    avg_price = holding_dict["avg_price"]
-    total = price * quantity
-    profit_loss = (price - avg_price) * quantity
-    profit_loss_pct = profit_loss / (avg_price * quantity) * 100
-
-    # Holding 업데이트
-    holding = Holding.from_dict(holding_dict)
-    loan_repay = holding.remove_sell(quantity)
-
-    new_holdings = []
-    for h in holdings:
-        if h["name"].lower() == name.lower():
-            if holding.quantity > 0:
-                new_holdings.append(holding.to_dict())
-        else:
-            new_holdings.append(h)
-    save_holdings(new_holdings)
-
-    # 예수금 가산 (매도금액 - 매도비용 0.2% - 대출상환)
-    sell_cost = round(total * SELL_FEE_RATE)
-    account = load_account()
-    if account.get("initial_capital"):
-        cash = account.get("cash", account["initial_capital"])
-        account["cash"] = cash + total - sell_cost - loan_repay
-        save_account(account)
-
-    # Transaction 생성 및 저장
-    tx = Transaction(
-        type="sell",
-        name=name,
-        sector=holding_dict.get("sector", ""),
-        price=price,
-        quantity=quantity,
-        total_amount=total,
-        profit_loss=profit_loss,
-        profit_loss_pct=round(profit_loss_pct, 2),
-        sell_reason=sell_reason,
-        holding_id=holding_dict.get("id", ""),
-        buy_thesis=holding_dict.get("buy_thesis", ""),
-    )
-    transactions = load_transactions()
-    transactions.append(tx.to_dict())
-    save_transactions(transactions)
+    # 산식 정본(core.ledger)에 위임 — 보유 차감·융자 비례상환·예수금 가산·거래 기록
+    from core.ledger import sell_spot
+    tx_dict = sell_spot(name, quantity, price, reason=sell_reason)
+    total = tx_dict["total_amount"]
+    profit_loss = tx_dict["profit_loss"]
+    profit_loss_pct = tx_dict["profit_loss_pct"]
 
     # 매도 결과 응답
     result_text = format_sell_result(
