@@ -32,6 +32,27 @@ def _lock_path(filename: str) -> str:
     return str(_path(filename)) + ".lock"
 
 
+def _atomic_write(fp: Path, data: Any) -> None:
+    """tmp 파일에 완성본을 쓴 뒤 os.replace 로 원자적 교체.
+
+    직접 open(fp, "w") 로 쓰면 도중에 프로세스가 죽거나(킬/정전) 디스크가 차면
+    파일이 잘린 채 남아 이후 모든 load()가 JSONDecodeError 로 연쇄 실패한다.
+    교체 방식이면 실패 시점과 무관하게 원본은 항상 온전하다.
+    (호출자는 FileLock 을 잡고 있어야 한다 — tmp 경로가 파일당 하나라 락 없이
+    동시 저장하면 tmp 를 서로 덮어쓸 수 있다.)
+    """
+    tmp = fp.with_suffix(fp.suffix + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, fp)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def load(filename: str) -> dict[str, Any]:
     """JSON 파일을 읽어 dict로 반환. 파일이 없으면 빈 dict."""
     _ensure_dir()
@@ -44,12 +65,11 @@ def load(filename: str) -> dict[str, Any]:
 
 
 def save(filename: str, data: dict[str, Any]) -> None:
-    """dict를 JSON 파일에 저장."""
+    """dict를 JSON 파일에 저장(원자적 교체 — 쓰다 죽어도 원본 무손상)."""
     _ensure_dir()
     fp = _path(filename)
     with FileLock(_lock_path(filename)):
-        with open(fp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write(fp, data)
     _notify_dashboard_change(filename)
 
 
@@ -361,8 +381,7 @@ def save_nickname_map(nickname_map: dict[str, str]) -> None:
     _ensure_dir()
     fp = _path(NICKNAME_MAP_FILE)
     with FileLock(_lock_path(NICKNAME_MAP_FILE)):
-        with open(fp, "w", encoding="utf-8") as f:
-            json.dump(nickname_map, f, ensure_ascii=False, indent=2)
+        _atomic_write(fp, nickname_map)
 
 
 TICKER_MAP_FILE = "ticker_map.json"
@@ -384,5 +403,4 @@ def save_ticker_map(ticker_map: dict[str, str]) -> None:
     _ensure_dir()
     fp = _path(TICKER_MAP_FILE)
     with FileLock(_lock_path(TICKER_MAP_FILE)):
-        with open(fp, "w", encoding="utf-8") as f:
-            json.dump(ticker_map, f, ensure_ascii=False, indent=2)
+        _atomic_write(fp, ticker_map)
