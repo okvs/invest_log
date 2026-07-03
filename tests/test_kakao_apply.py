@@ -431,3 +431,50 @@ def test_cash_transfer_parser_ignores_trades():
     from parsers.input_parser import parse_cash_transfer
     assert parse_cash_transfer(kb_stock("buy", "삼성전자", 10, 70000)) is None
     assert parse_cash_transfer("그냥 안내 메시지") is None
+
+
+# ---------------------------------------------------------------------------
+# 계좌별 예수금 버킷(cash_by_account) — 체결 시 델타 가감 (2026-07-03 신고 수정)
+# ---------------------------------------------------------------------------
+def _seed_cash_buckets():
+    save_account({
+        "initial_capital": 155000000.0, "cash": 100000000.0,
+        "cash_by_account": {"KB": 40000000.0, "신한": 60000000.0},
+    })
+    save_holdings([])
+
+
+def test_buy_adjusts_cash_by_account_bucket():
+    _seed_cash_buckets()
+    ka.apply_message(kb_stock("buy", "삼성전자", 10, 70000), account="KB")
+    acc = load_account()
+    assert acc["cash"] == pytest.approx(100000000 - 700000)
+    assert acc["cash_by_account"]["KB"] == pytest.approx(40000000 - 700000)
+    assert acc["cash_by_account"]["신한"] == pytest.approx(60000000)  # 다른 계좌 보존
+
+
+def test_sell_adjusts_cash_by_account_bucket():
+    _seed_cash_buckets()
+    save_holdings([{
+        "name": "삼성전자", "ticker": "005930.KS", "sector": "반도체",
+        "quantity": 10, "avg_price": 70000, "total_invested": 700000,
+        "buy_date": "2026-06-01", "credit_loan": 0,
+    }])
+    ka.apply_message(kb_stock("sell", "삼성전자", 4, 80000), account="KB")
+    total = 4 * 80000
+    fee = round(total * ka.SELL_FEE_RATE)
+    acc = load_account()
+    assert acc["cash"] == pytest.approx(100000000 + total - fee)
+    assert acc["cash_by_account"]["KB"] == pytest.approx(40000000 + total - fee)
+    assert acc["cash_by_account"]["신한"] == pytest.approx(60000000)
+
+
+def test_bucket_skipped_when_account_unknown():
+    """버킷에 없는 계좌(또는 계좌 미상)는 건너뛰고 합산 cash 만 갱신."""
+    save_account({"initial_capital": 155000000.0, "cash": 100000000.0,
+                  "cash_by_account": {"신한": 60000000.0}})
+    save_holdings([])
+    ka.apply_message(kb_stock("buy", "삼성전자", 10, 70000), account="KB")
+    acc = load_account()
+    assert acc["cash"] == pytest.approx(100000000 - 700000)
+    assert acc["cash_by_account"] == {"신한": 60000000.0}  # 무변경

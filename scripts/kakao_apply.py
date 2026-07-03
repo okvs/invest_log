@@ -194,6 +194,25 @@ def _update_by_account_sell(name: str, account: str, qty: int) -> None:
         return
 
 
+def _adjust_cash_by_account(account: str, delta: float) -> None:
+    """체결 현금 흐름을 계좌별 예수금 버킷(cash_by_account)에도 델타로 반영.
+
+    합산 cash 는 매수/매도 경로가 이미 갱신하지만, 증권사별 표시용 버킷은
+    스샷/이체 때만 갱신돼 거래가 쌓일수록 박제값이 됐다(2026-07-03 신고:
+    신한 거래해도 예수금이 1.1억 그대로). lesson(2026-06-23)대로 절대값 set
+    이 아니라 델타 가감 — 버킷 자체가 없거나 그 계좌 키가 없으면 건너뛴다
+    (스샷 reconcile 전 미기록 계좌는 reconcile 때 절대값이 잡힌다).
+    """
+    if not account or not delta:
+        return
+    acc = load_account()
+    cba = acc.get("cash_by_account")
+    if not isinstance(cba, dict) or account not in cba:
+        return
+    cba[account] = float(cba[account] or 0) + float(delta)
+    save_account(acc)
+
+
 # ---------------------------------------------------------------------------
 # 주식
 # ---------------------------------------------------------------------------
@@ -226,6 +245,7 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
             )
             _process_and_save(buy_input, margin_ratio=100)
             _update_by_account_buy(name, account, qty, price)  # 계좌별 분해 갱신
+            _adjust_cash_by_account(account, -total)  # 계좌별 예수금 버킷 차감
         if account:
             summary += f" · [{account}]"
         return ApplyResult(True, "주식매수", summary, " · ".join(warns))
@@ -287,6 +307,7 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
             cash = acc.get("cash", acc["initial_capital"])
             acc["cash"] = cash + total - sell_cost - loan_repay
             save_account(acc)
+        _adjust_cash_by_account(account, total - sell_cost - loan_repay)  # 계좌 버킷 가산
 
         tx = Transaction(
             type="sell", name=name, sector=hd.get("sector", ""),

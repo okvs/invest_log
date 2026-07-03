@@ -28,6 +28,7 @@ def harness(tmp_path, monkeypatch):
     env = {"rows": [], "applied": [], "sent": []}
 
     monkeypatch.setattr(ka, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(ka, "LOG_FILE", str(tmp_path / "kakao_apply.log"))  # 실로그 오염 방지
     monkeypatch.setattr(kp, "find_kakaocli", lambda: "kakaocli")
     monkeypatch.setattr(kp, "load_auth", lambda: ("db", "key"))
     monkeypatch.setattr(kp, "kc_query", lambda *a, **k: env["rows"])
