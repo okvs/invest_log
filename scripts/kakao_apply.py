@@ -866,6 +866,8 @@ def main(argv=None) -> int:
             log(f"자격증명 경고(텔레그램 확인 메시지 생략): {e}")
 
     if args.loop > 0:
+        from bot.self_restart import arm, reexec_if_source_changed
+        arm()
         log(f"=== 카톡 자동반영 데몬 시작: {args.loop}초 간격 ===")
         while True:
             try:
@@ -876,6 +878,8 @@ def main(argv=None) -> int:
                 log(f"폴링 예외: {e}")
             from_today_epoch = None  # 1회만 부트스트랩
             time.sleep(args.loop)
+            # 폴링 사이 안전지점 — 소스가 바뀌었으면 새 코드로 자기 재실행
+            reexec_if_source_changed(log)
 
     results = poll_once(
         token, chat_id,

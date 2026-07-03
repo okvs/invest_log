@@ -97,6 +97,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.loop > 0:
+        from bot.self_restart import arm, reexec_if_source_changed
+        arm()
         log(f"=== 대시보드 재발행 데몬 시작: {args.loop}초 간격(장중 08:00~20:00 KST, NXT 포함) ===")
         while True:
             try:
@@ -104,6 +106,8 @@ def main(argv=None) -> int:
             except Exception as e:  # noqa: BLE001
                 log(f"루프 예외: {e}")
             time.sleep(args.loop)
+            # 발행 사이 안전지점 — 소스가 바뀌었으면 새 코드로 자기 재실행
+            reexec_if_source_changed(log)
 
     refresh_once(force=args.force)
     return 0
