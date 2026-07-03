@@ -151,6 +151,14 @@ async def _save_bot_username(app) -> None:
 
 
 def main() -> None:
+    # 단일 인스턴스 강제 — 중복이면 텔레그램 409 Conflict 로 거래가 기록 안 되므로
+    # 락을 못 잡으면 즉시 종료(while-루프 래퍼가 5초 후 재시도, 선점자가 죽으면 인계).
+    from bot.single_instance import acquire
+    lock = acquire(Path(__file__).resolve().parent / "data" / "invest_bot.lock")
+    if lock is None:
+        logger.error("이미 실행 중인 봇 인스턴스가 있습니다 — 이 프로세스는 종료합니다.")
+        raise SystemExit(1)
+
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN 환경변수를 설정해주세요. (.env 파일 참고)")
