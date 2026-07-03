@@ -70,10 +70,23 @@ def refresh_once(force: bool = False) -> bool:
     try:
         url = asyncio.run(fp._build_and_deploy())
         log(f"재발행 완료: {url}" if url else "재발행: 생성된 파일 없음(보유/포지션 없음?)")
+        _audit_ledger()
         return bool(url)
     except Exception as e:  # noqa: BLE001
         log(f"재발행 실패: {e}")
         return False
+
+
+def _audit_ledger() -> None:
+    """재발행 주기마다 장부 불변식 감사 — 새 위반 조합이면 웹 푸시(중복 억제)."""
+    try:
+        from bot.audit import audit_and_notify
+        violations = audit_and_notify()
+        if violations:
+            log("⚠️ 장부 불변식 위반 " + str(len(violations)) + "건: "
+                + "; ".join(f"[{x.severity}]{x.code}" for x in violations))
+    except Exception as e:  # noqa: BLE001
+        log(f"불변식 감사 실패(발행엔 영향 없음): {e}")
 
 
 def main(argv=None) -> int:
