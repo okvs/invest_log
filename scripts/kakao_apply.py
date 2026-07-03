@@ -36,6 +36,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -611,6 +612,12 @@ def apply_message(detail: str, *, ts_kst: str = "", dry_run: bool = False,
 # 상태(watermark)
 # ---------------------------------------------------------------------------
 def load_state() -> dict:
+    """watermark + 멱등 장부.
+
+    구조: {"<chatId>": last_logId, ...,           # 채널별 watermark
+           "_processed": {"<chatId>": [logId...]},  # 반영 완료 장부(최근 500) — 중복 반영 차단
+           "_failed":    {"<chatId>": [logId...]}}  # 데드레터(예외로 미반영, 수동 확인용)
+    """
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
@@ -619,9 +626,21 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    """원자적 교체 저장 — 쓰다 죽어도 watermark/장부 파일이 깨지지 않는다."""
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    tmp = STATE_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -694,18 +713,49 @@ def poll_once(
         )
         max_seen = last
         n_applied = 0
+        # 멱등 장부 — 이미 반영한 logId 는 다시 반영하지 않는다(crash 후 재기동 시
+        # watermark 미저장으로 같은 배치를 다시 읽어도 이중계상 차단).
+        done: set[int] = {int(x) for x in state.get("_processed", {}).get(ks, [])}
         for log_id, _sent_at, message, attachment in rows:
-            max_seen = max(max_seen, int(log_id))
+            log_id = int(log_id)
+            max_seen = max(max_seen, log_id)
+            if log_id in done:
+                log(f"[{broker}] 중복 스킵 logId={log_id} (멱등 장부에 이미 반영됨)")
+                continue
             detail, sent_kst = detail_text(message, attachment)
             if not detail or not detail.strip():
                 continue
-            res = apply_message(detail, ts_kst=sent_kst or "", dry_run=dry_run,
-                                account=_account_for_broker(broker))
+            try:
+                res = apply_message(detail, ts_kst=sent_kst or "", dry_run=dry_run,
+                                    account=_account_for_broker(broker))
+            except Exception:  # noqa: BLE001
+                # 한 건의 예외가 배치 전체(뒤 메시지)를 막지 않게 — 데드레터에 기록하고
+                # watermark 를 전진시켜 다음 폴링이 같은 건으로 무한 재시도하지 않게 한다.
+                log(f"[{broker}] ❌ 반영 실패 logId={log_id}\n{traceback.format_exc()}")
+                if not dry_run:
+                    failed = state.setdefault("_failed", {}).setdefault(ks, [])
+                    if log_id not in failed:
+                        failed.append(log_id)
+                    state["_failed"][ks] = failed[-200:]
+                    state[ks] = max_seen
+                    save_state(state)
+                    if token and chat_id:
+                        tg_send(token, chat_id,
+                                f"❌ 자동반영 실패 · {broker} · logId={log_id}\n"
+                                f"이 체결은 잔고에 미반영 — kakao_apply.log 확인 후 수동 기록 필요")
+                continue
             if res is None:
                 continue
-            results.append((broker, int(log_id), sent_kst or "", res))
+            results.append((broker, log_id, sent_kst or "", res))
             if dry_run:
                 continue
+            # 잔고 저장(apply_message) 직후 곧바로 멱등 장부+watermark 저장 —
+            # crash 시 이중반영 창을 '배치 전체'에서 '이 지점 직전(ms)'으로 줄인다.
+            if res.applied:
+                done.add(log_id)
+                state.setdefault("_processed", {})[ks] = sorted(done)[-500:]
+            state[ks] = max_seen
+            save_state(state)
             if res.applied:
                 n_applied += 1
                 log(f"[{broker}] 반영 logId={log_id} {res.action}: {res.summary}")
