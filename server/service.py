@@ -161,6 +161,13 @@ def _holding_idx(holdings: list[dict], name: str) -> int | None:
     )
 
 
+def holding_active(name: str) -> bool:
+    """해당 종목이 보유 목록에 수량>0 으로 남아 있는지 (연금 토글 후 UI 갱신용)."""
+    holdings = store.load_holdings()
+    idx = _holding_idx(holdings, name)
+    return idx is not None and int(holdings[idx].get("quantity", 0) or 0) > 0
+
+
 def toggle_pension(transaction_id: str) -> dict:
     """거래 한 건의 연금 플래그를 뒤집고, 그 거래가 보유·예수금에 끼친 효과를 정합 보정.
 

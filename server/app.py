@@ -160,7 +160,12 @@ async def pension_toggle(req: PensionReq, uid: str = Depends(require_user)) -> d
         tx = service.toggle_pension(req.transaction_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True, "transaction": tx}
+    # holding_remains: 토글 후에도 그 종목이 보유에 남아 있는지 — 프론트가 이 값으로
+    # '확인 필요' 탭의 섹터 입력 카드를 즉시 숨길지 판단한다(연금 처리로 보유가 사라진 경우).
+    return {
+        "ok": True, "transaction": tx,
+        "holding_remains": service.holding_active(tx.get("name", "")),
+    }
 
 
 # --- 웹 푸시 알림 ---

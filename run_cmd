@@ -11,7 +11,10 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 # 1) 매수/매도 기록 봇 (main.py) — 반드시 단일 인스턴스
 #    (중복 실행 시 텔레그램 getUpdates Conflict 로 거래가 기록 안 됨)
 echo "▶ 봇(main.py) 기동 — 기존 인스턴스 정리 후 재시작"
-pkill -f "python.*main.py" 2>/dev/null || true
+# ⚠️ 패턴은 반드시 main\.py$ 로 앵커 — 앵커 없으면 while-loop 래퍼 zsh 는 물론,
+# tmux 서버 프로세스 자체(argv 가 최초 new-session 명령)까지 매칭해 "모든" tmux
+# 세션이 동반 사망한다(2026-07-03 실사고: invest-tunnel·remote-bot 사망, lesson.md).
+pkill -f "python.*main\.py$" 2>/dev/null || true
 sleep 1
 tmux has-session -t invest-bot 2>/dev/null && tmux kill-session -t invest-bot || true
 tmux new-session -d -s invest-bot \

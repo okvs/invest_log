@@ -936,6 +936,26 @@ _TUNNEL_URL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "tun
 # (/api/retro), ② 섹터 입력 카드(.sector-need-card) 저장 → /api/sector 로 섹터 보정.
 # 폼 스타일은 대시보드 CSS 변수를 그대로 사용한다.
 _WRITE_LAYER = """
+<script>(function(){
+  // 관리자 모드 — 전략 탭 비밀번호 → /api/login 토큰(localStorage 'admin_token'),
+  // 모든 쓰기 요청에 Bearer 첨부. 실제 차단은 서버(WEBAPP_AUTH=1)가 담당하고
+  // 여기(body.admin-on/off 클래스·안내)는 UI 편의만 맡는다.
+  var KEY='admin_token';
+  function tok(){try{return localStorage.getItem(KEY)||'';}catch(e){return '';}}
+  function sync(){var on=!!tok();
+    if(document.body){document.body.classList.toggle('admin-on',on);
+      document.body.classList.toggle('admin-off',!on);}}
+  window.__ADMIN__={
+    on:function(){return !!tok();},
+    headers:function(h){h=h||{};var t=tok();if(t)h['Authorization']='Bearer '+t;return h;},
+    set:function(t){try{if(t)localStorage.setItem(KEY,t);else localStorage.removeItem(KEY);}catch(e){}sync();},
+    sync:sync};
+  sync();
+})();</script>
+<style>
+  body.admin-off .sector-form{display:none}
+  body.admin-off .sector-need-msg:after{content:' 🔒 전략 탭에서 관리자 모드를 켜면 입력할 수 있어요.'}
+</style>
 <style>
   .retro-card{cursor:pointer}
   .retro-modal{position:fixed;inset:0;z-index:3000;display:none;align-items:flex-end;
@@ -998,7 +1018,9 @@ _WRITE_LAYER = """
   function setCorrect(v){correctBtns().forEach(function(b){b.classList.toggle('active',b.getAttribute('data-val')===v);});}
   function getCorrect(){var a=$('retro-correct').querySelector('.retro-opt.active');return a?a.getAttribute('data-val'):'';}
   correctBtns().forEach(function(b){b.addEventListener('click',function(){setCorrect(b.getAttribute('data-val'));});});
-  function open(card){var raw=card.getAttribute('data-retro');if(!raw)return;
+  function open(card){
+    if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
+    var raw=card.getAttribute('data-retro');if(!raw)return;
     try{cur={card:card,items:JSON.parse(raw)};}catch(e){return;}
     var nm=(cur.items[0]&&cur.items[0].name)||'';
     $('retro-title').textContent=nm+' 회고'+(cur.items.length>1?(' · '+cur.items.length+'건'):'');
@@ -1020,7 +1042,8 @@ _WRITE_LAYER = """
       for(var i=0;i<cur.items.length;i++){
         var body=Object.assign({transaction_id:cur.items[i].id},base);
         var r=await fetch(API+'/api/retro',{method:'POST',
-          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          headers:window.__ADMIN__.headers({'Content-Type':'application/json'}),body:JSON.stringify(body)});
+        if(r.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
       }
       markDismissed(cur.items);
@@ -1052,13 +1075,15 @@ _WRITE_LAYER = """
     var inp=card.querySelector('.sector-input'), btn=card.querySelector('.sector-save');
     if(!inp||!btn) return;
     async function save(){
+      if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
       var sec=(inp.value||'').trim();
       if(!sec){inp.focus();return;}
       btn.disabled=true;
       var body={sector:sec,ticker:card.getAttribute('data-ticker')||'',name:card.getAttribute('data-name')||''};
       try{
         var r=await fetch(API+'/api/sector',{method:'POST',
-          headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          headers:window.__ADMIN__.headers({'Content-Type':'application/json'}),body:JSON.stringify(body)});
+        if(r.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
         card.classList.add('resolved');card.style.display='none';
         if(window.__refreshCheckBadge)window.__refreshCheckBadge();
@@ -1095,11 +1120,13 @@ _WRITE_LAYER = """
     row.addEventListener('contextmenu',function(e){e.preventDefault();});  // 롱프레스 콜아웃 차단
     btn.addEventListener('click',async function(e){
       e.preventDefault();e.stopPropagation();
+      if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
       var id=btn.getAttribute('data-pension-tx');
       btn.disabled=true;
       try{
         var r=await fetch(API+'/api/pension',{method:'POST',
-          headers:{'Content-Type':'application/json'},body:JSON.stringify({transaction_id:id})});
+          headers:window.__ADMIN__.headers({'Content-Type':'application/json'}),body:JSON.stringify({transaction_id:id})});
+        if(r.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
         if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
         var jj=await r.json();var on=!!(jj.transaction&&jj.transaction.is_pension);
         row.classList.toggle('is-pension',on);
@@ -1107,6 +1134,15 @@ _WRITE_LAYER = """
         if(on){ if(!lab){lab=document.createElement('span');lab.className='pen-label';
                  lab.textContent='연금';btn.parentNode.insertBefore(lab,btn);} btn.textContent='연금 해제'; }
         else { if(lab)lab.remove(); btn.textContent='연금'; }
+        // 연금 처리로 그 종목 보유가 통째로 사라졌으면(holding_remains=false) '확인 필요'
+        // 탭의 섹터 입력 카드도 즉시 숨긴다 — 연금 종목은 섹터 입력이 필요 없다.
+        if(on&&jj.holding_remains===false){
+          var nm=(((jj.transaction||{}).name)||'').replace(/\\s+/g,'').toLowerCase();
+          document.querySelectorAll('.sector-need-card').forEach(function(c){
+            var cn=(c.getAttribute('data-name')||'').replace(/\\s+/g,'').toLowerCase();
+            if(nm&&cn===nm){c.classList.add('resolved');c.style.display='none';}});
+          if(window.__refreshCheckBadge)window.__refreshCheckBadge();
+        }
         toast(on?'연금으로 표시 — 계산에서 제외':'연금 해제 — 다시 포함');
         disarm();
       }catch(e2){toast(e2.message||'실패',true);}finally{btn.disabled=false;}
@@ -1157,25 +1193,90 @@ _WRITE_LAYER = """
   (async function(){ try{ await reg(); var r=await navigator.serviceWorker.ready;
     var s=await r.pushManager.getSubscription(); setOn(!!s && Notification.permission==='granted'); }catch(e){} })();
   enableBtn.addEventListener('click', async function(){
+    if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
     enableBtn.disabled=true;
     try{
       var perm=await Notification.requestPermission();
       if(perm!=='granted'){ toast('\\uC54C\\uB9BC \\uAD8C\\uD55C \\uAC70\\uBD80\\uB428',true); setOn(false); return; }
       await reg(); var r=await navigator.serviceWorker.ready;
-      var kj=await (await fetch(API+'/api/push/key')).json();
+      var kr=await fetch(API+'/api/push/key',{headers:window.__ADMIN__.headers()});
+      if(kr.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
+      var kj=await kr.json();
       var s=await r.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:u8(kj.key)});
-      var pr=await fetch(API+'/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},
+      var pr=await fetch(API+'/api/push/subscribe',{method:'POST',
+        headers:window.__ADMIN__.headers({'Content-Type':'application/json'}),
         body:JSON.stringify({subscription:s.toJSON()})});
+      if(pr.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
       if(!pr.ok) throw new Error('\\uAD6C\\uB3C5 \\uB4F1\\uB85D \\uC2E4\\uD328');
       setOn(true); toast('\\uC54C\\uB9BC \\uCF1C\\uC9D0');
     }catch(e){ toast(e.message||'\\uC2E4\\uD328',true); setOn(false); }
   });
   testBtn.addEventListener('click', async function(){
+    if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
     testBtn.disabled=true;
-    try{ var j=await (await fetch(API+'/api/push/test',{method:'POST'})).json();
+    try{ var tr=await fetch(API+'/api/push/test',{method:'POST',headers:window.__ADMIN__.headers()});
+      if(tr.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
+      var j=await tr.json();
       toast(j.sent>0?'\\uD14C\\uC2A4\\uD2B8 \\uC54C\\uB9BC \\uBC1C\\uC1A1':'\\uAD6C\\uB3C5\\uC774 \\uC5C6\\uC2B5\\uB2C8\\uB2E4', j.sent===0); }
-    catch(e){ toast('\\uC2E4\\uD328',true); } finally{ testBtn.disabled=false; }
+    catch(e){ toast(e.message||'\\uC2E4\\uD328',true); } finally{ testBtn.disabled=false; }
   });
+})();</script>
+<style>
+  .admin-card{background:var(--card);border:1px solid var(--border);border-radius:12px;
+       padding:12px 14px;margin:0 0 12px;box-shadow:var(--shadow)}
+  .admin-row{display:flex;align-items:center;gap:8px}
+  .admin-ttl{font-weight:700;color:var(--text-strong);font-size:14px;flex:none}
+  .admin-input{flex:1;min-width:0;padding:9px 11px;border:1px solid var(--border);border-radius:9px;
+       background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;box-sizing:border-box}
+  .admin-btn{font-size:12px;font-weight:700;padding:8px 13px;border-radius:9px;border:none;
+       background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;flex:none;
+       -webkit-tap-highlight-color:transparent}
+  .admin-btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+  .admin-btn:disabled{opacity:.6}
+  .admin-sub{font-size:12px;color:var(--text-dim);margin-top:6px;line-height:1.4}
+  body.admin-on .admin-when-off{display:none}
+  body.admin-off .admin-when-on{display:none}
+</style>
+<script>(function(){
+  // 전략 탭 상단 '관리자 모드' 카드 — 비밀번호 → POST /api/login → 토큰 저장(__ADMIN__).
+  // 첫 로그인이 곧 비밀번호 설정(server/auth.py). 켜져 있으면 끄기 버튼만 노출.
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  if(!API) return;
+  var panel=document.getElementById('tab-backtest'); if(!panel) return;
+  function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
+    t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  var card=document.createElement('div'); card.className='admin-card';
+  card.innerHTML='<div class="admin-row admin-when-off">'
+    +'<span class="admin-ttl">🔐 관리자</span>'
+    +'<input class="admin-input" id="admin-pw" type="password" placeholder="비밀번호" autocomplete="current-password">'
+    +'<button class="admin-btn" id="admin-login">켜기</button></div>'
+    +'<div class="admin-row admin-when-on">'
+    +'<span class="admin-ttl">🔓 관리자 모드 켜짐</span>'
+    +'<span style="flex:1"></span>'
+    +'<button class="admin-btn ghost" id="admin-logout">끄기</button></div>'
+    +'<div class="admin-sub admin-when-off">켜면 섹터 입력·회고·연금 토글·알림 설정이 가능해요. 처음이면 지금 입력한 비밀번호로 설정됩니다.</div>'
+    +'<div class="admin-sub admin-when-on">이 기기에서 30일간 유지됩니다.</div>';
+  panel.insertBefore(card, panel.firstChild);
+  var pw=card.querySelector('#admin-pw'), btnIn=card.querySelector('#admin-login'),
+      btnOut=card.querySelector('#admin-logout');
+  async function login(){
+    var p=(pw.value||'').trim();
+    if(p.length<4){toast('비밀번호는 4자 이상이어야 해요',true);pw.focus();return;}
+    btnIn.disabled=true;
+    try{
+      var r=await fetch(API+'/api/login',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+      var j=await r.json().catch(function(){return{};});
+      if(!r.ok)throw new Error(j.detail||('오류 '+r.status));
+      window.__ADMIN__.set(j.token||'');pw.value='';
+      toast('관리자 모드 켜짐 🔓');
+    }catch(e){toast(e.message||'로그인 실패',true);}finally{btnIn.disabled=false;}
+  }
+  btnIn.addEventListener('click',login);
+  pw.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();login();}});
+  btnOut.addEventListener('click',function(){window.__ADMIN__.set('');toast('관리자 모드를 껐어요');});
+  window.__ADMIN__.sync();
 })();</script>
 """
 

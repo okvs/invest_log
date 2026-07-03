@@ -19,8 +19,10 @@ fi
 # FIREBASE_PUBLISH=1: PWA(app.html/대시보드)에서 매수/매도/회고/섹터를 저장하면
 # json_store.save → trigger_publish 로 Firebase Hosting 을 즉시 재발행한다. 이게
 # 꺼져 있으면 디스크엔 저장돼도 라이브 HTML 이 그대로라, 새로고침 시 옛 화면이 보인다.
+# WEBAPP_AUTH=1: 모든 쓰기 API 에 Bearer 토큰 요구(관리자 모드). 전략 탭 비밀번호
+# 입력 → /api/login 토큰 발급. 첫 로그인이 비밀번호를 설정한다(data/webapp_auth.json).
 tmux new-session -d -s "$SESSION" \
-  "cd '$DIR' && export ALLOWED_EMAILS='$ALLOW' FIREBASE_PUBLISH=1 && while true; do '$PY' -m uvicorn server.app:app --host 0.0.0.0 --port $PORT; echo '[restart] web exited, 5s 후 재시작'; sleep 5; done"
+  "cd '$DIR' && export ALLOWED_EMAILS='$ALLOW' FIREBASE_PUBLISH=1 WEBAPP_AUTH=1 && while true; do '$PY' -m uvicorn server.app:app --host 0.0.0.0 --port $PORT; echo '[restart] web exited, 5s 후 재시작'; sleep 5; done"
 
 echo "tmux 세션 '$SESSION' 시작됨"
 echo "  맥 브라우저:  http://localhost:$PORT"

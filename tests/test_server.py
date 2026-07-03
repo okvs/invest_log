@@ -176,6 +176,36 @@ def test_toggle_pension_sell_readds_shares_and_costbasis():
     assert load_account()["cash"] == pytest.approx(cash_after_sell - (total - fee))
 
 
+def test_pension_endpoint_reports_holding_remains():
+    """POST /api/pension 응답의 holding_remains — 연금 처리로 보유가 사라지면 False,
+    남아 있으면 True. 프론트가 이 값으로 섹터 입력 카드를 즉시 숨길지 판단한다."""
+    _seed()
+    c = TestClient(app)
+    service.record_buy("KODEX", 100, 10000)
+    tx = next(t for t in load_transactions() if t["name"] == "KODEX")
+
+    r = c.post("/api/pension", json={"transaction_id": tx["id"]})  # on → 보유 제거
+    assert r.status_code == 200
+    assert r.json()["holding_remains"] is False
+
+    r = c.post("/api/pension", json={"transaction_id": tx["id"]})  # off → 복원
+    assert r.status_code == 200
+    assert r.json()["holding_remains"] is True
+
+
+def test_pension_endpoint_holding_remains_when_partial():
+    """같은 종목 매수 2건 중 1건만 연금 → 보유가 남으므로 holding_remains True."""
+    _seed()
+    c = TestClient(app)
+    service.record_buy("삼성전자", 10, 70000)
+    service.record_buy("삼성전자", 5, 70000)
+    first_buy = [t for t in load_transactions() if t["type"] == "buy"][0]
+    r = c.post("/api/pension", json={"transaction_id": first_buy["id"]})
+    assert r.status_code == 200
+    assert r.json()["holding_remains"] is True
+    assert load_holdings()[0]["quantity"] == 5
+
+
 def test_pension_sell_excluded_from_unreviewed():
     """연금 매도는 회고 대기(unreviewed_sells)에 안 나온다 — 기록 탭에만."""
     _seed()
