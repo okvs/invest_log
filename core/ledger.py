@@ -8,6 +8,7 @@ scripts/kakao_apply.py)에 "~과 동일"이라는 주석으로만 동기화돼 �
 """
 from __future__ import annotations
 
+import functools
 from datetime import datetime
 
 from models.portfolio import Holding
@@ -16,6 +17,22 @@ from parsers.input_parser import norm_stock_name
 from storage import json_store
 
 SELL_FEE_RATE = 0.002  # 매도세+수수료 근사
+
+# 정본 산식이 함께 고치는 장부 파일들 — RMW 임계구역의 락 대상
+_LEDGER_FILES = (
+    json_store.PORTFOLIO_FILE, json_store.ACCOUNT_FILE,
+    json_store.TRANSACTIONS_FILE, json_store.TICKER_MAP_FILE,
+)
+
+
+def in_ledger_tx(fn):
+    """장부 RMW 임계구역 데코레이터 — 봇·PWA·카톡 프로세스가 동시에 같은 장부를
+    load→mutate→save 하다 서로를 덮어쓰는(lost update) 것을 파일락으로 차단."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with json_store.transaction(*_LEDGER_FILES):
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def _buy_by_account(holdings: list[dict], name: str, account: str, qty: int, price: float) -> None:
@@ -41,6 +58,7 @@ def _buy_by_account(holdings: list[dict], name: str, account: str, qty: int, pri
         return
 
 
+@in_ledger_tx
 def buy_spot(
     name: str, quantity: int, price: float, *,
     sector: str = "", thesis: str = "", ticker: str = "",
@@ -150,6 +168,7 @@ def _sell_by_account(holdings: list[dict], name: str, account: str, qty: int) ->
         return
 
 
+@in_ledger_tx
 def sell_spot(
     name: str, quantity: int, price: float, *,
     reason: str = "", date: str = "", account: str = "",

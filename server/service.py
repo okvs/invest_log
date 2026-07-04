@@ -61,6 +61,7 @@ def holding_active(name: str) -> bool:
     return idx is not None and int(holdings[idx].get("quantity", 0) or 0) > 0
 
 
+@ledger.in_ledger_tx
 def toggle_pension(transaction_id: str) -> dict:
     """거래 한 건의 연금 플래그를 뒤집고, 그 거래가 보유·예수금에 끼친 효과를 정합 보정.
 

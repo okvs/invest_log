@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,44 @@ def _lock_path(filename: str) -> str:
     return str(_path(filename)) + ".lock"
 
 
+# 프로세스 전역 락 레지스트리 — 같은 파일은 같은 FileLock 객체를 재사용한다.
+# filelock 은 '같은 객체'의 중첩 acquire 만 재진입(카운터)으로 허용하므로,
+# transaction() 안에서 load/save 가 다시 락을 잡아도 데드락이 없다.
+# (매 호출 새 FileLock 을 만들면 같은 프로세스라도 flock 이 서로 충돌한다.)
+_LOCK_TIMEOUT = 30  # 초 — 락 보유 프로세스가 hang 이어도 전체가 무한 대기하지 않게
+_LOCKS: dict[str, FileLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock(filename: str) -> FileLock:
+    path = _lock_path(filename)
+    with _LOCKS_GUARD:
+        lk = _LOCKS.get(path)
+        if lk is None:
+            lk = FileLock(path, timeout=_LOCK_TIMEOUT)
+            _LOCKS[path] = lk
+        return lk
+
+
+@contextmanager
+def transaction(*filenames: str):
+    """여러 장부 파일의 읽기-수정-쓰기(RMW)를 하나의 임계구역으로 묶는다.
+
+    개별 load/save 는 원자적이지만, load→mutate→save 사이에 다른 프로세스
+    (봇·카톡반영·PWA)가 끼어들면 lost update 가 난다. 정본 산식(core.ledger)
+    처럼 여러 파일을 함께 고치는 경로는 이걸로 감싼다. 락 획득 순서는 파일명
+    정렬로 고정해 프로세스 간 데드락을 방지한다.
+
+        with json_store.transaction(PORTFOLIO_FILE, ACCOUNT_FILE):
+            ...load → mutate → save...
+    """
+    _ensure_dir()
+    with ExitStack() as stack:
+        for fn in sorted(set(filenames)):
+            stack.enter_context(_lock(fn))
+        yield
+
+
 def _atomic_write(fp: Path, data: Any) -> None:
     """tmp 파일에 완성본을 쓴 뒤 os.replace 로 원자적 교체.
 
@@ -59,7 +99,7 @@ def load(filename: str) -> dict[str, Any]:
     fp = _path(filename)
     if not fp.exists():
         return {}
-    with FileLock(_lock_path(filename)):
+    with _lock(filename):
         with open(fp, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -68,7 +108,7 @@ def save(filename: str, data: dict[str, Any]) -> None:
     """dict를 JSON 파일에 저장(원자적 교체 — 쓰다 죽어도 원본 무손상)."""
     _ensure_dir()
     fp = _path(filename)
-    with FileLock(_lock_path(filename)):
+    with _lock(filename):
         _atomic_write(fp, data)
     _notify_dashboard_change(filename)
 
@@ -371,7 +411,7 @@ def load_nickname_map() -> dict[str, str]:
     fp = _path(NICKNAME_MAP_FILE)
     if not fp.exists():
         return {}
-    with FileLock(_lock_path(NICKNAME_MAP_FILE)):
+    with _lock(NICKNAME_MAP_FILE):
         with open(fp, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -380,7 +420,7 @@ def save_nickname_map(nickname_map: dict[str, str]) -> None:
     """닉네임 → 종목명 매핑 저장."""
     _ensure_dir()
     fp = _path(NICKNAME_MAP_FILE)
-    with FileLock(_lock_path(NICKNAME_MAP_FILE)):
+    with _lock(NICKNAME_MAP_FILE):
         _atomic_write(fp, nickname_map)
 
 
@@ -393,7 +433,7 @@ def load_ticker_map() -> dict[str, str]:
     fp = _path(TICKER_MAP_FILE)
     if not fp.exists():
         return {}
-    with FileLock(_lock_path(TICKER_MAP_FILE)):
+    with _lock(TICKER_MAP_FILE):
         with open(fp, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -402,5 +442,5 @@ def save_ticker_map(ticker_map: dict[str, str]) -> None:
     """종목명 → 티커코드 매핑 저장."""
     _ensure_dir()
     fp = _path(TICKER_MAP_FILE)
-    with FileLock(_lock_path(TICKER_MAP_FILE)):
+    with _lock(TICKER_MAP_FILE):
         _atomic_write(fp, ticker_map)
