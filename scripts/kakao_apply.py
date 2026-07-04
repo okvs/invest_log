@@ -5,7 +5,7 @@
 **수동으로 봇에 붙여넣는 것과 동일한 경로**(parsers.input_parser.parse_broker_message)로
 파싱해 포트폴리오/거래/예수금에 그대로 반영한다.
 
-- 주식 매수  → 보유/평단/예수금 갱신 (bot.handlers.buy._process_and_save 재사용, 증거금 100% 기본)
+- 주식 매수  → 보유/평단/예수금 갱신 (core.ledger.buy_spot 정본, 증거금 100% 기본)
 - 주식 매도  → 보유 차감·예수금 가산(매도비용 0.2%·대출 비례상환)·실현손익 기록
 - 선물       → 보유 포지션 대조로 방향 자동판정(broker.py와 동일 규칙):
                  · 반대방향 보유 → 청산(부분/전량, 실현손익+환급증거금 → 선물 가용예수금)
@@ -49,7 +49,6 @@ for _p in (PROJECT_ROOT, SCRIPTS_DIR):
 # 적용 로직은 봇 수동 경로와 동일한 파서/모델/스토리지를 그대로 재사용한다.
 from parsers.input_parser import (  # noqa: E402
     BrokerMessage,
-    BuyInput,
     CashTransfer,
     FuturesBrokerMessage,
     parse_broker_message,
@@ -141,51 +140,6 @@ def _account_for_broker(broker: str) -> str:
     return _ACCOUNT_BY_BROKER.get(broker, "")
 
 
-def _update_by_account_buy(name: str, account: str, qty: int, price: float) -> None:
-    """매수분을 해당 계좌의 by_account 에 가산(평단 재계산)."""
-    if not account:
-        return
-    holdings = load_holdings()
-    for h in holdings:
-        if _norm(h.get("name", "")) != _norm(name):
-            continue
-        ba = h.get("by_account") or []
-        ent = next((x for x in ba if x.get("account") == account), None)
-        amt = price * qty
-        if ent:
-            nq = int(ent.get("quantity", 0)) + qty
-            prev = float(ent.get("total_invested") or ent.get("avg_price", 0) * ent.get("quantity", 0))
-            nt = prev + amt
-            ent["quantity"] = nq
-            ent["total_invested"] = nt
-            ent["avg_price"] = round(nt / nq) if nq else 0
-        else:
-            ba.append({"account": account, "quantity": qty,
-                       "avg_price": round(price), "total_invested": amt, "funding": ""})
-        h["by_account"] = ba
-        save_holdings(holdings)
-        return
-
-
-def _adjust_cash_by_account(account: str, delta: float) -> None:
-    """체결 현금 흐름을 계좌별 예수금 버킷(cash_by_account)에도 델타로 반영.
-
-    합산 cash 는 매수/매도 경로가 이미 갱신하지만, 증권사별 표시용 버킷은
-    스샷/이체 때만 갱신돼 거래가 쌓일수록 박제값이 됐다(2026-07-03 신고:
-    신한 거래해도 예수금이 1.1억 그대로). lesson(2026-06-23)대로 절대값 set
-    이 아니라 델타 가감 — 버킷 자체가 없거나 그 계좌 키가 없으면 건너뛴다
-    (스샷 reconcile 전 미기록 계좌는 reconcile 때 절대값이 잡힌다).
-    """
-    if not account or not delta:
-        return
-    acc = load_account()
-    cba = acc.get("cash_by_account")
-    if not isinstance(cba, dict) or account not in cba:
-        return
-    cba[account] = float(cba[account] or 0) + float(delta)
-    save_account(acc)
-
-
 # ---------------------------------------------------------------------------
 # 주식
 # ---------------------------------------------------------------------------
@@ -206,19 +160,15 @@ def _apply_stock(msg: BrokerMessage, *, ts_kst: str, dry_run: bool, account: str
             warns.append("신규 종목 — 섹터/매수사유 비어있음('수정'으로 보완)")
         warns.append("현금매수(증거금100%)로 기록 — 신용매수였다면 '융자'로 보정")
         if not dry_run:
-            # 봇 수동 매수와 완전히 같은 경로 (평단 재계산·ticker_map·예수금 차감)
-            from bot.handlers.buy import _process_and_save  # lazy: telegram import 회피
-            buy_input = BuyInput(
-                name=name,
+            # 산식 정본(core.ledger) — 평단 재계산·ticker_map·예수금(+계좌 버킷/분해) 차감
+            from core.ledger import buy_spot
+            buy_spot(
+                name, qty, price,
                 ticker=(existing or {}).get("ticker", ""),
                 sector=(existing or {}).get("sector", ""),
-                quantity=qty,
-                price=price,
                 thesis=(existing or {}).get("buy_thesis", ""),
+                margin_ratio=100, date=_to_iso(ts_kst), account=account,
             )
-            _process_and_save(buy_input, margin_ratio=100)
-            _update_by_account_buy(name, account, qty, price)  # 계좌별 분해 갱신
-            _adjust_cash_by_account(account, -total)  # 계좌별 예수금 버킷 차감
         if account:
             summary += f" · [{account}]"
         return ApplyResult(True, "주식매수", summary, " · ".join(warns))

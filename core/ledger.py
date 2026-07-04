@@ -8,12 +8,123 @@ scripts/kakao_apply.py)에 "~과 동일"이라는 주석으로만 동기화돼 �
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from models.portfolio import Holding
 from models.transaction import Transaction
 from parsers.input_parser import norm_stock_name
 from storage import json_store
 
 SELL_FEE_RATE = 0.002  # 매도세+수수료 근사
+
+
+def _buy_by_account(holdings: list[dict], name: str, account: str, qty: int, price: float) -> None:
+    """매수분을 해당 계좌의 by_account 분해에 가산(평단 재계산)."""
+    for h in holdings:
+        if norm_stock_name(h.get("name", "")) != norm_stock_name(name):
+            continue
+        ba = h.get("by_account") or []
+        ent = next((x for x in ba if x.get("account") == account), None)
+        amt = price * qty
+        if ent:
+            nq = int(ent.get("quantity", 0)) + qty
+            prev = float(ent.get("total_invested")
+                         or ent.get("avg_price", 0) * ent.get("quantity", 0))
+            nt = prev + amt
+            ent["quantity"] = nq
+            ent["total_invested"] = nt
+            ent["avg_price"] = round(nt / nq) if nq else 0
+        else:
+            ba.append({"account": account, "quantity": qty,
+                       "avg_price": round(price), "total_invested": amt, "funding": ""})
+        h["by_account"] = ba
+        return
+
+
+def buy_spot(
+    name: str, quantity: int, price: float, *,
+    sector: str = "", thesis: str = "", ticker: str = "",
+    margin_ratio: int = 100, research_notes: str = "",
+    date: str = "", account: str = "",
+) -> dict:
+    """현물 매수 원장 반영(정본) — 보유 가산/생성·신용분해·예수금 차감·거래 기록.
+
+    ticker 우선, 이름(norm) 폴백으로 기존 보유 매칭. margin_ratio<100 이면
+    (100−margin)% 를 credit_loan 으로 기록하고 현금은 margin% 만 차감.
+    account 가 주어지면(카톡 자동반영) 그 계좌의 by_account 분해와
+    cash_by_account 예수금 버킷도 함께 델타 갱신한다. 반환: 기록된 거래 dict.
+    """
+    name = (name or "").replace(" ", "")
+    qty = int(quantity)
+    price = float(price)
+    if qty <= 0 or price <= 0:
+        raise ValueError("수량/단가는 0보다 커야 합니다.")
+
+    kwargs = {"date": date} if date else {}
+    tx = Transaction(
+        type="buy", name=name, sector=sector, price=price, quantity=qty,
+        total_amount=price * qty, thesis=thesis, research_notes=research_notes,
+        margin_ratio=margin_ratio, **kwargs,
+    )
+
+    holdings = json_store.load_holdings()
+    idx = None
+    if ticker:
+        idx = next((i for i, h in enumerate(holdings)
+                    if h.get("ticker", "") == ticker), None)
+    if idx is None:
+        idx = next(
+            (i for i, h in enumerate(holdings)
+             if norm_stock_name(h.get("name", "")) == norm_stock_name(name)),
+            None,
+        )
+
+    if idx is not None:
+        h = Holding.from_dict(holdings[idx])
+        h.add_buy(price, qty, tx.id, margin_ratio)
+        if ticker and not h.ticker:
+            h.ticker = ticker
+        if sector:
+            h.sector = sector
+        if thesis:
+            h.buy_thesis = thesis
+        h.name = h.name.replace(" ", "")
+        holdings[idx] = h.to_dict()
+    else:
+        buy_amount = price * qty
+        credit_loan = buy_amount * (1 - margin_ratio / 100) if margin_ratio < 100 else 0.0
+        h = Holding(
+            name=name, ticker=ticker, sector=sector,
+            buy_date=(date[:10] if date
+                      else datetime.now().strftime("%Y-%m-%d")),
+            avg_price=price, quantity=qty, total_invested=buy_amount,
+            credit_loan=credit_loan, buy_thesis=thesis, research_notes=research_notes,
+            transaction_ids=[tx.id],
+        )
+        holdings.append(h.to_dict())
+    if account:
+        _buy_by_account(holdings, name, account, qty, price)
+    json_store.save_holdings(holdings)
+
+    if ticker:
+        tmap = json_store.load_ticker_map()
+        tmap[name] = ticker
+        json_store.save_ticker_map(tmap)
+
+    txs = json_store.load_transactions()
+    txs.append(tx.to_dict())
+    json_store.save_transactions(txs)
+
+    acc = json_store.load_account()
+    if acc.get("initial_capital"):
+        cash_deduct = tx.total_amount * (margin_ratio / 100)
+        acc["cash"] = acc.get("cash", acc["initial_capital"]) - cash_deduct
+        cba = acc.get("cash_by_account")
+        if account and isinstance(cba, dict) and account in cba:
+            cba[account] = float(cba[account] or 0) - cash_deduct
+        json_store.save_account(acc)
+
+    return tx.to_dict()
 
 
 def _sell_by_account(holdings: list[dict], name: str, account: str, qty: int) -> None:

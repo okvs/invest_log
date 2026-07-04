@@ -433,90 +433,14 @@ async def _margin_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 def _process_and_save(buy_input, *, margin_ratio: int = 100) -> str:
-    """매수 데이터를 처리하고 저장. 결과 텍스트 반환."""
-    # 종목명 공백 제거
+    """매수 데이터를 처리하고 저장. 결과 텍스트 반환. (산식은 core.ledger 정본)"""
+    from core.ledger import buy_spot
     buy_input.name = _strip_name(buy_input.name)
-
-    tx = Transaction(
-        type="buy",
-        name=buy_input.name,
-        sector=buy_input.sector,
-        price=buy_input.price,
-        quantity=buy_input.quantity,
-        total_amount=buy_input.price * buy_input.quantity,
-        thesis=buy_input.thesis,
-        research_notes=buy_input.research_notes,
-        margin_ratio=margin_ratio,
+    buy_spot(
+        buy_input.name, buy_input.quantity, buy_input.price,
+        sector=buy_input.sector, thesis=buy_input.thesis, ticker=buy_input.ticker,
+        margin_ratio=margin_ratio, research_notes=buy_input.research_notes,
     )
-
-    # 기존 종목 확인 (ticker 우선, 이름 fallback)
-    holdings_data = load_holdings()
-    existing: Holding | None = None
-    existing_idx: int | None = None
-
-    if buy_input.ticker:
-        for idx, h_dict in enumerate(holdings_data):
-            if h_dict.get("ticker", "") == buy_input.ticker:
-                existing = Holding.from_dict(h_dict)
-                existing_idx = idx
-                break
-
-    if existing is None:
-        for idx, h_dict in enumerate(holdings_data):
-            if h_dict["name"].lower() == buy_input.name.lower():
-                existing = Holding.from_dict(h_dict)
-                existing_idx = idx
-                break
-
-    if existing is not None:
-        existing.add_buy(buy_input.price, buy_input.quantity, tx.id, margin_ratio)
-        if buy_input.ticker and not existing.ticker:
-            existing.ticker = buy_input.ticker
-        if buy_input.sector:
-            existing.sector = buy_input.sector
-        if buy_input.thesis:
-            existing.buy_thesis = buy_input.thesis
-        # 종목명 공백 통일
-        existing.name = _strip_name(existing.name)
-        holdings_data[existing_idx] = existing.to_dict()
-    else:
-        buy_amount = buy_input.price * buy_input.quantity
-        credit_loan = buy_amount * (1 - margin_ratio / 100) if margin_ratio < 100 else 0.0
-        holding = Holding(
-            name=buy_input.name,
-            ticker=buy_input.ticker,
-            sector=buy_input.sector,
-            buy_date=datetime.now().strftime("%Y-%m-%d"),
-            avg_price=buy_input.price,
-            quantity=buy_input.quantity,
-            total_invested=buy_amount,
-            credit_loan=credit_loan,
-            buy_thesis=buy_input.thesis,
-            research_notes=buy_input.research_notes,
-            transaction_ids=[tx.id],
-        )
-        holdings_data.append(holding.to_dict())
-
-    save_holdings(holdings_data)
-
-    # ticker_map 캐시 업데이트
-    if buy_input.ticker:
-        tmap = load_ticker_map()
-        tmap[buy_input.name] = buy_input.ticker
-        save_ticker_map(tmap)
-
-    # Transaction 저장
-    transactions = load_transactions()
-    transactions.append(tx.to_dict())
-    save_transactions(transactions)
-
-    # 예수금 차감
-    account = load_account()
-    if account.get("initial_capital"):
-        cash = account.get("cash", account["initial_capital"])
-        cash_deduct = tx.total_amount * (margin_ratio / 100)
-        account["cash"] = cash - cash_deduct
-        save_account(account)
 
     ticker_display = f" [{buy_input.ticker}]" if buy_input.ticker else ""
     return format_buy_result(

@@ -28,70 +28,11 @@ def record_buy(
     sector: str = "", thesis: str = "", ticker: str = "",
     margin_ratio: int = 100, research_notes: str = "",
 ) -> dict:
-    """현물 매수 기록. 봇 buy._process_and_save 와 동일 로직(평단 재계산·예수금 차감)."""
-    name = (name or "").replace(" ", "")
-    qty = int(quantity)
-    price = float(price)
-    if qty <= 0 or price <= 0:
-        raise ValueError("수량/단가는 0보다 커야 합니다.")
-
-    tx = Transaction(
-        type="buy", name=name, sector=sector, price=price, quantity=qty,
-        total_amount=price * qty, thesis=thesis, research_notes=research_notes,
-        margin_ratio=margin_ratio,
+    """현물 매수 기록 — 산식은 core.ledger.buy_spot(정본)에 위임."""
+    return ledger.buy_spot(
+        name, quantity, price, sector=sector, thesis=thesis, ticker=ticker,
+        margin_ratio=margin_ratio, research_notes=research_notes,
     )
-
-    holdings = store.load_holdings()
-    idx = None
-    if ticker:
-        idx = next((i for i, h in enumerate(holdings) if h.get("ticker", "") == ticker), None)
-    if idx is None:
-        idx = next(
-            (i for i, h in enumerate(holdings)
-             if norm_stock_name(h.get("name", "")) == norm_stock_name(name)),
-            None,
-        )
-
-    if idx is not None:
-        h = Holding.from_dict(holdings[idx])
-        h.add_buy(price, qty, tx.id, margin_ratio)
-        if ticker and not h.ticker:
-            h.ticker = ticker
-        if sector:
-            h.sector = sector
-        if thesis:
-            h.buy_thesis = thesis
-        h.name = h.name.replace(" ", "")
-        holdings[idx] = h.to_dict()
-    else:
-        buy_amount = price * qty
-        credit_loan = buy_amount * (1 - margin_ratio / 100) if margin_ratio < 100 else 0.0
-        h = Holding(
-            name=name, ticker=ticker, sector=sector,
-            buy_date=datetime.now().strftime("%Y-%m-%d"),
-            avg_price=price, quantity=qty, total_invested=buy_amount,
-            credit_loan=credit_loan, buy_thesis=thesis, research_notes=research_notes,
-            transaction_ids=[tx.id],
-        )
-        holdings.append(h.to_dict())
-    store.save_holdings(holdings)
-
-    if ticker:
-        tmap = store.load_ticker_map()
-        tmap[name] = ticker
-        store.save_ticker_map(tmap)
-
-    txs = store.load_transactions()
-    txs.append(tx.to_dict())
-    store.save_transactions(txs)
-
-    acc = store.load_account()
-    if acc.get("initial_capital"):
-        cash = acc.get("cash", acc["initial_capital"])
-        acc["cash"] = cash - tx.total_amount * (margin_ratio / 100)
-        store.save_account(acc)
-
-    return tx.to_dict()
 
 
 # ---------------------------------------------------------------------------
