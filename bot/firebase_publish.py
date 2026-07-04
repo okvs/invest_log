@@ -162,12 +162,55 @@ def auto_enabled() -> bool:
     )
 
 
+# 발행 역행 방지(M6) — 발행자가 4곳(dash-refresh·kakao 반영·PWA 저장 훅·수동)이라
+# '마지막 발행자가 이김' 구조였고, 구버전 모듈을 문 데몬이 신선한 발행본을 옛
+# 데이터로 덮어쓴 사고가 있었다. 모든 발행자가 이 맥에 있으므로 로컬 스탬프 파일로
+# compare-and-set: 내 빌드에 들어간 데이터가 이미 발행된 것보다 오래됐으면 skip.
+_STAMP_FILE = "publish_stamp.json"
+_DATA_STAMP_FILES = (
+    "portfolio.json", "account.json", "futures_positions.json", "transactions.json",
+)
+
+
+def _data_stamp() -> float:
+    """대시보드에 들어가는 원천 데이터의 최신 수정 시각."""
+    from storage import json_store
+    latest = 0.0
+    for fn in _DATA_STAMP_FILES:
+        try:
+            latest = max(latest, (json_store.DATA_DIR / fn).stat().st_mtime)
+        except OSError:
+            pass
+    return latest
+
+
+def _deploy_guarded(files: dict[str, bytes], stamp: float) -> str | None:
+    """스탬프 락 아래에서 역행 검사 후 배포 — 동시 배포도 직렬화된다."""
+    import time as _time
+
+    from storage import json_store
+    with json_store.transaction(_STAMP_FILE):
+        recorded = float(json_store.load(_STAMP_FILE).get("data_stamp", 0.0) or 0.0)
+        if stamp < recorded:
+            logger.warning(
+                "발행 역행 방지: 이 빌드의 데이터(%.0f)가 이미 발행된 것(%.0f)보다 오래됨 — skip",
+                stamp, recorded,
+            )
+            return None
+        url = deploy(files)
+        json_store.save(_STAMP_FILE, {
+            "data_stamp": stamp, "published_at": _time.time(),
+        })
+        return url
+
+
 async def _build_and_deploy() -> str | None:
     import asyncio
 
     # 무거운 모듈/순환참조 회피용 지연 import
     from bot.handlers.dashboard import build_all_dashboard_html
 
+    stamp = _data_stamp()  # 이 빌드에 들어갈 데이터의 신선도(빌드 시작 시점)
     global _suppress
     _suppress = True  # 빌드 중 발생하는 save_holdings(병합/보정)가 재귀 트리거하지 않도록
     try:
@@ -179,7 +222,7 @@ async def _build_and_deploy() -> str | None:
         return None
     tok = secret_token()
     prefixed = {f"/{tok}{path}": content for path, content in files.items()}
-    return await asyncio.to_thread(deploy, prefixed)
+    return await asyncio.to_thread(_deploy_guarded, prefixed, stamp)
 
 
 async def _publish_worker() -> None:

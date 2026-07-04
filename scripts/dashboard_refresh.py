@@ -105,6 +105,14 @@ def main(argv=None) -> int:
                 refresh_once(force=args.force)
             except Exception as e:  # noqa: BLE001
                 log(f"루프 예외: {e}")
+            # 하루 1회 data/ 스냅샷 백업(장 시간 무관 — 오늘자 있으면 no-op)
+            try:
+                from bot.backup import maybe_backup
+                made = maybe_backup()
+                if made:
+                    log(f"data 백업 생성: {made}")
+            except Exception as e:  # noqa: BLE001
+                log(f"백업 체크 실패: {e}")
             time.sleep(args.loop)
             # 발행 사이 안전지점 — 소스가 바뀌었으면 새 코드로 자기 재실행
             reexec_if_source_changed(log)
