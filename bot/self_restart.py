@@ -52,6 +52,14 @@ def arm(root: Path | None = None) -> None:
     _baseline = source_mtime(root)
 
 
+def source_changed(root: Path | None = None) -> bool:
+    """arm() 이후 소스가 바뀌었는지. (봇/웹처럼 execv 대신 '자기 종료 → 래퍼가
+    새 코드로 재기동' 방식을 쓰는 데몬이 판단용으로 호출한다.)"""
+    if _baseline is None:
+        return False
+    return source_mtime(root) > _baseline + 1e-6
+
+
 def reexec_if_source_changed(log=print, *, root: Path | None = None, _exec=None) -> bool:
     """루프 안전지점에서 호출. 소스가 baseline 이후 바뀌었으면 자기 재실행.
 
@@ -62,8 +70,7 @@ def reexec_if_source_changed(log=print, *, root: Path | None = None, _exec=None)
     if _baseline is None:
         arm(root)
         return False
-    cur = source_mtime(root)
-    if cur <= _baseline + 1e-6:
+    if not source_changed(root):
         return False
     log("소스 변경 감지 — 새 코드로 자기 재실행(os.execv)")
     sys.stdout.flush()

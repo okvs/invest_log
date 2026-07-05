@@ -150,6 +150,14 @@ async def _save_bot_username(app) -> None:
         logger.warning("봇 username 저장 실패", exc_info=True)
 
 
+async def _source_watch_job(context) -> None:
+    """1분마다 소스 변경 확인 — 바뀌었으면 봇을 곱게 종료(래퍼가 새 코드로 재기동)."""
+    from bot.self_restart import source_changed
+    if source_changed():
+        logger.warning("소스 변경 감지 — 봇 종료(래퍼 while-loop 가 새 코드로 재기동)")
+        context.application.stop_running()
+
+
 def main() -> None:
     # 단일 인스턴스 강제 — 중복이면 텔레그램 409 Conflict 로 거래가 기록 안 되므로
     # 락을 못 잡으면 즉시 종료(while-루프 래퍼가 5초 후 재시도, 선점자가 죽으면 인계).
@@ -213,6 +221,14 @@ def main() -> None:
 
     schedule_daily_expiry_check(app)
     schedule_basis_check(app)
+
+    # 소스 변경 감지 → 자기 종료(래퍼 while-loop 가 새 코드로 재기동).
+    # dash-refresh/kakao-apply 의 os.execv 방식과 달리, 봇은 PTB 폴링이라
+    # stop_running() 으로 곱게 내려가는 쪽이 안전하다.
+    from bot.self_restart import arm
+    arm()
+    if app.job_queue:
+        app.job_queue.run_repeating(_source_watch_job, interval=60, first=60)
 
     logger.info("봇 시작!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

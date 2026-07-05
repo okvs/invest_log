@@ -25,6 +25,33 @@ from server.auth import require_user
 
 app = FastAPI(title="invest_log PWA API")
 
+
+@app.on_event("startup")
+async def _watch_source_changes() -> None:
+    """1분마다 소스 변경 확인 — 바뀌었으면 SIGTERM 으로 곱게 종료.
+
+    invest-web 은 tmux while-loop 래퍼 안에서 돌므로, 종료하면 래퍼가 새 코드로
+    재기동한다(dash-refresh/kakao-apply 의 자가재기동과 같은 목적). uvicorn 은
+    SIGTERM 을 받으면 진행 중 요청을 마친 뒤 내려간다."""
+    import asyncio
+    import logging
+    import signal
+
+    from bot.self_restart import arm, source_changed
+
+    arm()
+
+    async def _loop() -> None:
+        while True:
+            await asyncio.sleep(60)
+            if source_changed():
+                logging.getLogger("uvicorn.error").warning(
+                    "소스 변경 감지 — 서버 종료(래퍼 while-loop 가 새 코드로 재기동)")
+                signal.raise_signal(signal.SIGTERM)
+                return
+
+    app.state.source_watch = asyncio.get_running_loop().create_task(_loop())
+
 # 프론트는 Firebase Hosting(web.app)에서 서빙되고 API는 맥 터널을 호출하므로
 # 교차출처(CORS) 허용이 필요하다. 출처는 안정적인 Firebase 도메인 + 로컬 개발만 허용.
 app.add_middleware(

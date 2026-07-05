@@ -23,6 +23,17 @@ def test_no_change_no_exec(tmp_path):
     assert out is False and calls == []
 
 
+def test_source_changed_flag(tmp_path):
+    """봇/웹의 자기 종료 판단용 source_changed() — arm 전 False, 수정 후 True."""
+    f = _tmp_tree(tmp_path)
+    self_restart._baseline = None
+    assert self_restart.source_changed(root=tmp_path) is False  # arm 전
+    self_restart.arm(root=tmp_path)
+    assert self_restart.source_changed(root=tmp_path) is False
+    os.utime(f, (f.stat().st_atime, f.stat().st_mtime + 10))
+    assert self_restart.source_changed(root=tmp_path) is True
+
+
 def test_modified_file_triggers_exec(tmp_path):
     f = _tmp_tree(tmp_path)
     self_restart.arm(root=tmp_path)
