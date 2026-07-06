@@ -1278,6 +1278,132 @@ _WRITE_LAYER = """
   btnOut.addEventListener('click',function(){window.__ADMIN__.set('');toast('관리자 모드를 껐어요');});
   window.__ADMIN__.sync();
 })();</script>
+<style>
+  .trade-fab{position:fixed;right:16px;bottom:calc(86px + env(safe-area-inset-bottom));z-index:2500;
+       width:52px;height:52px;border-radius:50%;border:none;background:var(--accent);color:#fff;
+       font-size:27px;line-height:52px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.28);
+       cursor:pointer;-webkit-tap-highlight-color:transparent;padding:0}
+  .trade-warn{background:rgba(216,60,60,.08);border:1px solid rgba(216,60,60,.35);color:var(--text);
+       border-radius:10px;padding:9px 11px;font-size:12px;line-height:1.5;margin:10px 0 2px}
+  .trade-sub{font-size:12px;color:var(--text-dim);margin-top:5px;min-height:15px}
+</style>
+<script>(function(){
+  // ＋ FAB → 매수/매도 입력 시트 (PWA 4단계 1차 — 서버 /api/buy·sell 은 기존).
+  // KB·신한·나무 체결은 카톡 자동반영이 이미 기록하므로, 여기 수동 입력은
+  // 자동반영이 커버하지 않는 거래 전용(이중기록 경고를 시트 상단에 상시 표시).
+  var CFG=window.__APPCFG__||{}, API=CFG.api||'';
+  if(!API) return;
+  var HOLDS=window.__HOLDINGS__||[];
+  function toast(m,bad){var t=document.getElementById('retro-toast');if(!t)return;
+    t.textContent=m;t.style.background=bad?'#d83c3c':'var(--accent)';t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show');},2600);}
+  function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+  function num(s){var v=parseFloat(String(s).replace(/,/g,''));return isFinite(v)?v:0;}
+
+  var fab=document.createElement('button');
+  fab.className='trade-fab'; fab.id='trade-fab'; fab.textContent='＋';
+  fab.setAttribute('aria-label','매수/매도 기록');
+  document.body.appendChild(fab);
+
+  var dl='';
+  HOLDS.forEach(function(h){dl+='<option value="'+esc(h.name)+'">';});
+  var sellOpts='<option value="">종목 선택</option>';
+  HOLDS.forEach(function(h){
+    sellOpts+='<option value="'+esc(h.name)+'">'+esc(h.name)+' · '+h.qty+'주 · 평단 '
+      +Math.round(h.avg).toLocaleString()+'</option>';});
+
+  var modal=document.createElement('div');
+  modal.className='retro-modal'; modal.id='trade-modal';
+  modal.innerHTML='<div class="retro-sheet">'
+    +'<div class="retro-hd"><b id="t-title">거래 기록</b><button class="retro-x" id="t-close">&times;</button></div>'
+    +'<div class="trade-warn">⚠️ KB·신한·나무 체결은 <b>카톡 자동반영이 이미 기록</b>합니다.'
+    +' 여기 입력하면 <b>이중기록</b>돼요 — 자동반영이 안 되는 거래만 입력하세요.</div>'
+    +'<label>구분</label>'
+    +'<div class="retro-btns" id="t-side">'
+    +'<button type="button" class="retro-opt active" data-side="buy">매수</button>'
+    +'<button type="button" class="retro-opt" data-side="sell">매도</button></div>'
+    +'<div id="t-buy-name-w"><label>종목명</label>'
+    +'<input id="t-name" list="t-names" autocomplete="off" placeholder="예: 삼성전자">'
+    +'<datalist id="t-names">'+dl+'</datalist></div>'
+    +'<div id="t-sell-name-w" style="display:none"><label>종목(보유)</label>'
+    +'<select id="t-sell-name">'+sellOpts+'</select><div class="trade-sub" id="t-hold-info"></div></div>'
+    +'<label>수량(주)</label><input id="t-qty" type="number" inputmode="numeric" min="1">'
+    +'<label>단가(원)</label><input id="t-price" type="number" inputmode="decimal" min="0" step="any">'
+    +'<div class="trade-sub" id="t-total"></div>'
+    +'<div id="t-margin-w"><label>자금 구분</label><select id="t-margin">'
+    +'<option value="100">현금 100%</option><option value="60">현금60 + 신용40</option>'
+    +'<option value="45">현금45 + 신용55</option><option value="0">전액 신용(자기융자)</option>'
+    +'</select></div>'
+    +'<div id="t-sector-w"><label>섹터 (신규 종목만·선택)</label>'
+    +'<input id="t-sector" autocomplete="off" placeholder="예: 반도체"></div>'
+    +'<label id="t-reason-lb">매수 근거</label><textarea id="t-reason"></textarea>'
+    +'<button class="retro-submit" id="t-submit">매수 기록</button>'
+    +'</div>';
+  document.body.appendChild(modal);
+
+  var $=function(id){return document.getElementById(id);};
+  var side='buy';
+  function setSide(s){side=s;
+    $('t-side').querySelectorAll('.retro-opt').forEach(function(b){
+      b.classList.toggle('active',b.getAttribute('data-side')===s);});
+    $('t-buy-name-w').style.display = s==='buy'?'':'none';
+    $('t-sell-name-w').style.display = s==='sell'?'':'none';
+    $('t-margin-w').style.display = s==='buy'?'':'none';
+    $('t-sector-w').style.display = s==='buy'?'':'none';
+    $('t-reason-lb').textContent = s==='buy'?'매수 근거':'매도 사유';
+    $('t-title').textContent = s==='buy'?'매수 기록':'매도 기록';
+    $('t-submit').textContent = s==='buy'?'매수 기록':'매도 기록';
+    updTotal(); updHold();}
+  function updTotal(){var q=num($('t-qty').value),p=num($('t-price').value);
+    $('t-total').textContent=(q>0&&p>0)?('총 '+Math.round(q*p).toLocaleString()+'원'):'';}
+  function updHold(){var el=$('t-hold-info');
+    var h=HOLDS.find(function(x){return x.name===$('t-sell-name').value;});
+    el.textContent=h?('보유 '+h.qty+'주 · 평단 '+Math.round(h.avg).toLocaleString()+'원'):'';}
+  function open(){
+    if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
+    modal.classList.add('show');}
+  function close(){modal.classList.remove('show');}
+
+  fab.addEventListener('click',open);
+  $('t-close').addEventListener('click',close);
+  modal.addEventListener('click',function(e){if(e.target===modal)close();});
+  $('t-side').querySelectorAll('.retro-opt').forEach(function(b){
+    b.addEventListener('click',function(){setSide(b.getAttribute('data-side'));});});
+  $('t-qty').addEventListener('input',updTotal);
+  $('t-price').addEventListener('input',updTotal);
+  $('t-sell-name').addEventListener('change',updHold);
+
+  async function submit(){
+    if(!(window.__ADMIN__&&window.__ADMIN__.on())){toast('전략 탭에서 관리자 모드를 켜세요 🔐',true);return;}
+    var name = side==='buy' ? ($('t-name').value||'').trim() : $('t-sell-name').value;
+    var qty=Math.round(num($('t-qty').value)), price=num($('t-price').value);
+    if(!name){toast('종목을 입력/선택하세요',true);return;}
+    if(qty<=0||price<=0){toast('수량과 단가를 확인하세요',true);return;}
+    if(side==='sell'){var h=HOLDS.find(function(x){return x.name===name;});
+      if(h&&qty>h.qty){toast('보유량('+h.qty+'주)을 초과합니다',true);return;}}
+    var url, body;
+    if(side==='buy'){url='/api/buy';
+      body={name:name,quantity:qty,price:price,sector:($('t-sector').value||'').trim(),
+            thesis:($('t-reason').value||'').trim(),
+            margin_ratio:parseInt($('t-margin').value,10)};}
+    else{url='/api/sell';
+      body={name:name,quantity:qty,price:price,reason:($('t-reason').value||'').trim()};}
+    var btn=$('t-submit');btn.disabled=true;
+    try{
+      var r=await fetch(API+url,{method:'POST',
+        headers:window.__ADMIN__.headers({'Content-Type':'application/json'}),
+        body:JSON.stringify(body)});
+      if(r.status===401){window.__ADMIN__.set('');throw new Error('관리자 모드 만료 — 전략 탭에서 다시 켜세요');}
+      if(!r.ok){var j=await r.json().catch(function(){return{};});throw new Error(j.detail||('오류 '+r.status));}
+      toast((side==='buy'?'매수':'매도')+' 기록 완료 — 잠시 후 화면이 갱신됩니다');
+      ['t-name','t-qty','t-price','t-sector','t-reason'].forEach(function(i){var el=$(i);if(el)el.value='';});
+      updTotal(); close();
+    }catch(e){toast(e.message||'기록 실패',true);}
+    finally{btn.disabled=false;}
+  }
+  $('t-submit').addEventListener('click',submit);
+  setSide('buy');
+})();</script>
 """
 
 
@@ -1299,7 +1425,19 @@ def _inject_write_layer(dashboard_html: bytes | None) -> bytes | None:
         return None
     text = dashboard_html.decode("utf-8")
     cfg = json.dumps({"api": tunnel}, ensure_ascii=False)
-    layer = f"<script>window.__APPCFG__={cfg};</script>" + _WRITE_LAYER
+    # 매수/매도 입력 시트용 현재 보유(KRW 현물만 — /api/buy·sell 은 국내 현물 경로.
+    # 미국주식(USD)은 카톡 자동반영 전용이라 제외).
+    holds = [
+        {"name": h.get("name", ""), "qty": int(h.get("quantity", 0) or 0),
+         "avg": float(h.get("avg_price", 0) or 0)}
+        for h in load_holdings()
+        if int(h.get("quantity", 0) or 0) > 0 and h.get("currency", "KRW") != "USD"
+    ]
+    holdings_js = json.dumps(holds, ensure_ascii=False)
+    layer = (
+        f"<script>window.__APPCFG__={cfg};window.__HOLDINGS__={holdings_js};</script>"
+        + _WRITE_LAYER
+    )
     text = text.replace("</body>", layer + "</body>", 1)
     return text.encode("utf-8")
 
